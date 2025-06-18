@@ -296,37 +296,37 @@ US_VISA_CATEGORIES = {
             "VAWA": "Violence Against Women Act",
             "Registry": "Registry (Pre-1972 Entry)"
         }
-    },
-    "Other Immigration Matters": {
-        "Status Changes": {
-            "AOS": "Adjustment of Status",
-            "COS": "Change of Status",
-            "Extension": "Extension of Stay"
-        },
-        "Naturalization": {
-            "N-400": "Application for Naturalization",
-            "N-600": "Certificate of Citizenship",
-            "N-565": "Replacement of Citizenship Document"
-        },
-        "Protection": {
-            "Asylum": "Asylum Applications",
-            "Withholding": "Withholding of Removal",
-            "CAT": "Convention Against Torture",
-            "TPS": "Temporary Protected Status",
-            "DED": "Deferred Enforced Departure"
-        },
-        "Removal Defense": {
-            "Cancellation": "Cancellation of Removal",
-            "Relief": "Other Forms of Relief",
-            "Appeals": "BIA Appeals",
-            "Motions": "Motions to Reopen/Reconsider"
-        },
-        "Special Programs": {
-            "DACA": "Deferred Action for Childhood Arrivals",
-            "Parole": "Humanitarian Parole",
-            "Waiver": "Inadmissibility Waivers"
+            },
+        "Other Immigration Matters": {
+            "Status Changes": {
+                "AOS": "Adjustment of Status",
+                "COS": "Change of Status",
+                "Extension": "Extension of Stay"
+            },
+            "Naturalization": {
+                "N-400": "Application for Naturalization",
+                "N-600": "Certificate of Citizenship",
+                "N-565": "Replacement of Citizenship Document"
+            },
+            "Protection": {
+                "Asylum": "Asylum Applications",
+                "Withholding": "Withholding of Removal",
+                "CAT": "Convention Against Torture",
+                "TPS": "Temporary Protected Status",
+                "DED": "Deferred Enforced Departure"
+            },
+            "Removal Defense": {
+                "Cancellation": "Cancellation of Removal",
+                "Relief": "Other Forms of Relief",
+                "Appeals": "BIA Appeals",
+                "Motions": "Motions to Reopen/Reconsider"
+            },
+            "Special Programs": {
+                "DACA": "Deferred Action for Childhood Arrivals",
+                "Parole": "Humanitarian Parole",
+                "Waiver": "Inadmissibility Waivers"
+            }
         }
-    }
 }
 
 def load_logo():
