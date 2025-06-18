@@ -536,14 +536,14 @@ def check_soc_code(soc_code):
     if soc_code in JOB_ZONE_3_CODES:
         return {
             "status": "WARNING",
-            "message": f"⚠️ This SOC code ({soc_code}) is Job Zone 3 and should be avoided for H-1B specialty occupation.",
+            "message": f"[!] This SOC code ({soc_code}) is Job Zone 3 and should be avoided for H-1B specialty occupation.",
             "title": JOB_ZONE_3_CODES[soc_code],
             "recommendation": "Consider finding a more specific SOC code that falls in Job Zone 4 or 5."
         }
     else:
         return {
             "status": "OK", 
-            "message": f"✅ SOC code {soc_code} appears to be acceptable (not in Job Zone 3).",
+            "message": f"[OK] SOC code {soc_code} appears to be acceptable (not in Job Zone 3).",
             "recommendation": "Verify this SOC code aligns with the actual job duties and requirements."
         }
 
@@ -567,7 +567,7 @@ def main():
     # Professional Disclaimer
     st.markdown("""
     <div class="warning-box">
-        <strong>⚖️ ATTORNEY USE ONLY:</strong> This tool is exclusively designed for licensed immigration attorneys and qualified legal professionals. 
+        <strong>[LEGAL] ATTORNEY USE ONLY:</strong> This tool is exclusively designed for licensed immigration attorneys and qualified legal professionals. 
         All AI-generated content must be reviewed, verified, and approved by supervising counsel before use. This system does not provide legal advice to end clients.
     </div>
     """, unsafe_allow_html=True)
@@ -589,7 +589,7 @@ def main():
             missing_deps.append("python-docx")
             
         if missing_deps:
-            with st.expander("📦 Install Missing Dependencies (Optional)"):
+            with st.expander("[DEPS] Install Missing Dependencies (Optional)"):
                 st.markdown(f"""
                 **To enable full file support, install these packages:**
                 
@@ -617,36 +617,36 @@ def main():
         # Dependency status
         dependencies_status = []
         if PDF_AVAILABLE:
-            dependencies_status.append("✅ PDF Support")
+            dependencies_status.append("[OK] PDF Support")
         else:
-            dependencies_status.append("❌ PDF Support")
+            dependencies_status.append("[X] PDF Support")
             
         if DOCX_AVAILABLE:
-            dependencies_status.append("✅ DOCX Support")
+            dependencies_status.append("[OK] DOCX Support")
         else:
-            dependencies_status.append("❌ DOCX Support")
+            dependencies_status.append("[X] DOCX Support")
         
-        dependencies_status.append("✅ TXT Support")
+        dependencies_status.append("[OK] TXT Support")
         
         st.markdown(f"""
         <div class="info-box">
-            <strong>📦 System Dependencies:</strong><br>
+            <strong>[INFO] System Dependencies:</strong><br>
             {' | '.join(dependencies_status)}
         </div>
         """, unsafe_allow_html=True)
 
     # Main content tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "💬 Legal Research Chat", 
-        "📄 RFE Response Generator", 
-        "📝 Expert Opinion Letters",
-        "📊 Professional Templates",
-        "📚 Legal Resources"
+        "[CHAT] Legal Research Chat", 
+        "[RFE] RFE Response Generator", 
+        "[EXPERT] Expert Opinion Letters",
+        "[TEMPLATES] Professional Templates",
+        "[RESOURCES] Legal Resources"
     ])
 
     with tab1:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("💬 Immigration Law Research Assistant")
+        st.subheader("[CHAT] Immigration Law Research Assistant")
         
         st.markdown("""
         <div class="info-box">
@@ -666,7 +666,7 @@ def main():
         
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
-            if st.button("🔍 Research Question", type="primary", use_container_width=True):
+            if st.button("[SEARCH] Research Question", type="primary", use_container_width=True):
                 if question:
                     with st.spinner("Conducting comprehensive legal research..."):
                         response = generate_legal_research_response(question)
@@ -677,7 +677,7 @@ def main():
                                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             })
                             
-                            st.markdown("### 📋 Research Results")
+                            st.markdown("### [RESULTS] Research Results")
                             st.markdown(f"""
                             <div class="professional-card">
                                 <strong>Question:</strong> {question}<br><br>
@@ -690,7 +690,7 @@ def main():
                             filename = f"Legal_Research_{timestamp}.txt"
                             download_content = f"LAWTRAX IMMIGRATION RESEARCH\n{'='*50}\n\nQuestion: {question}\n\nResearch Results:\n{response}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                             st.download_button(
-                                "📥 Download Research",
+                                "[DOWNLOAD] Download Research",
                                 data=download_content,
                                 file_name=filename,
                                 mime="text/plain",
@@ -701,20 +701,20 @@ def main():
         
         # Display recent research history
         if st.session_state.chat_history:
-            st.markdown("### 📚 Recent Research History")
+            st.markdown("### [HISTORY] Recent Research History")
             for i, chat in enumerate(reversed(st.session_state.chat_history[-3:])):  # Show last 3
-                with st.expander(f"📋 {chat['question'][:80]}... ({chat['timestamp']})"):
+                with st.expander(f"[ITEM] {chat['question'][:80]}... ({chat['timestamp']})"):
                     st.markdown(chat['answer'])
         
         st.markdown("</div>", unsafe_allow_html=True)
 
     with tab2:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("📄 Enhanced RFE Response Generator with Document Upload")
+        st.subheader("[RFE] Enhanced RFE Response Generator with Document Upload")
         
         st.markdown("""
         <div class="info-box">
-            <strong>🎯 Enhanced RFE Response System:</strong> Upload your RFE document for automatic analysis and response generation, 
+            <strong>[TARGET] Enhanced RFE Response System:</strong> Upload your RFE document for automatic analysis and response generation, 
             or manually enter case details. Supports PDF, DOCX, and TXT files for comprehensive RFE processing.
         </div>
         """, unsafe_allow_html=True)
@@ -722,7 +722,7 @@ def main():
         # RFE Document Upload Section
         st.markdown("""
         <div class="upload-box">
-            <strong>📎 Upload RFE Document:</strong> Upload the actual RFE document from USCIS for automatic analysis 
+            <strong>[UPLOAD] Upload RFE Document:</strong> Upload the actual RFE document from USCIS for automatic analysis 
             and targeted response generation. The system will extract key issues and generate appropriate responses.
         </div>
         """, unsafe_allow_html=True)
@@ -748,12 +748,12 @@ def main():
         # Show dependency status
         if not PDF_AVAILABLE or not DOCX_AVAILABLE:
             st.info(f"""
-            📝 **File Support Status:**
-            - TXT files: ✅ Supported
-            - PDF files: {'✅ Supported' if PDF_AVAILABLE else '❌ Not available (install PyPDF2)'}
-            - DOCX files: {'✅ Supported' if DOCX_AVAILABLE else '❌ Not available (install python-docx)'}
+            [INFO] **File Support Status:**
+            - TXT files: [OK] Supported
+            - PDF files: {'[OK] Supported' if PDF_AVAILABLE else '[X] Not available (install PyPDF2)'}
+            - DOCX files: {'[OK] Supported' if DOCX_AVAILABLE else '[X] Not available (install python-docx)'}
             
-            💡 **Tip:** You can always copy and paste RFE content manually below if file upload isn't working.
+            [TIP] **Tip:** You can always copy and paste RFE content manually below if file upload isn't working.
             """)
 
         if uploaded_file is not None:
@@ -767,14 +767,14 @@ def main():
                     
                     st.markdown("""
                     <div class="success-box">
-                        <strong>✅ RFE Document Successfully Processed</strong>
+                        <strong>[OK] RFE Document Successfully Processed</strong>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     # Display analysis results
                     col1, col2 = st.columns(2)
                     with col1:
-                        st.markdown("**📋 Issues Identified:**")
+                        st.markdown("**[ISSUES] Issues Identified:**")
                         if rfe_analysis and rfe_analysis['issues_identified']:
                             for issue in rfe_analysis['issues_identified']:
                                 st.markdown(f"• {issue}")
@@ -782,7 +782,7 @@ def main():
                             st.markdown("• General RFE requirements")
                     
                     with col2:
-                        st.markdown("**📄 Document Details:**")
+                        st.markdown("**[DETAILS] Document Details:**")
                         if rfe_analysis:
                             if rfe_analysis.get('receipt_number'):
                                 st.markdown(f"• Receipt Number: {rfe_analysis['receipt_number']}")
@@ -791,7 +791,7 @@ def main():
                             st.markdown(f"• Document Length: {len(extracted_text)} characters")
 
         # Case Details Form
-        st.markdown("### 📝 Case Information")
+        st.markdown("### [FORM] Case Information")
         
         with st.form("enhanced_rfe_form"):
             col1, col2 = st.columns(2)
@@ -819,10 +819,10 @@ def main():
             
             # Enhanced manual input section
             if not st.session_state.uploaded_rfe_content:
-                st.markdown("### 📝 Manual RFE Content Input")
+                st.markdown("### [INPUT] Manual RFE Content Input")
                 st.markdown("""
                 <div class="info-box">
-                    <strong>💡 Manual Input Option:</strong> If you cannot upload a file or prefer to copy/paste, 
+                    <strong>[TIP] Manual Input Option:</strong> If you cannot upload a file or prefer to copy/paste, 
                     enter the RFE content directly below. This works just as well as file upload.
                 </div>
                 """, unsafe_allow_html=True)
@@ -835,7 +835,7 @@ def main():
                 )
             else:
                 manual_rfe_issues = ""
-                st.markdown("### ✅ Using Uploaded RFE Document")
+                st.markdown("### [OK] Using Uploaded RFE Document")
                 st.info("RFE issues will be extracted from uploaded document")
             
             additional_details = st.text_area(
@@ -844,7 +844,7 @@ def main():
                 help="Any additional relevant information about the case"
             )
             
-            submit_rfe = st.form_submit_button("🚀 Generate Comprehensive RFE Response", type="primary")
+            submit_rfe = st.form_submit_button("[GENERATE] Generate Comprehensive RFE Response", type="primary")
             
             if submit_rfe:
                 if st.session_state.uploaded_rfe_content or manual_rfe_issues:
@@ -895,7 +895,7 @@ def main():
                             response = call_openai_api(prompt, max_tokens=4000, temperature=0.2)
                         
                         if response:
-                            st.subheader(f"📄 Comprehensive RFE Response - {visa_category}")
+                            st.subheader(f"[RESPONSE] Comprehensive RFE Response - {visa_category}")
                             st.markdown(f"""
                             <div class="professional-card">
                                 {response}
@@ -931,7 +931,7 @@ Beneficiary: {st.session_state['latest_rfe_response']['beneficiary']}
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
             
             st.download_button(
-                "📥 Download RFE Response",
+                "[DOWNLOAD] Download RFE Response",
                 data=download_content,
                 file_name=filename,
                 mime="text/plain",
@@ -942,11 +942,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
     with tab3:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("📝 Expert Opinion & Support Letter Generator")
+        st.subheader("[EXPERT] Expert Opinion & Support Letter Generator")
         
         st.markdown("""
         <div class="info-box">
-            <strong>💡 Expert Opinion Services:</strong> Generate professional expert opinion letters, support letters, 
+            <strong>[SERVICES] Expert Opinion Services:</strong> Generate professional expert opinion letters, support letters, 
             and evaluations for any type of US immigration case. Covers all visa categories from employment-based 
             to family-based to special immigrant categories.
         </div>
@@ -959,7 +959,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
     with tab4:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("📊 Comprehensive Immigration Templates & Legal Frameworks")
+        st.subheader("[TEMPLATES] Comprehensive Immigration Templates & Legal Frameworks")
         
         # Templates code continues...
         # (Keep the existing templates functionality)
@@ -968,7 +968,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
     with tab5:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("📚 Comprehensive US Immigration Law Resources")
+        st.subheader("[RESOURCES] Comprehensive US Immigration Law Resources")
         
         # Resources code continues...
         # (Keep the existing resources functionality)
@@ -977,7 +977,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
         st.markdown("---")
         st.markdown("""
         <div class="info-box">
-            <h4>🔧 Professional Immigration Analysis Tools</h4>
+            <h4>[TOOLS] Professional Immigration Analysis Tools</h4>
             <p>Comprehensive tools for immigration law practice including SOC code analysis, visa eligibility assessment, and case strategy planning.</p>
         </div>
         """, unsafe_allow_html=True)
@@ -990,14 +990,14 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                 position_title = st.text_input("Position Title (Optional)", help="Job title for additional context")
             
             with col2:
-                check_soc = st.form_submit_button("🔍 Analyze SOC Code", type="primary")
+                check_soc = st.form_submit_button("[ANALYZE] Analyze SOC Code", type="primary")
             
             if check_soc and soc_input:
                 result = check_soc_code(soc_input.strip())
                 if result["status"] == "WARNING":
                     st.markdown(f"""
                     <div class="warning-box">
-                        <strong>⚠️ SOC Code Analysis Result:</strong><br>
+                        <strong>[WARNING] SOC Code Analysis Result:</strong><br>
                         {result["message"]}<br>
                         <strong>Position Title:</strong> {result["title"]}<br>
                         <strong>Professional Recommendation:</strong> {result["recommendation"]}<br>
@@ -1007,7 +1007,7 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
                 else:
                     st.markdown(f"""
                     <div class="success-box">
-                        <strong>✅ SOC Code Analysis Result:</strong><br>
+                        <strong>[OK] SOC Code Analysis Result:</strong><br>
                         {result["message"]}<br>
                         <strong>Professional Recommendation:</strong> {result["recommendation"]}<br>
                         <strong>Next Steps:</strong> Verify job duties align with SOC code description and gather supporting industry evidence.
