@@ -37,7 +37,7 @@ except ImportError:
 # Set page config
 st.set_page_config(
     page_title="Lawtrax Immigration Assistant",
-    page_icon="⚖️",
+    page_icon="[LEGAL]",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -122,35 +122,6 @@ st.markdown("""
     .tab-content {
         padding: 2rem 1rem;
     }
-    .professional-button {
-        background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-        color: white;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    .professional-button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding: 0px 20px;
-        background-color: #f8fafc;
-        border-radius: 8px 8px 0px 0px;
-        color: #64748b;
-        font-weight: 600;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1e3a8a;
-        color: white;
-    }
     .footer {
         text-align: center;
         padding: 2rem;
@@ -179,149 +150,66 @@ JOB_ZONE_3_CODES = {
     "15-1154": "Computer Network and Computer Systems Administrators",
     "15-1142": "Network and Computer Systems Administrators",
     "15-1143": "Computer Network Architects",
-    # Add more Job Zone 3 codes as needed
 }
 
-# Comprehensive US Visa Categories and Immigration Types
+# Comprehensive US Visa Categories
 US_VISA_CATEGORIES = {
     "Non-Immigrant Visas": {
         "Business/Work": {
             "H-1B": "Specialty Occupation Workers",
-            "H-1B1": "Free Trade Agreement Professionals (Chile/Singapore)",
+            "H-1B1": "Free Trade Agreement Professionals",
             "H-2A": "Temporary Agricultural Workers",
             "H-2B": "Temporary Non-Agricultural Workers",
-            "H-3": "Trainees and Special Education Exchange Visitors",
-            "H-4": "Dependents of H Visa Holders",
             "L-1A": "Intracompany Transferee Executives/Managers",
             "L-1B": "Intracompany Transferee Specialized Knowledge",
-            "L-2": "Dependents of L-1 Visa Holders",
-            "O-1A": "Extraordinary Ability in Sciences/Education/Business/Athletics",
+            "O-1A": "Extraordinary Ability in Sciences/Education/Business",
             "O-1B": "Extraordinary Ability in Arts/Motion Pictures/TV",
-            "O-2": "Support Personnel for O-1",
-            "O-3": "Dependents of O-1/O-2 Visa Holders",
-            "P-1A": "Internationally Recognized Athletes",
-            "P-1B": "Members of Internationally Recognized Entertainment Groups",
-            "P-2": "Artists/Entertainers in Reciprocal Exchange Programs",
-            "P-3": "Artists/Entertainers in Culturally Unique Programs",
-            "P-4": "Dependents of P Visa Holders",
             "E-1": "Treaty Traders",
             "E-2": "Treaty Investors",
             "E-3": "Australian Professionals",
             "TN": "NAFTA/USMCA Professionals",
-            "R-1": "Religious Workers",
-            "R-2": "Dependents of R-1 Visa Holders"
+            "R-1": "Religious Workers"
         },
         "Students/Exchange": {
             "F-1": "Academic Students",
-            "F-2": "Dependents of F-1 Students",
             "M-1": "Vocational Students",
-            "M-2": "Dependents of M-1 Students",
-            "J-1": "Exchange Visitors",
-            "J-2": "Dependents of J-1 Exchange Visitors"
+            "J-1": "Exchange Visitors"
         },
         "Visitors": {
             "B-1": "Business Visitors",
-            "B-2": "Tourism/Pleasure Visitors",
-            "B-1/B-2": "Combined Business/Tourism"
-        },
-        "Transit/Crew": {
-            "C-1": "Transit Aliens",
-            "C-2": "Transit to UN Headquarters",
-            "C-3": "Government Officials in Transit",
-            "D-1": "Crew Members (Sea/Air)",
-            "D-2": "Crew Members (Continuing Service)"
-        },
-        "Media": {
-            "I": "Representatives of Foreign Media"
-        },
-        "Diplomatic": {
-            "A-1": "Ambassadors/Government Officials",
-            "A-2": "Government Officials/Employees",
-            "A-3": "Personal Employees of A-1/A-2",
-            "G-1": "Representatives to International Organizations",
-            "G-2": "Representatives to International Organizations",
-            "G-3": "Representatives to International Organizations",
-            "G-4": "International Organization Officers/Employees",
-            "G-5": "Personal Employees of G-1 through G-4"
-        },
-        "Other": {
-            "K-1": "Fiancé(e) of US Citizen",
-            "K-2": "Children of K-1",
-            "K-3": "Spouse of US Citizen",
-            "K-4": "Children of K-3",
-            "Q-1": "International Cultural Exchange",
-            "Q-2": "Irish Peace Process Cultural/Training Program",
-            "Q-3": "Dependents of Q-2",
-            "S-5": "Informants on Criminal Organizations",
-            "S-6": "Informants on Terrorism",
-            "S-7": "Dependents of S-5/S-6",
-            "T-1": "Victims of Human Trafficking",
-            "T-2": "Spouse of T-1",
-            "T-3": "Child of T-1",
-            "T-4": "Parent of T-1",
-            "U-1": "Victims of Criminal Activity",
-            "U-2": "Spouse of U-1",
-            "U-3": "Child of U-1",
-            "U-4": "Parent of U-1",
-            "V-1": "Spouse of LPR",
-            "V-2": "Child of LPR",
-            "V-3": "Derivative Child of V-1/V-2"
+            "B-2": "Tourism/Pleasure Visitors"
         }
     },
     "Green Card/Permanent Residence": {
-        "Employment-Based Green Cards": {
+        "Employment-Based": {
             "EB-1A": "Extraordinary Ability",
             "EB-1B": "Outstanding Professors and Researchers", 
             "EB-1C": "Multinational Managers and Executives",
             "EB-2": "Advanced Degree Professionals",
             "EB-2 NIW": "National Interest Waiver",
             "EB-3": "Skilled Workers and Professionals",
-            "EB-3 Other": "Other Workers (Unskilled)",
-            "EB-4": "Special Immigrants (Religious Workers, etc.)",
             "EB-5": "Immigrant Investors"
         },
-        "Family-Based Green Cards": {
+        "Family-Based": {
             "IR-1": "Spouse of US Citizen",
-            "IR-2": "Unmarried Child (Under 21) of US Citizen",
-            "IR-3": "Orphan Adopted Abroad by US Citizen",
-            "IR-4": "Orphan to be Adopted by US Citizen", 
-            "IR-5": "Parent of US Citizen (21 or older)",
+            "IR-2": "Unmarried Child Under 21 of US Citizen",
+            "IR-5": "Parent of US Citizen",
             "F1": "Unmarried Sons/Daughters of US Citizens",
-            "F2A": "Spouses/Unmarried Children (Under 21) of LPRs",
-            "F2B": "Unmarried Sons/Daughters (21+) of LPRs",
+            "F2A": "Spouses/Children of LPRs",
             "F3": "Married Sons/Daughters of US Citizens",
             "F4": "Siblings of US Citizens"
-        },
-        "Other Green Card Categories": {
-            "Diversity Visa": "DV Lottery Winners",
-            "Asylum-Based": "Asylum Adjustment of Status",
-            "Refugee-Based": "Refugee Adjustment of Status",
-            "VAWA": "Violence Against Women Act",
-            "Registry": "Registry (Pre-1972 Entry)",
-            "Cuban Adjustment": "Cuban Adjustment Act",
-            "Nicaraguan/Central American": "NACARA",
-            "Special Immigrant Juvenile": "SIJ Status"
-        },
-        "Green Card Processes": {
-            "I-485": "Adjustment of Status",
-            "Consular Processing": "Immigrant Visa Processing Abroad",
-            "I-601": "Inadmissibility Waiver",
-            "I-601A": "Provisional Unlawful Presence Waiver",
-            "I-751": "Removal of Conditions on Residence",
-            "I-90": "Green Card Renewal/Replacement"
         }
     }
 }
 
 def extract_text_from_file(uploaded_file):
-    """Extract text from uploaded file (PDF, DOCX, TXT) with fallback handling"""
+    """Extract text from uploaded file with fallback handling"""
     try:
         if uploaded_file.type == "application/pdf":
             if not PDF_AVAILABLE:
                 st.error("PDF processing not available. Please install PyPDF2 or upload a TXT file instead.")
                 st.info("Alternative: Copy and paste the RFE text directly into the manual input field below.")
                 return None
-            # Extract text from PDF
             pdf_reader = PyPDF2.PdfReader(uploaded_file)
             text = ""
             for page in pdf_reader.pages:
@@ -333,7 +221,6 @@ def extract_text_from_file(uploaded_file):
                 st.error("DOCX processing not available. Please install python-docx or upload a TXT file instead.")
                 st.info("Alternative: Copy and paste the RFE text directly into the manual input field below.")
                 return None
-            # Extract text from DOCX
             doc = docx.Document(uploaded_file)
             text = ""
             for paragraph in doc.paragraphs:
@@ -341,7 +228,6 @@ def extract_text_from_file(uploaded_file):
             return text
         
         elif uploaded_file.type == "text/plain":
-            # Extract text from TXT - this should always work
             return str(uploaded_file.read(), "utf-8")
         
         else:
@@ -356,7 +242,6 @@ def extract_text_from_file(uploaded_file):
 def analyze_rfe_document(rfe_text):
     """Analyze RFE document and extract key issues"""
     try:
-        # Look for common RFE patterns and issues
         rfe_analysis = {
             "issues_identified": [],
             "deadline_mentioned": None,
@@ -365,7 +250,6 @@ def analyze_rfe_document(rfe_text):
             "specific_requirements": []
         }
         
-        # Common RFE keywords and phrases
         specialty_occupation_keywords = ["specialty occupation", "bachelor's degree", "job duties", "position requirements"]
         beneficiary_keywords = ["beneficiary", "qualifications", "education", "experience", "credentials"]
         employer_keywords = ["employer-employee relationship", "right to control", "staffing", "client site"]
@@ -373,7 +257,6 @@ def analyze_rfe_document(rfe_text):
         
         rfe_text_lower = rfe_text.lower()
         
-        # Identify specific issues
         if any(keyword in rfe_text_lower for keyword in specialty_occupation_keywords):
             rfe_analysis["issues_identified"].append("Specialty Occupation Requirements")
             
@@ -386,13 +269,11 @@ def analyze_rfe_document(rfe_text):
         if any(keyword in rfe_text_lower for keyword in ability_to_pay_keywords):
             rfe_analysis["issues_identified"].append("Ability to Pay")
         
-        # Look for deadline
         deadline_pattern = r'response.*?due.*?(\d{1,2}\/\d{1,2}\/\d{4})'
         deadline_match = re.search(deadline_pattern, rfe_text_lower)
         if deadline_match:
             rfe_analysis["deadline_mentioned"] = deadline_match.group(1)
         
-        # Look for receipt number
         receipt_pattern = r'(MSC|EAC|WAC|SRC|NBC|IOE)\d{10,13}'
         receipt_match = re.search(receipt_pattern, rfe_text, re.IGNORECASE)
         if receipt_match:
@@ -405,20 +286,19 @@ def analyze_rfe_document(rfe_text):
         return None
 
 def call_openai_api(prompt, max_tokens=3000, temperature=0.2):
-    """Enhanced OpenAI API call with better error handling and prompts"""
+    """Enhanced OpenAI API call with better error handling"""
     try:
-        # Get API key
         api_key = None
         if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
             api_key = st.secrets["OPENAI_API_KEY"]
         elif os.getenv("OPENAI_API_KEY"):
             api_key = os.getenv("OPENAI_API_KEY")
         else:
-            st.error("❌ OpenAI API key not found. Please configure your API key in Streamlit secrets.")
+            st.error("[ERROR] OpenAI API key not found. Please configure your API key in Streamlit secrets.")
             return None
         
         if not api_key or not api_key.startswith('sk-'):
-            st.error("❌ Invalid API key format. Please check your configuration.")
+            st.error("[ERROR] Invalid API key format. Please check your configuration.")
             return None
         
         headers = {
@@ -426,7 +306,6 @@ def call_openai_api(prompt, max_tokens=3000, temperature=0.2):
             "Content-Type": "application/json"
         }
         
-        # Enhanced system message for better responses
         system_message = """You are an expert immigration attorney with extensive knowledge of US immigration law, USCIS policies, and legal precedents. Provide comprehensive, well-researched, and professionally formatted responses suitable for legal practice. Include relevant citations to statutes, regulations, case law, and USCIS guidance where appropriate. Structure your responses clearly and provide actionable legal advice."""
         
         data = {
@@ -443,7 +322,7 @@ def call_openai_api(prompt, max_tokens=3000, temperature=0.2):
             "https://api.openai.com/v1/chat/completions",
             headers=headers,
             json=data,
-            timeout=120  # Increased timeout
+            timeout=120
         )
         
         if response.status_code == 200:
@@ -458,8 +337,6 @@ def call_openai_api(prompt, max_tokens=3000, temperature=0.2):
 
 def generate_rfe_response_from_document(rfe_text, visa_category, case_details):
     """Generate comprehensive RFE response based on uploaded document"""
-    
-    # First analyze the RFE document
     rfe_analysis = analyze_rfe_document(rfe_text)
     
     if not rfe_analysis:
@@ -481,17 +358,17 @@ def generate_rfe_response_from_document(rfe_text, visa_category, case_details):
     - Position: {case_details.get('position', 'Not specified')}
 
     RFE DOCUMENT CONTENT:
-    {rfe_text[:4000]}  # Limit to first 4000 characters to avoid token limits
+    {rfe_text[:4000]}
 
     Please provide a comprehensive legal response that:
 
-    1. **ADDRESSES EACH SPECIFIC ISSUE** raised in the RFE document with detailed legal analysis
-    2. **PROVIDES REGULATORY FRAMEWORK** with citations to relevant statutes, regulations, and case law
-    3. **RECOMMENDS SPECIFIC EVIDENCE** needed to overcome each issue
-    4. **INCLUDES LEGAL ARGUMENTS** with proper citations and precedents
-    5. **SUGGESTS EXPERT OPINIONS** where beneficial
-    6. **OUTLINES RESPONSE STRATEGY** with timeline and priority actions
-    7. **IDENTIFIES POTENTIAL CHALLENGES** and mitigation strategies
+    1. ADDRESSES EACH SPECIFIC ISSUE raised in the RFE document with detailed legal analysis
+    2. PROVIDES REGULATORY FRAMEWORK with citations to relevant statutes, regulations, and case law
+    3. RECOMMENDS SPECIFIC EVIDENCE needed to overcome each issue
+    4. INCLUDES LEGAL ARGUMENTS with proper citations and precedents
+    5. SUGGESTS EXPERT OPINIONS where beneficial
+    6. OUTLINES RESPONSE STRATEGY with timeline and priority actions
+    7. IDENTIFIES POTENTIAL CHALLENGES and mitigation strategies
 
     Format the response as a professional legal brief suitable for USCIS submission with:
     - Executive summary
@@ -507,7 +384,6 @@ def generate_rfe_response_from_document(rfe_text, visa_category, case_details):
 
 def generate_legal_research_response(question):
     """Enhanced legal research with better prompting"""
-    
     prompt = f"""
     As an expert immigration attorney with comprehensive knowledge of US immigration law, provide detailed research and analysis on the following question:
 
@@ -515,14 +391,14 @@ def generate_legal_research_response(question):
 
     Please provide a comprehensive response that includes:
 
-    1. **DIRECT ANSWER** - Clear, actionable response to the specific question
-    2. **LEGAL FRAMEWORK** - Relevant statutes, regulations, and legal standards
-    3. **CURRENT USCIS POLICY** - Latest guidance, policy memoranda, and procedural updates
-    4. **CASE LAW ANALYSIS** - Relevant court decisions and BIA precedents
-    5. **PRACTICAL GUIDANCE** - Strategic considerations and best practices
-    6. **RISK ASSESSMENT** - Potential challenges and mitigation strategies
-    7. **RECENT DEVELOPMENTS** - Any recent changes in law, policy, or practice
-    8. **CITATIONS** - Specific references to legal authorities
+    1. DIRECT ANSWER - Clear, actionable response to the specific question
+    2. LEGAL FRAMEWORK - Relevant statutes, regulations, and legal standards
+    3. CURRENT USCIS POLICY - Latest guidance, policy memoranda, and procedural updates
+    4. CASE LAW ANALYSIS - Relevant court decisions and BIA precedents
+    5. PRACTICAL GUIDANCE - Strategic considerations and best practices
+    6. RISK ASSESSMENT - Potential challenges and mitigation strategies
+    7. RECENT DEVELOPMENTS - Any recent changes in law, policy, or practice
+    8. CITATIONS - Specific references to legal authorities
 
     Structure your response clearly with headers and provide specific, actionable guidance suitable for immigration law practice. Include relevant form numbers, filing procedures, and timeline considerations where applicable.
 
@@ -532,11 +408,11 @@ def generate_legal_research_response(question):
     return call_openai_api(prompt, max_tokens=3500, temperature=0.2)
 
 def check_soc_code(soc_code):
-    """Check if SOC code is in Job Zone 3 (to avoid)"""
+    """Check if SOC code is in Job Zone 3"""
     if soc_code in JOB_ZONE_3_CODES:
         return {
             "status": "WARNING",
-            "message": f"[!] This SOC code ({soc_code}) is Job Zone 3 and should be avoided for H-1B specialty occupation.",
+            "message": f"[WARNING] This SOC code ({soc_code}) is Job Zone 3 and should be avoided for H-1B specialty occupation.",
             "title": JOB_ZONE_3_CODES[soc_code],
             "recommendation": "Consider finding a more specific SOC code that falls in Job Zone 4 or 5."
         }
@@ -547,8 +423,19 @@ def check_soc_code(soc_code):
             "recommendation": "Verify this SOC code aligns with the actual job duties and requirements."
         }
 
+def load_logo():
+    """Load Lawtrax logo with fallback handling"""
+    if not PIL_AVAILABLE:
+        return None
+    try:
+        if os.path.exists("assets/lawtrax_logo.png"):
+            return Image.open("assets/lawtrax_logo.png")
+        return None
+    except Exception:
+        return None
+
 def main():
-    # Professional Header with Logo
+    # Professional Header
     if PIL_AVAILABLE:
         logo = load_logo()
     
@@ -579,42 +466,17 @@ def main():
         if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
             st.markdown("""
             <div class="success-box">
-                <strong>✅ API Status:</strong> OpenAI connectivity confirmed.
+                <strong>[OK] API Status:</strong> OpenAI connectivity confirmed.
             </div>
-            # Show installation instructions if dependencies are missing
-        missing_deps = []
-        if not PDF_AVAILABLE:
-            missing_deps.append("PyPDF2")
-        if not DOCX_AVAILABLE:
-            missing_deps.append("python-docx")
-            
-        if missing_deps:
-            with st.expander("[DEPS] Install Missing Dependencies (Optional)"):
-                st.markdown(f"""
-                **To enable full file support, install these packages:**
-                
-                ```bash
-                pip install {' '.join(missing_deps)}
-                ```
-                
-                **Or add to requirements.txt:**
-                ```
-                {chr(10).join(missing_deps)}
-                ```
-                
-                **Note:** The system works perfectly with manual text input. File upload is just a convenience feature.
-                """)
-
-        st.markdown("---")
+            """, unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class="warning-box">
-                <strong>⚠️ Configuration Required:</strong> Please configure your OpenAI API key in Streamlit secrets.
+                <strong>[WARNING] Configuration Required:</strong> Please configure your OpenAI API key in Streamlit secrets.
             </div>
             """, unsafe_allow_html=True)
     
     with col2:
-        # Dependency status
         dependencies_status = []
         if PDF_AVAILABLE:
             dependencies_status.append("[OK] PDF Support")
@@ -635,13 +497,37 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+    # Show installation instructions if dependencies are missing
+    missing_deps = []
+    if not PDF_AVAILABLE:
+        missing_deps.append("PyPDF2")
+    if not DOCX_AVAILABLE:
+        missing_deps.append("python-docx")
+        
+    if missing_deps:
+        with st.expander("[DEPS] Install Missing Dependencies (Optional)"):
+            st.markdown(f"""
+            **To enable full file support, install these packages:**
+            
+            ```bash
+            pip install {' '.join(missing_deps)}
+            ```
+            
+            **Or add to requirements.txt:**
+            ```
+            {chr(10).join(missing_deps)}
+            ```
+            
+            **Note:** The system works perfectly with manual text input. File upload is just a convenience feature.
+            """)
+
+    st.markdown("---")
+
     # Main content tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "[CHAT] Legal Research Chat", 
         "[RFE] RFE Response Generator", 
-        "[EXPERT] Expert Opinion Letters",
-        "[TEMPLATES] Professional Templates",
-        "[RESOURCES] Legal Resources"
+        "[TOOLS] Professional Tools"
     ])
 
     with tab1:
@@ -656,10 +542,9 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # Research interface
         question = st.text_area(
             "Enter your immigration law research question:",
-            placeholder="Example: What are the latest USCIS policy updates for H-1B specialty occupation determinations? How should I address a complex beneficiary qualifications RFE?",
+            placeholder="Example: What are the latest USCIS policy updates for H-1B specialty occupation determinations?",
             height=120,
             help="Ask detailed questions about immigration law, policy updates, case strategies, or legal precedents."
         )
@@ -685,7 +570,6 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Download option
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             filename = f"Legal_Research_{timestamp}.txt"
                             download_content = f"LAWTRAX IMMIGRATION RESEARCH\n{'='*50}\n\nQuestion: {question}\n\nResearch Results:\n{response}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
@@ -699,10 +583,9 @@ def main():
                 else:
                     st.warning("Please enter a research question.")
         
-        # Display recent research history
         if st.session_state.chat_history:
             st.markdown("### [HISTORY] Recent Research History")
-            for i, chat in enumerate(reversed(st.session_state.chat_history[-3:])):  # Show last 3
+            for i, chat in enumerate(reversed(st.session_state.chat_history[-3:])):
                 with st.expander(f"[ITEM] {chat['question'][:80]}... ({chat['timestamp']})"):
                     st.markdown(chat['answer'])
         
@@ -719,7 +602,6 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        # RFE Document Upload Section
         st.markdown("""
         <div class="upload-box">
             <strong>[UPLOAD] Upload RFE Document:</strong> Upload the actual RFE document from USCIS for automatic analysis 
@@ -727,7 +609,6 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
-        # Determine available file types based on installed libraries
         available_types = ['txt']
         type_description = "TXT"
         
@@ -745,24 +626,22 @@ def main():
             help=f"Upload the RFE document received from USCIS ({type_description} format)"
         )
 
-        # Show dependency status
         if not PDF_AVAILABLE or not DOCX_AVAILABLE:
-            st.info(f"""
-            [INFO] **File Support Status:**
-            - TXT files: [OK] Supported
-            - PDF files: {'[OK] Supported' if PDF_AVAILABLE else '[X] Not available (install PyPDF2)'}
-            - DOCX files: {'[OK] Supported' if DOCX_AVAILABLE else '[X] Not available (install python-docx)'}
-            
-            [TIP] **Tip:** You can always copy and paste RFE content manually below if file upload isn't working.
-            """)
+            st.markdown(f"""
+            <div class="info-box">
+                <strong>[INFO] File Support Status:</strong><br>
+                - TXT files: [OK] Supported<br>
+                - PDF files: {'[OK] Supported' if PDF_AVAILABLE else '[X] Not available (install PyPDF2)'}<br>
+                - DOCX files: {'[OK] Supported' if DOCX_AVAILABLE else '[X] Not available (install python-docx)'}<br><br>
+                <strong>[TIP] Tip:</strong> You can always copy and paste RFE content manually below if file upload isn't working.
+            </div>
+            """, unsafe_allow_html=True)
 
         if uploaded_file is not None:
             with st.spinner("Analyzing uploaded RFE document..."):
                 extracted_text = extract_text_from_file(uploaded_file)
                 if extracted_text:
                     st.session_state.uploaded_rfe_content = extracted_text
-                    
-                    # Analyze the document
                     rfe_analysis = analyze_rfe_document(extracted_text)
                     
                     st.markdown("""
@@ -771,7 +650,6 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Display analysis results
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("**[ISSUES] Issues Identified:**")
@@ -790,7 +668,6 @@ def main():
                                 st.markdown(f"• Deadline: {rfe_analysis['deadline_mentioned']}")
                             st.markdown(f"• Document Length: {len(extracted_text)} characters")
 
-        # Case Details Form
         st.markdown("### [FORM] Case Information")
         
         with st.form("enhanced_rfe_form"):
@@ -817,7 +694,6 @@ def main():
                 receipt_number = st.text_input("USCIS Receipt Number")
                 response_deadline = st.date_input("RFE Response Deadline")
             
-            # Enhanced manual input section
             if not st.session_state.uploaded_rfe_content:
                 st.markdown("### [INPUT] Manual RFE Content Input")
                 st.markdown("""
@@ -859,14 +735,12 @@ def main():
                     
                     with st.spinner("Generating comprehensive RFE response..."):
                         if st.session_state.uploaded_rfe_content:
-                            # Use uploaded document
                             response = generate_rfe_response_from_document(
                                 st.session_state.uploaded_rfe_content, 
                                 visa_category.split(" - ")[0] if " - " in visa_category else visa_category,
                                 case_details
                             )
                         else:
-                            # Use manual input (fallback to original method)
                             visa_code = visa_category.split(" - ")[0] if " - " in visa_category else visa_category
                             
                             prompt = f"""
@@ -902,7 +776,6 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Store response in session state for download
                             st.session_state['latest_rfe_response'] = {
                                 'content': response,
                                 'visa_category': visa_category,
@@ -910,12 +783,10 @@ def main():
                                 'beneficiary': beneficiary
                             }
                             
-                            # Clear uploaded content after processing
                             st.session_state.uploaded_rfe_content = None
                 else:
                     st.warning("Please upload an RFE document or manually describe the RFE issues.")
         
-        # Download button outside form
         if 'latest_rfe_response' in st.session_state:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"RFE_Response_{st.session_state['latest_rfe_response']['visa_category'].split(' - ')[0]}_{timestamp}.txt"
@@ -942,39 +813,8 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
 
     with tab3:
         st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("[EXPERT] Expert Opinion & Support Letter Generator")
+        st.subheader("[TOOLS] Professional Immigration Analysis Tools")
         
-        st.markdown("""
-        <div class="info-box">
-            <strong>[SERVICES] Expert Opinion Services:</strong> Generate professional expert opinion letters, support letters, 
-            and evaluations for any type of US immigration case. Covers all visa categories from employment-based 
-            to family-based to special immigrant categories.
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Expert opinion generation code continues...
-        # (Keep the existing expert opinion functionality)
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab4:
-        st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("[TEMPLATES] Comprehensive Immigration Templates & Legal Frameworks")
-        
-        # Templates code continues...
-        # (Keep the existing templates functionality)
-        
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with tab5:
-        st.markdown("<div class='tab-content'>", unsafe_allow_html=True)
-        st.subheader("[RESOURCES] Comprehensive US Immigration Law Resources")
-        
-        # Resources code continues...
-        # (Keep the existing resources functionality)
-        
-        # Enhanced SOC Code Checker Tool
-        st.markdown("---")
         st.markdown("""
         <div class="info-box">
             <h4>[TOOLS] Professional Immigration Analysis Tools</h4>
