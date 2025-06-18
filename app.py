@@ -7,10 +7,32 @@ from datetime import datetime
 import re
 import base64
 from io import BytesIO
-from PIL import Image
-import PyPDF2
-import docx
-import mammoth
+
+# Optional imports with fallback handling
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+    st.warning("PIL not available - image features disabled")
+
+try:
+    import PyPDF2
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+
+try:
+    import docx
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+
+try:
+    import mammoth
+    MAMMOTH_AVAILABLE = True
+except ImportError:
+    MAMMOTH_AVAILABLE = False
 
 # Set page config
 st.set_page_config(
@@ -292,9 +314,13 @@ US_VISA_CATEGORIES = {
 }
 
 def extract_text_from_file(uploaded_file):
-    """Extract text from uploaded file (PDF, DOCX, TXT)"""
+    """Extract text from uploaded file (PDF, DOCX, TXT) with fallback handling"""
     try:
         if uploaded_file.type == "application/pdf":
+            if not PDF_AVAILABLE:
+                st.error("PDF processing not available. Please install PyPDF2 or upload a TXT file instead.")
+                st.info("Alternative: Copy and paste the RFE text directly into the manual input field below.")
+                return None
             # Extract text from PDF
             pdf_reader = PyPDF2.PdfReader(uploaded_file)
             text = ""
@@ -303,6 +329,10 @@ def extract_text_from_file(uploaded_file):
             return text
         
         elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            if not DOCX_AVAILABLE:
+                st.error("DOCX processing not available. Please install python-docx or upload a TXT file instead.")
+                st.info("Alternative: Copy and paste the RFE text directly into the manual input field below.")
+                return None
             # Extract text from DOCX
             doc = docx.Document(uploaded_file)
             text = ""
@@ -311,15 +341,16 @@ def extract_text_from_file(uploaded_file):
             return text
         
         elif uploaded_file.type == "text/plain":
-            # Extract text from TXT
+            # Extract text from TXT - this should always work
             return str(uploaded_file.read(), "utf-8")
         
         else:
-            st.error("Unsupported file format. Please upload PDF, DOCX, or TXT files.")
+            st.error("Unsupported file format. Please upload TXT files or copy/paste content manually.")
             return None
             
     except Exception as e:
         st.error(f"Error extracting text from file: {str(e)}")
+        st.info("Please try uploading a TXT file or copy/paste the content manually.")
         return None
 
 def analyze_rfe_document(rfe_text):
@@ -518,6 +549,9 @@ def check_soc_code(soc_code):
 
 def main():
     # Professional Header with Logo
+    if PIL_AVAILABLE:
+        logo = load_logo()
+    
     st.markdown("""
     <div class="main-header">
         <div class="logo-container">
@@ -538,17 +572,66 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # Check API Configuration
-    if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
-        st.markdown("""
-        <div class="success-box">
-            <strong>✅ System Status:</strong> Immigration Assistant is ready for professional use. API connectivity confirmed.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.markdown("""
-        <div class="warning-box">
-            <strong>⚠️ Configuration Required:</strong> Please configure your OpenAI API key in Streamlit secrets to enable AI-powered legal research.
+    # Check API Configuration and Dependencies
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
+            st.markdown("""
+            <div class="success-box">
+                <strong>✅ API Status:</strong> OpenAI connectivity confirmed.
+            </div>
+            # Show installation instructions if dependencies are missing
+        missing_deps = []
+        if not PDF_AVAILABLE:
+            missing_deps.append("PyPDF2")
+        if not DOCX_AVAILABLE:
+            missing_deps.append("python-docx")
+            
+        if missing_deps:
+            with st.expander("📦 Install Missing Dependencies (Optional)"):
+                st.markdown(f"""
+                **To enable full file support, install these packages:**
+                
+                ```bash
+                pip install {' '.join(missing_deps)}
+                ```
+                
+                **Or add to requirements.txt:**
+                ```
+                {chr(10).join(missing_deps)}
+                ```
+                
+                **Note:** The system works perfectly with manual text input. File upload is just a convenience feature.
+                """)
+
+        st.markdown("---")
+        else:
+            st.markdown("""
+            <div class="warning-box">
+                <strong>⚠️ Configuration Required:</strong> Please configure your OpenAI API key in Streamlit secrets.
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        # Dependency status
+        dependencies_status = []
+        if PDF_AVAILABLE:
+            dependencies_status.append("✅ PDF Support")
+        else:
+            dependencies_status.append("❌ PDF Support")
+            
+        if DOCX_AVAILABLE:
+            dependencies_status.append("✅ DOCX Support")
+        else:
+            dependencies_status.append("❌ DOCX Support")
+        
+        dependencies_status.append("✅ TXT Support")
+        
+        st.markdown(f"""
+        <div class="info-box">
+            <strong>📦 System Dependencies:</strong><br>
+            {' | '.join(dependencies_status)}
         </div>
         """, unsafe_allow_html=True)
 
@@ -644,11 +727,34 @@ def main():
         </div>
         """, unsafe_allow_html=True)
 
+        # Determine available file types based on installed libraries
+        available_types = ['txt']
+        type_description = "TXT"
+        
+        if PDF_AVAILABLE:
+            available_types.append('pdf')
+            type_description += ", PDF"
+            
+        if DOCX_AVAILABLE:
+            available_types.append('docx')
+            type_description += ", DOCX"
+
         uploaded_file = st.file_uploader(
             "Upload RFE Document",
-            type=['pdf', 'docx', 'txt'],
-            help="Upload the RFE document received from USCIS (PDF, DOCX, or TXT format)"
+            type=available_types,
+            help=f"Upload the RFE document received from USCIS ({type_description} format)"
         )
+
+        # Show dependency status
+        if not PDF_AVAILABLE or not DOCX_AVAILABLE:
+            st.info(f"""
+            📝 **File Support Status:**
+            - TXT files: ✅ Supported
+            - PDF files: {'✅ Supported' if PDF_AVAILABLE else '❌ Not available (install PyPDF2)'}
+            - DOCX files: {'✅ Supported' if DOCX_AVAILABLE else '❌ Not available (install python-docx)'}
+            
+            💡 **Tip:** You can always copy and paste RFE content manually below if file upload isn't working.
+            """)
 
         if uploaded_file is not None:
             with st.spinner("Analyzing uploaded RFE document..."):
@@ -711,16 +817,26 @@ def main():
                 receipt_number = st.text_input("USCIS Receipt Number")
                 response_deadline = st.date_input("RFE Response Deadline")
             
-            # Additional case details
+            # Enhanced manual input section
             if not st.session_state.uploaded_rfe_content:
+                st.markdown("### 📝 Manual RFE Content Input")
+                st.markdown("""
+                <div class="info-box">
+                    <strong>💡 Manual Input Option:</strong> If you cannot upload a file or prefer to copy/paste, 
+                    enter the RFE content directly below. This works just as well as file upload.
+                </div>
+                """, unsafe_allow_html=True)
+                
                 manual_rfe_issues = st.text_area(
-                    "RFE Issues (if no document uploaded):",
-                    height=100,
-                    help="Describe the specific issues raised in the RFE"
+                    "RFE Content (copy and paste from USCIS document):",
+                    height=150,
+                    help="Copy and paste the full RFE text or describe the specific issues raised",
+                    placeholder="Paste the complete RFE text here, or describe the specific issues such as:\n\n• Specialty occupation requirements not established\n• Beneficiary qualifications insufficient\n• Employer-employee relationship unclear\n• Additional evidence needed for [specific requirement]"
                 )
             else:
                 manual_rfe_issues = ""
-                st.markdown("*RFE issues will be extracted from uploaded document*")
+                st.markdown("### ✅ Using Uploaded RFE Document")
+                st.info("RFE issues will be extracted from uploaded document")
             
             additional_details = st.text_area(
                 "Additional Case Details:",
