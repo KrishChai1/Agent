@@ -221,7 +221,49 @@ US_VISA_CATEGORIES = {
             "V-3": "Derivative Child of V-1/V-2"
         }
     },
-    "Immigrant Visas": {
+        "Green Card/Permanent Residence": {
+            "Employment-Based Green Cards": {
+                "EB-1A": "Extraordinary Ability",
+                "EB-1B": "Outstanding Professors and Researchers", 
+                "EB-1C": "Multinational Managers and Executives",
+                "EB-2": "Advanced Degree Professionals",
+                "EB-2 NIW": "National Interest Waiver",
+                "EB-3": "Skilled Workers and Professionals",
+                "EB-3 Other": "Other Workers (Unskilled)",
+                "EB-4": "Special Immigrants (Religious Workers, etc.)",
+                "EB-5": "Immigrant Investors"
+            },
+            "Family-Based Green Cards": {
+                "IR-1": "Spouse of US Citizen",
+                "IR-2": "Unmarried Child (Under 21) of US Citizen",
+                "IR-3": "Orphan Adopted Abroad by US Citizen",
+                "IR-4": "Orphan to be Adopted by US Citizen", 
+                "IR-5": "Parent of US Citizen (21 or older)",
+                "F1": "Unmarried Sons/Daughters of US Citizens",
+                "F2A": "Spouses/Unmarried Children (Under 21) of LPRs",
+                "F2B": "Unmarried Sons/Daughters (21+) of LPRs",
+                "F3": "Married Sons/Daughters of US Citizens",
+                "F4": "Siblings of US Citizens"
+            },
+            "Other Green Card Categories": {
+                "Diversity Visa": "DV Lottery Winners",
+                "Asylum-Based": "Asylum Adjustment of Status",
+                "Refugee-Based": "Refugee Adjustment of Status",
+                "VAWA": "Violence Against Women Act",
+                "Registry": "Registry (Pre-1972 Entry)",
+                "Cuban Adjustment": "Cuban Adjustment Act",
+                "Nicaraguan/Central American": "NACARA",
+                "Special Immigrant Juvenile": "SIJ Status"
+            },
+            "Green Card Processes": {
+                "I-485": "Adjustment of Status",
+                "Consular Processing": "Immigrant Visa Processing Abroad",
+                "I-601": "Inadmissibility Waiver",
+                "I-601A": "Provisional Unlawful Presence Waiver",
+                "I-751": "Removal of Conditions on Residence",
+                "I-90": "Green Card Renewal/Replacement"
+            }
+        },
         "Family-Based": {
             "IR-1": "Spouse of US Citizen",
             "IR-2": "Unmarried Child (Under 21) of US Citizen",
@@ -853,18 +895,27 @@ def main():
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # Download option
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                filename = f"Immigration_Response_{case_type.replace(' ', '_')}_{timestamp}.txt"
-                                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{case_type.upper()} - {visa_category}\n{'='*80}\n\n{response}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                st.download_button(
-                                    "📥 Download Response",
-                                    data=download_content,
-                                    file_name=filename,
-                                    mime="text/plain"
-                                )
+                                # Store response in session state for download
+                                st.session_state['latest_response'] = {
+                                    'content': response,
+                                    'type': case_type,
+                                    'category': visa_category
+                                }
                     else:
                         st.warning("Please describe the RFE issues before generating a response.")
+            
+            # Download button outside form
+            if 'latest_response' in st.session_state:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"Immigration_Response_{st.session_state['latest_response']['type'].replace(' ', '_')}_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{st.session_state['latest_response']['type'].upper()} - {st.session_state['latest_response']['category']}\n{'='*80}\n\n{st.session_state['latest_response']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Response",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_rfe_response"
+                )
         
         elif case_type in ["Initial Petition Strategy", "General Immigration Guidance"]:
             st.markdown("""
@@ -922,18 +973,28 @@ def main():
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # Download option
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                filename = f"Immigration_Guidance_{timestamp}.txt"
-                                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{case_type.upper()}\n{'='*60}\n\nCase: {visa_category}\nClient: {client_name}\n\n{response}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                st.download_button(
-                                    "📥 Download Guidance",
-                                    data=download_content,
-                                    file_name=filename,
-                                    mime="text/plain"
-                                )
+                                # Store response for download
+                                st.session_state['latest_guidance'] = {
+                                    'content': response,
+                                    'client': client_name,
+                                    'category': visa_category,
+                                    'type': case_type
+                                }
                     else:
                         st.warning("Please provide your immigration question or case details.")
+            
+            # Download button outside form
+            if 'latest_guidance' in st.session_state:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"Immigration_Guidance_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{st.session_state['latest_guidance']['type'].upper()}\n{'='*60}\n\nCase: {st.session_state['latest_guidance']['category']}\nClient: {st.session_state['latest_guidance']['client']}\n\n{st.session_state['latest_guidance']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Guidance",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_guidance"
+                )
         
         else:  # Other case types (Motions, Appeals, etc.)
             st.markdown("""
@@ -994,18 +1055,28 @@ def main():
                                 </div>
                                 """, unsafe_allow_html=True)
                                 
-                                # Download option
-                                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                filename = f"{case_type.replace(' ', '_')}_{timestamp}.txt"
-                                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{case_type.upper()}\n{'='*60}\n\nCase: {visa_category}\nCase Number: {case_number}\n\n{response}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                                st.download_button(
-                                    "📥 Download Document",
-                                    data=download_content,
-                                    file_name=filename,
-                                    mime="text/plain"
-                                )
+                                # Store response for download
+                                st.session_state['latest_advanced_document'] = {
+                                    'content': response,
+                                    'type': case_type,
+                                    'category': visa_category,
+                                    'case_number': case_number
+                                }
                     else:
                         st.warning("Please provide case background and legal issues.")
+            
+            # Download button outside form
+            if 'latest_advanced_document' in st.session_state:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{st.session_state['latest_advanced_document']['type'].replace(' ', '_')}_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{st.session_state['latest_advanced_document']['type'].upper()}\n{'='*60}\n\nCase: {st.session_state['latest_advanced_document']['category']}\nCase Number: {st.session_state['latest_advanced_document']['case_number']}\n\n{st.session_state['latest_advanced_document']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Document",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_advanced_document"
+                )
         
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1109,16 +1180,25 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Download option
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            filename = f"Position_Expert_Opinion_{timestamp}.txt"
-                            download_content = f"LAWTRAX IMMIGRATION SERVICES\nPOSITION EXPERT OPINION LETTER\n{'='*60}\n\n{letter}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            st.download_button(
-                                "📥 Download Expert Opinion",
-                                data=download_content,
-                                file_name=filename,
-                                mime="text/plain"
-                            )
+                            # Store for download
+                            st.session_state['latest_expert_opinion'] = {
+                                'content': letter,
+                                'type': 'Position_Expert_Opinion',
+                                'expert': expert_name
+                            }
+            
+            # Download button outside form
+            if 'latest_expert_opinion' in st.session_state:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{st.session_state['latest_expert_opinion']['type']}_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{st.session_state['latest_expert_opinion']['type'].replace('_', ' ').upper()}\n{'='*60}\n\n{st.session_state['latest_expert_opinion']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Expert Opinion",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_expert_opinion"
+                )
         
         elif letter_type == "Extraordinary Ability Expert Opinion":
             st.markdown("""
@@ -1177,16 +1257,25 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Download option
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            filename = f"Extraordinary_Ability_Expert_Opinion_{timestamp}.txt"
-                            download_content = f"LAWTRAX IMMIGRATION SERVICES\nEXTRAORDINARY ABILITY EXPERT OPINION\n{'='*60}\n\n{letter}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            st.download_button(
-                                "📥 Download Expert Opinion",
-                                data=download_content,
-                                file_name=filename,
-                                mime="text/plain"
-                            )
+                            # Store for download
+                            st.session_state['latest_expert_opinion'] = {
+                                'content': letter,
+                                'type': 'Extraordinary_Ability_Expert_Opinion',
+                                'expert': expert_name
+                            }
+            
+            # Download button for extraordinary ability opinion
+            if 'latest_expert_opinion' in st.session_state and st.session_state['latest_expert_opinion']['type'] == 'Extraordinary_Ability_Expert_Opinion':
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"Extraordinary_Ability_Expert_Opinion_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\nEXTRAORDINARY ABILITY EXPERT OPINION\n{'='*60}\n\n{st.session_state['latest_expert_opinion']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Expert Opinion",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_extraordinary_opinion"
+                )
         
         elif letter_type == "Country Conditions Expert Opinion":
             st.markdown("""
@@ -1244,16 +1333,25 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Download option
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            filename = f"Country_Conditions_Expert_Opinion_{timestamp}.txt"
-                            download_content = f"LAWTRAX IMMIGRATION SERVICES\nCOUNTRY CONDITIONS EXPERT OPINION\n{'='*60}\n\n{letter}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            st.download_button(
-                                "📥 Download Expert Opinion",
-                                data=download_content,
-                                file_name=filename,
-                                mime="text/plain"
-                            )
+                            # Store for download
+                            st.session_state['latest_expert_opinion'] = {
+                                'content': letter,
+                                'type': 'Country_Conditions_Expert_Opinion',
+                                'expert': expert_name
+                            }
+            
+            # Download button for country conditions opinion
+            if 'latest_expert_opinion' in st.session_state and st.session_state['latest_expert_opinion']['type'] == 'Country_Conditions_Expert_Opinion':
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"Country_Conditions_Expert_Opinion_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\nCOUNTRY CONDITIONS EXPERT OPINION\n{'='*60}\n\n{st.session_state['latest_expert_opinion']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Expert Opinion",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_country_opinion"
+                )
         
         else:  # General expert opinion types
             st.markdown("""
@@ -1317,16 +1415,25 @@ def main():
                             </div>
                             """, unsafe_allow_html=True)
                             
-                            # Download option
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            filename = f"{letter_type.replace(' ', '_')}_{timestamp}.txt"
-                            download_content = f"LAWTRAX IMMIGRATION SERVICES\n{letter_type.upper()}\n{'='*60}\n\n{letter}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                            st.download_button(
-                                "📥 Download Expert Opinion",
-                                data=download_content,
-                                file_name=filename,
-                                mime="text/plain"
-                            )
+                            # Store for download
+                            st.session_state['latest_expert_opinion'] = {
+                                'content': letter,
+                                'type': letter_type.replace(' ', '_'),
+                                'expert': expert_name
+                            }
+            
+            # Download button for general expert opinion
+            if 'latest_expert_opinion' in st.session_state and 'General' in st.session_state['latest_expert_opinion']['type']:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{st.session_state['latest_expert_opinion']['type']}_{timestamp}.txt"
+                download_content = f"LAWTRAX IMMIGRATION SERVICES\n{st.session_state['latest_expert_opinion']['type'].replace('_', ' ').upper()}\n{'='*60}\n\n{st.session_state['latest_expert_opinion']['content']}\n\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                st.download_button(
+                    "📥 Download Expert Opinion",
+                    data=download_content,
+                    file_name=filename,
+                    mime="text/plain",
+                    key="download_general_expert_opinion"
+                )
         
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1449,22 +1556,24 @@ def main():
         
         elif template_category == "Immigrant Visa Checklists":
             immigrant_type = st.selectbox(
-                "Select Immigrant Visa Category:",
+                "Select Green Card/Immigrant Visa Category:",
                 ["EB-1 Priority Workers", "EB-2 Advanced Degree/NIW", "EB-3 Skilled Workers", 
-                 "Family-Based (Immediate Relatives)", "Family-Based (Preference Categories)", 
-                 "Adjustment of Status", "Consular Processing"]
+                 "EB-5 Investor Green Card", "Family-Based (Immediate Relatives)", "Family-Based (Preference Categories)", 
+                 "Adjustment of Status (I-485)", "Consular Processing", "Green Card Renewal (I-90)",
+                 "Removal of Conditions (I-751)", "Asylum-Based Adjustment", "Diversity Visa"]
             )
             
             if immigrant_type == "EB-1 Priority Workers":
                 st.markdown("""
                 <div class="professional-card">
-                    <h4>✅ EB-1 Priority Worker Petition Checklist</h4>
+                    <h4>✅ EB-1 Priority Worker Green Card Checklist</h4>
                     
                     <strong>📋 Form I-140 Package:</strong>
                     <ul>
                         <li>Form I-140 (signed by petitioner)</li>
                         <li>USCIS filing fee ($2,805)</li>
                         <li>Premium Processing fee ($2,805) if requested</li>
+                        <li>Supporting evidence based on subcategory</li>
                     </ul>
                     
                     <strong>🌟 EB-1A Extraordinary Ability Requirements:</strong>
@@ -1490,14 +1599,229 @@ def main():
                         <li>At least 3 years experience in teaching/research</li>
                         <li>Job offer for tenure track or permanent research position</li>
                         <li>At least 2 of 6 regulatory criteria</li>
+                        <li>Major awards for outstanding achievements</li>
+                        <li>Membership in associations requiring outstanding achievements</li>
+                        <li>Published material written by others about beneficiary's work</li>
+                        <li>Participation as judge of others' work</li>
+                        <li>Original scientific or scholarly research contributions</li>
+                        <li>Authorship of scholarly books or articles</li>
                     </ul>
                     
                     <strong>🏢 EB-1C Multinational Manager/Executive:</strong>
                     <ul>
                         <li>Evidence of qualifying employment abroad (1 year in past 3)</li>
                         <li>Proof of qualifying relationship between entities</li>
-                        <li>Evidence of managerial/executive capacity</li>
+                        <li>Evidence of managerial/executive capacity abroad and in US</li>
                         <li>Job offer for managerial/executive position in US</li>
+                        <li>Corporate documents showing relationship</li>
+                        <li>Organizational charts and business operations evidence</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif immigrant_type == "EB-5 Investor Green Card":
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>✅ EB-5 Investor Green Card Checklist</h4>
+                    
+                    <strong>📋 Form I-526E Package (Regional Center):</strong>
+                    <ul>
+                        <li>Form I-526E (EB-5 Immigrant Petition by Regional Center Investor)</li>
+                        <li>USCIS filing fee ($11,160)</li>
+                        <li>Evidence of qualifying investment ($800,000 or $1,050,000)</li>
+                        <li>Source of funds documentation</li>
+                    </ul>
+                    
+                    <strong>💰 Investment Requirements:</strong>
+                    <ul>
+                        <li>Minimum investment: $1,050,000 (general) or $800,000 (TEA)</li>
+                        <li>Investment in new commercial enterprise</li>
+                        <li>Investment at risk and subject to loss</li>
+                        <li>Investment must create at least 10 full-time jobs for US workers</li>
+                    </ul>
+                    
+                    <strong>📄 Source of Funds Documentation:</strong>
+                    <ul>
+                        <li>Tax returns for past 5 years</li>
+                        <li>Bank statements and financial records</li>
+                        <li>Business ownership documentation</li>
+                        <li>Property sale agreements and appraisals</li>
+                        <li>Gift documentation (if applicable)</li>
+                        <li>Loan agreements and collateral documentation</li>
+                    </ul>
+                    
+                    <strong>🏢 Business Plan Requirements:</strong>
+                    <ul>
+                        <li>Comprehensive business plan with job creation projections</li>
+                        <li>Market analysis and financial projections</li>
+                        <li>Economic impact study</li>
+                        <li>Management structure and operational plan</li>
+                    </ul>
+                    
+                    <strong>⏰ Process Timeline:</strong>
+                    <ul>
+                        <li>I-526E approval: 12-18 months</li>
+                        <li>Conditional Green Card (I-485 or Consular Processing)</li>
+                        <li>I-829 removal of conditions: Filed 90 days before 2-year anniversary</li>
+                        <li>Permanent Green Card upon I-829 approval</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif immigrant_type == "Adjustment of Status (I-485)":
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>✅ Adjustment of Status (I-485) Checklist</h4>
+                    
+                    <strong>📋 Required Forms and Fees:</strong>
+                    <ul>
+                        <li>Form I-485 (Application to Adjust Status)</li>
+                        <li>Filing fee: $1,440 (includes biometrics)</li>
+                        <li>Medical examination (Form I-693)</li>
+                        <li>Form I-864 Affidavit of Support (if required)</li>
+                    </ul>
+                    
+                    <strong>👤 Supporting Documentation:</strong>
+                    <ul>
+                        <li>Copy of birth certificate</li>
+                        <li>Copy of passport biographical pages</li>
+                        <li>Copy of current immigration status documents</li>
+                        <li>Two passport-style photographs</li>
+                        <li>Form I-94 arrival/departure record</li>
+                        <li>Copy of approved immigrant petition (I-130, I-140, etc.)</li>
+                    </ul>
+                    
+                    <strong>🏥 Medical Examination Requirements:</strong>
+                    <ul>
+                        <li>Completed by USCIS-designated civil surgeon</li>
+                        <li>Vaccination records and requirements</li>
+                        <li>Physical examination and medical history</li>
+                        <li>Tuberculosis screening and blood tests</li>
+                        <li>Mental health evaluation if indicated</li>
+                    </ul>
+                    
+                    <strong>💰 Affidavit of Support (I-864) Requirements:</strong>
+                    <ul>
+                        <li>Required for family-based and some employment cases</li>
+                        <li>Sponsor must meet income requirements (125% of poverty guidelines)</li>
+                        <li>Tax returns for most recent 3 years</li>
+                        <li>Employment verification letter</li>
+                        <li>Bank statements and asset documentation</li>
+                    </ul>
+                    
+                    <strong>⚠️ Inadmissibility Issues:</strong>
+                    <ul>
+                        <li>Criminal history disclosure and documentation</li>
+                        <li>Immigration violations and unlawful presence</li>
+                        <li>Public charge considerations</li>
+                        <li>Waiver applications if needed (I-601, I-601A)</li>
+                    </ul>
+                    
+                    <strong>🔄 Work Authorization:</strong>
+                    <ul>
+                        <li>Form I-765 can be filed concurrently</li>
+                        <li>No additional fee when filed with I-485</li>
+                        <li>Employment authorization typically granted while I-485 pending</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif immigrant_type == "Green Card Renewal (I-90)":
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>✅ Green Card Renewal (I-90) Checklist</h4>
+                    
+                    <strong>📋 When to File I-90:</strong>
+                    <ul>
+                        <li>Green card expired or will expire within 6 months</li>
+                        <li>Green card lost, stolen, or damaged</li>
+                        <li>Card contains incorrect information</li>
+                        <li>Name change since card was issued</li>
+                        <li>Received card but never received it</li>
+                    </ul>
+                    
+                    <strong>💳 Form I-90 Requirements:</strong>
+                    <ul>
+                        <li>Form I-90 (Application to Replace Permanent Resident Card)</li>
+                        <li>Filing fee: $540</li>
+                        <li>Biometrics fee: $85</li>
+                        <li>Copy of current or expired green card (if available)</li>
+                    </ul>
+                    
+                    <strong>📄 Supporting Documentation:</strong>
+                    <ul>
+                        <li>Copy of green card (front and back)</li>
+                        <li>Government-issued photo identification</li>
+                        <li>Legal name change documents (if applicable)</li>
+                        <li>Police report (if card was stolen)</li>
+                        <li>Two passport-style photographs</li>
+                    </ul>
+                    
+                    <strong>⏰ Processing Information:</strong>
+                    <ul>
+                        <li>Processing time: 8-13 months</li>
+                        <li>Receipt notice serves as temporary evidence</li>
+                        <li>ADIT stamp available if immediate travel needed</li>
+                        <li>Biometrics appointment required</li>
+                    </ul>
+                    
+                    <strong>🚨 Special Situations:</strong>
+                    <ul>
+                        <li>Conditional residents must file I-751, not I-90</li>
+                        <li>Commuter green card holders have special requirements</li>
+                        <li>Cards damaged by USCIS error may be replaced for free</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif immigrant_type == "Removal of Conditions (I-751)":
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>✅ Removal of Conditions (I-751) Checklist</h4>
+                    
+                    <strong>📋 When to File I-751:</strong>
+                    <ul>
+                        <li>Must file within 90 days before conditional green card expires</li>
+                        <li>Applies to spouses of US citizens/LPRs who received 2-year conditional cards</li>
+                        <li>Conditional residents based on marriage</li>
+                        <li>Child derivatives of conditional residents</li>
+                    </ul>
+                    
+                    <strong>💑 Joint Filing with Spouse:</strong>
+                    <ul>
+                        <li>Form I-751 (both spouses sign)</li>
+                        <li>Filing fee: $760</li>
+                        <li>Biometrics fee: $85</li>
+                        <li>Evidence of bona fide marriage</li>
+                    </ul>
+                    
+                    <strong>📄 Evidence of Bona Fide Marriage:</strong>
+                    <ul>
+                        <li>Joint bank account statements</li>
+                        <li>Joint lease agreements or mortgage documents</li>
+                        <li>Joint utility bills and insurance policies</li>
+                        <li>Joint tax returns</li>
+                        <li>Birth certificates of children born to marriage</li>
+                        <li>Photos together with family and friends</li>
+                        <li>Affidavits from friends and family</li>
+                        <li>Travel documents showing joint trips</li>
+                    </ul>
+                    
+                    <strong>⚠️ Waiver Situations (Filing Alone):</strong>
+                    <ul>
+                        <li>Divorce or annulment (good faith marriage)</li>
+                        <li>Domestic violence or extreme cruelty</li>
+                        <li>Extreme hardship if removed from US</li>
+                        <li>Death of US citizen spouse</li>
+                    </ul>
+                    
+                    <strong>🔄 Process Timeline:</strong>
+                    <ul>
+                        <li>File within 90 days of card expiration</li>
+                        <li>Receipt notice extends status for 24 months</li>
+                        <li>Processing time: 12-18 months</li>
+                        <li>Interview may be required</li>
+                        <li>Approval results in 10-year green card</li>
                     </ul>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1806,73 +2130,154 @@ def main():
         elif resource_category == "USCIS Policy & Guidance":
             st.markdown("""
             <div class="professional-card">
-                <h4>📋 USCIS Policy Manual & Guidance</h4>
+                <h4>📋 USCIS Policy Manual & Comprehensive Guidance</h4>
                 
-                <strong>🔗 USCIS Policy Manual Volumes:</strong>
+                <strong>🔗 USCIS Policy Manual Volumes (Complete Coverage):</strong>
                 <ul>
                     <li><strong>Volume 1</strong> - General Policies and Procedures</li>
-                    <li><strong>Volume 2</strong> - Nonimmigrants</li>
-                    <li><strong>Volume 3</strong> - Humanitarian Programs</li>
-                    <li><strong>Volume 6</strong> - Immigrants</li>
-                    <li><strong>Volume 7</strong> - Adjustment of Status</li>
-                    <li><strong>Volume 8</strong> - Admissibility</li>
+                    <li><strong>Volume 2</strong> - Nonimmigrants (H, L, O, P, E, TN, F, B, etc.)</li>
+                    <li><strong>Volume 3</strong> - Humanitarian Programs (Asylum, Refugee, TPS, VAWA)</li>
+                    <li><strong>Volume 4</strong> - Travel and Identity Documents</li>
+                    <li><strong>Volume 5</strong> - Adoptions</li>
+                    <li><strong>Volume 6</strong> - Immigrants (EB-1, EB-2, EB-3, EB-4, EB-5)</li>
+                    <li><strong>Volume 7</strong> - Adjustment of Status (I-485)</li>
+                    <li><strong>Volume 8</strong> - Admissibility (Grounds of Inadmissibility)</li>
                     <li><strong>Volume 9</strong> - Waivers and Other Forms of Relief</li>
+                    <li><strong>Volume 10</strong> - Employment Authorization</li>
+                    <li><strong>Volume 11</strong> - Travel Documents</li>
                     <li><strong>Volume 12</strong> - Citizenship and Naturalization</li>
+                    <li><strong>Volume 13</strong> - Executive Orders and Delegation</li>
+                    <li><strong>Volume 14</strong> - USCIS Officer Safety</li>
                 </ul>
                 
-                <strong>📄 Important Policy Memoranda:</strong>
+                <strong>📄 Critical USCIS Policy Memoranda:</strong>
                 <ul>
-                    <li><strong>Brand Memo (1999)</strong> - H-1B Specialty Occupation Guidance</li>
+                    <li><strong>Brand Memo (1999)</strong> - H-1B Specialty Occupation Standards</li>
+                    <li><strong>Cronin Memo (2000)</strong> - H-1B Itinerary Requirements</li>
+                    <li><strong>Yates Memo (2005)</strong> - H-1B Beneficiary's Education</li>
                     <li><strong>Neufeld Memo (2010)</strong> - H-1B Employer-Employee Relationship</li>
-                    <li><strong>Scialabba Memo (2013)</strong> - EB-5 Policy Clarifications</li>
-                    <li><strong>Johnson Memo (2014)</strong> - Prosecutorial Discretion</li>
-                    <li><strong>Cissna Memo (2018)</strong> - Notice to Appear Guidance</li>
+                    <li><strong>Kazarian Decision (2010)</strong> - EB-1A Two-Step Analysis</li>
+                    <li><strong>Dhanasar Decision (2016)</strong> - EB-2 National Interest Waiver</li>
+                    <li><strong>Matter of W-Y-U (2018)</strong> - L-1B Specialized Knowledge</li>
+                    <li><strong>Public Charge Rule (2019-2021)</strong> - Inadmissibility Determinations</li>
+                    <li><strong>COVID-19 Flexibility (2020-2023)</strong> - Pandemic Accommodations</li>
                 </ul>
                 
-                <strong>🔄 Recent Policy Updates:</strong>
+                <strong>🔄 Current USCIS Processing Information:</strong>
                 <ul>
-                    <li>Public Charge Rule Implementation and Changes</li>
-                    <li>H-1B Electronic Registration Process</li>
-                    <li>COVID-19 Flexibility Measures</li>
-                    <li>Premium Processing Expansions and Suspensions</li>
-                    <li>Fee Rule Updates and Implementation</li>
+                    <li><strong>Processing Times</strong> - Updated monthly for all offices and forms</li>
+                    <li><strong>Premium Processing</strong> - Available forms and current fees</li>
+                    <li><strong>Fee Schedule</strong> - Current USCIS filing fees (updated periodically)</li>
+                    <li><strong>Forms and Instructions</strong> - Latest versions with completion guides</li>
+                    <li><strong>Field Office Directories</strong> - Locations and contact information</li>
+                    <li><strong>Service Center Operations</strong> - Jurisdiction and specializations</li>
+                </ul>
+                
+                <strong>📊 USCIS Data and Statistics:</strong>
+                <ul>
+                    <li><strong>Annual Reports</strong> - Comprehensive immigration statistics</li>
+                    <li><strong>Quarterly Reports</strong> - Current processing data</li>
+                    <li><strong>H-1B Cap Data</strong> - Annual registration and selection statistics</li>
+                    <li><strong>Green Card Statistics</strong> - Issuance data by category</li>
+                    <li><strong>Naturalization Data</strong> - Citizenship processing statistics</li>
+                    <li><strong>Refugee and Asylum Statistics</strong> - Protection case data</li>
+                </ul>
+                
+                <strong>🏢 USCIS Office Structure and Operations:</strong>
+                <ul>
+                    <li><strong>National Benefits Center (NBC)</strong> - Centralized processing</li>
+                    <li><strong>Service Centers:</strong></li>
+                    <li>&nbsp;&nbsp;• California Service Center (CSC)</li>
+                    <li>&nbsp;&nbsp;• Nebraska Service Center (NSC)</li>
+                    <li>&nbsp;&nbsp;• Texas Service Center (TSC)</li>
+                    <li>&nbsp;&nbsp;• Vermont Service Center (VSC)</li>
+                    <li>&nbsp;&nbsp;• Potomac Service Center (PSC)</li>
+                    <li><strong>Field Offices</strong> - Interview and application support offices nationwide</li>
+                    <li><strong>Application Support Centers (ASCs)</strong> - Biometrics collection</li>
+                </ul>
+                
+                <strong>📋 USCIS Forms Library (Key Forms):</strong>
+                <ul>
+                    <li><strong>I-129</strong> - Nonimmigrant Worker Petition</li>
+                    <li><strong>I-130</strong> - Family-Based Immigrant Petition</li>
+                    <li><strong>I-140</strong> - Employment-Based Immigrant Petition</li>
+                    <li><strong>I-485</strong> - Adjustment of Status Application</li>
+                    <li><strong>I-539</strong> - Change/Extension of Nonimmigrant Status</li>
+                    <li><strong>I-765</strong> - Employment Authorization Application</li>
+                    <li><strong>I-131</strong> - Travel Document Application</li>
+                    <li><strong>I-751</strong> - Removal of Conditions on Residence</li>
+                    <li><strong>I-90</strong> - Green Card Renewal/Replacement</li>
+                    <li><strong>N-400</strong> - Naturalization Application</li>
+                    <li><strong>I-589</strong> - Asylum Application</li>
+                    <li><strong>I-601</strong> - Inadmissibility Waiver</li>
+                    <li><strong>I-601A</strong> - Provisional Unlawful Presence Waiver</li>
+                    <li><strong>I-864</strong> - Affidavit of Support</li>
+                    <li><strong>I-693</strong> - Medical Examination Report</li>
+                </ul>
+                
+                <strong>💰 Current USCIS Fee Structure (2024):</strong>
+                <ul>
+                    <li><strong>I-129</strong> - $460 (base fee) + additional fees</li>
+                    <li><strong>I-140</strong> - $2,805</li>
+                    <li><strong>I-485</strong> - $1,440 (includes biometrics)</li>
+                    <li><strong>Premium Processing</strong> - $2,805 (15 calendar days)</li>
+                    <li><strong>Biometrics</strong> - $85 (when separate)</li>
+                    <li><strong>N-400</strong> - $760</li>
+                    <li><strong>Fee Waivers</strong> - Available for qualified applicants</li>
+                </ul>
+                
+                <strong>🔍 USCIS Electronic Systems:</strong>
+                <ul>
+                    <li><strong>myUSCIS Account</strong> - Online case management</li>
+                    <li><strong>H-1B Electronic Registration</strong> - Cap season registration</li>
+                    <li><strong>USCIS Contact Center</strong> - 1-800-375-5283</li>
+                    <li><strong>Case Status Online</strong> - Real-time case tracking</li>
+                    <li><strong>InfoPass Appointments</strong> - Field office scheduling</li>
+                    <li><strong>E-Filing System</strong> - Online form submission</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
         
-        elif resource_category == "Research Tools & Databases":
+        elif resource_category == "Professional Development":
             col1, col2 = st.columns(2)
             
             with col1:
                 st.markdown("""
                 <div class="professional-card">
-                    <h4>🔍 Legal Research Databases</h4>
+                    <h4>📚 Immigration Law Education & Training</h4>
                     
-                    <strong>Case Law & Legal Research:</strong>
+                    <strong>Professional Organizations:</strong>
                     <ul>
-                        <li><strong>Westlaw</strong> - Comprehensive legal database</li>
-                        <li><strong>Lexis+</strong> - Legal research and analytics</li>
-                        <li><strong>Bloomberg Law</strong> - Legal and business intelligence</li>
-                        <li><strong>Google Scholar</strong> - Free case law access</li>
-                        <li><strong>Justia</strong> - Free legal information</li>
+                        <li><strong>American Immigration Lawyers Association (AILA)</strong></li>
+                        <li>&nbsp;&nbsp;• National conferences and workshops</li>
+                        <li>&nbsp;&nbsp;• Practice advisories and liaison meetings</li>
+                        <li>&nbsp;&nbsp;• Member forums and networking</li>
+                        <li>&nbsp;&nbsp;• Ethics and professional responsibility</li>
+                        <li><strong>American Bar Association Immigration Section</strong></li>
+                        <li><strong>Federal Bar Association Immigration Law Section</strong></li>
+                        <li><strong>National Immigration Forum</strong></li>
+                        <li><strong>State and Local Bar Immigration Committees</strong></li>
                     </ul>
                     
-                    <strong>Immigration-Specific Resources:</strong>
+                    <strong>Continuing Legal Education Providers:</strong>
                     <ul>
-                        <li><strong>AILA InfoNet</strong> - AILA member resource</li>
-                        <li><strong>BIA Decisions</strong> - DOJ EOIR Database</li>
-                        <li><strong>Immigration Library</strong> - Specialized research</li>
-                        <li><strong>Immlaw.com</strong> - Immigration law portal</li>
-                        <li><strong>ILW.com</strong> - Immigration news and resources</li>
+                        <li><strong>AILA University</strong> - Comprehensive training programs</li>
+                        <li><strong>CLE International</strong> - Immigration law specialization</li>
+                        <li><strong>American University</strong> - Immigration CLE courses</li>
+                        <li><strong>Georgetown Law</strong> - Immigration law programs</li>
+                        <li><strong>Practicing Law Institute (PLI)</strong> - Immigration track</li>
+                        <li><strong>National Institute for Trial Advocacy</strong> - Immigration trial skills</li>
                     </ul>
                     
-                    <strong>Government Resources:</strong>
+                    <strong>Certification and Specialization:</strong>
                     <ul>
-                        <li><strong>USCIS.gov</strong> - Forms, fees, and policy</li>
-                        <li><strong>DOL PERM</strong> - Labor certification</li>
-                        <li><strong>State Department</strong> - Visa bulletins and consular processing</li>
-                        <li><strong>EOIR</strong> - Immigration court information</li>
-                        <li><strong>CBP.gov</strong> - Entry and inspection procedures</li>
+                        <li><strong>Board Certification in Immigration Law</strong></li>
+                        <li>&nbsp;&nbsp;• State bar certification programs</li>
+                        <li>&nbsp;&nbsp;• Continuing education requirements</li>
+                        <li>&nbsp;&nbsp;• Peer review and examination</li>
+                        <li><strong>AILA Basic Immigration Law Course</strong></li>
+                        <li><strong>Advanced Practice Specializations</strong></li>
+                        <li><strong>Asylum and Refugee Law Certification</strong></li>
                     </ul>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1880,32 +2285,143 @@ def main():
             with col2:
                 st.markdown("""
                 <div class="professional-card">
-                    <h4>📊 Professional Organizations & CLE</h4>
+                    <h4>📖 Essential Immigration Law Publications</h4>
                     
-                    <strong>Bar Associations:</strong>
+                    <strong>Primary Treatises and References:</strong>
                     <ul>
-                        <li><strong>American Immigration Lawyers Association (AILA)</strong></li>
-                        <li><strong>American Bar Association (ABA) Immigration Section</strong></li>
-                        <li><strong>Federal Bar Association Immigration Section</strong></li>
-                        <li><strong>National Immigration Forum</strong></li>
-                        <li><strong>State Bar Immigration Sections</strong></li>
+                        <li><strong>Kurzban's Immigration Law Sourcebook</strong> - Annual updates</li>
+                        <li><strong>Steel on Immigration Law</strong> - Comprehensive treatise</li>
+                        <li><strong>Fragomen Immigration Law Handbook</strong></li>
+                        <li><strong>Austin T. Fragomen Immigration Procedures Handbook</strong></li>
+                        <li><strong>AILA's Immigration Law Today</strong> - Current developments</li>
                     </ul>
                     
-                    <strong>Continuing Legal Education:</strong>
+                    <strong>Specialized Practice Guides:</strong>
                     <ul>
-                        <li><strong>AILA Conferences and Webinars</strong></li>
-                        <li><strong>CLE International Immigration Programs</li>
-                        <li><strong>American University Immigration CLE</strong></li>
+                        <li><strong>Business Immigration Law</strong> - Employment-based practice</li>
+                        <li><strong>Family-Based Immigration Practice</strong></li>
+                        <li><strong>Asylum and Refugee Law Practice Guide</strong></li>
+                        <li><strong>Removal Defense and Litigation</strong></li>
+                        <li><strong>Naturalization and Citizenship Law</strong></li>
+                        <li><strong>Immigration Consequences of Criminal Convictions</strong></li>
+                    </ul>
+                    
+                    <strong>Journals and Periodicals:</strong>
+                    <ul>
+                        <li><strong>Immigration Law Today</strong> - AILA publication</li>
+                        <li><strong>Interpreter Releases</strong> - Weekly updates</li>
+                        <li><strong>Immigration Daily</strong> - News and analysis</li>
+                        <li><strong>Bender's Immigration Bulletin</strong></li>
                         <li><strong>Georgetown Immigration Law Journal</strong></li>
-                        <li><strong>Practicing Law Institute (PLI) Immigration</strong></li>
+                        <li><strong>Stanford Law Review Immigration Symposium</strong></li>
                     </ul>
                     
-                    <strong>Certification Programs:</strong>
+                    <strong>Electronic Resources:</strong>
                     <ul>
-                        <li><strong>Board Certification in Immigration Law</strong></li>
-                        <li><strong>AILA Basic Immigration Law CLE</strong></li>
-                        <li><strong>Advanced Immigration Law Specialization</strong></li>
-                        <li><strong>Asylum and Refugee Law Certification</strong></li>
+                        <li><strong>AILA InfoNet</strong> - Member research database</li>
+                        <li><strong>ILW.com</strong> - Immigration news portal</li>
+                        <li><strong>Immigration Library</strong> - Case law database</li>
+                        <li><strong>Immlaw.com</strong> - Practice resources</li>
+                        <li><strong>CLINIC Network</strong> - Pro bono resources</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        elif resource_category == "Research Tools & Databases":
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>🔍 Legal Research Platforms</h4>
+                    
+                    <strong>Comprehensive Legal Databases:</strong>
+                    <ul>
+                        <li><strong>Westlaw Edge</strong></li>
+                        <li>&nbsp;&nbsp;• Immigration Law Library</li>
+                        <li>&nbsp;&nbsp;• KeyCite citation analysis</li>
+                        <li>&nbsp;&nbsp;• ALR Immigration articles</li>
+                        <li>&nbsp;&nbsp;• BNA Immigration Library</li>
+                        <li><strong>Lexis+ (LexisNexis)</strong></li>
+                        <li>&nbsp;&nbsp;• Immigration law materials</li>
+                        <li>&nbsp;&nbsp;• Shepard's Citations</li>
+                        <li>&nbsp;&nbsp;• Matthew Bender Immigration treatises</li>
+                        <li><strong>Bloomberg Law</strong></li>
+                        <li>&nbsp;&nbsp;• Immigration practice center</li>
+                        <li>&nbsp;&nbsp;• Daily immigration news</li>
+                        <li>&nbsp;&nbsp;• Regulatory tracking</li>
+                    </ul>
+                    
+                    <strong>Free and Government Resources:</strong>
+                    <ul>
+                        <li><strong>Google Scholar</strong> - Free case law access</li>
+                        <li><strong>Justia.com</strong> - Free legal resources</li>
+                        <li><strong>FindLaw.com</strong> - Legal research tools</li>
+                        <li><strong>USCIS.gov</strong> - Official policy and forms</li>
+                        <li><strong>DOJ EOIR</strong> - Immigration court decisions</li>
+                        <li><strong>State Department</strong> - Consular processing info</li>
+                        <li><strong>Federal Register</strong> - Regulatory updates</li>
+                    </ul>
+                    
+                    <strong>Immigration-Specific Databases:</strong>
+                    <ul>
+                        <li><strong>AILA InfoNet</strong> - Members-only research</li>
+                        <li><strong>BIA Database</strong> - Board decisions</li>
+                        <li><strong>Immigration Library</strong> - Specialized research</li>
+                        <li><strong>Interpreter Releases Archives</strong></li>
+                        <li><strong>INSight (archived)</strong> - Historical INS guidance</li>
+                    </ul>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            with col2:
+                st.markdown("""
+                <div class="professional-card">
+                    <h4>🏛️ Government Resources & Databases</h4>
+                    
+                    <strong>USCIS Resources:</strong>
+                    <ul>
+                        <li><strong>USCIS Policy Manual</strong> - Complete guidance</li>
+                        <li><strong>Administrative Appeals Office (AAO)</strong> - Decision database</li>
+                        <li><strong>USCIS Forms and Fee Calculator</strong></li>
+                        <li><strong>Processing Time Information</strong></li>
+                        <li><strong>Field Office and Service Center Directories</strong></li>
+                        <li><strong>myUSCIS Account Portal</strong></li>
+                    </ul>
+                    
+                    <strong>DOJ Executive Office for Immigration Review (EOIR):</strong>
+                    <ul>
+                        <li><strong>Immigration Court Practice Manual</strong></li>
+                        <li><strong>Board of Immigration Appeals (BIA) Decisions</strong></li>
+                        <li><strong>Immigration Judge Benchbook</strong></li>
+                        <li><strong>Court Locations and Contact Information</strong></li>
+                        <li><strong>Electronic Filing System (ECAS)</strong></li>
+                    </ul>
+                    
+                    <strong>Department of State:</strong>
+                    <ul>
+                        <li><strong>Foreign Affairs Manual (FAM)</strong></li>
+                        <li><strong>Visa Bulletin</strong> - Monthly priority date updates</li>
+                        <li><strong>Country-Specific Information</strong></li>
+                        <li><strong>Consular Processing Procedures</strong></li>
+                        <li><strong>Travel.State.Gov</strong> - Visa information</li>
+                    </ul>
+                    
+                    <strong>Department of Labor:</strong>
+                    <ul>
+                        <li><strong>PERM Labor Certification</strong></li>
+                        <li><strong>Prevailing Wage Determinations</strong></li>
+                        <li><strong>O*NET Occupational Database</strong></li>
+                        <li><strong>Bureau of Labor Statistics</strong></li>
+                        <li><strong>Foreign Labor Certification</strong></li>
+                    </ul>
+                    
+                    <strong>Other Federal Agencies:</strong>
+                    <ul>
+                        <li><strong>CBP.gov</strong> - Entry and inspection procedures</li>
+                        <li><strong>ICE.gov</strong> - Enforcement policies</li>
+                        <li><strong>Federal Register</strong> - Regulatory changes</li>
+                        <li><strong>Congressional Research Service</strong> - Policy reports</li>
                     </ul>
                 </div>
                 """, unsafe_allow_html=True)
