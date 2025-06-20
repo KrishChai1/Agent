@@ -56,8 +56,60 @@ class USCISFormProcessor:
             'questionnaire': ['part', 'section', 'question', 'item']
         }
 
-    def extract_pdf_fields(self, pdf_file) -> List[str]:
-        """Extract form fields from PDF"""
+        # Sample field templates for different USCIS forms
+        self.form_templates = {
+            'I-129': [
+                'petitioner_last_name', 'petitioner_first_name', 'petitioner_middle_name',
+                'petitioner_company_name', 'petitioner_address', 'petitioner_city', 
+                'petitioner_state', 'petitioner_zip', 'petitioner_phone', 'petitioner_email',
+                'beneficiary_last_name', 'beneficiary_first_name', 'beneficiary_middle_name',
+                'beneficiary_date_of_birth', 'beneficiary_country_of_birth', 'beneficiary_passport_number',
+                'classification_sought', 'requested_action', 'start_date', 'end_date',
+                'attorney_last_name', 'attorney_first_name', 'attorney_firm_name',
+                'attorney_phone', 'attorney_email', 'attorney_bar_number',
+                'part_1_question_a', 'part_2_item_1', 'signature_date'
+            ],
+            'I-140': [
+                'petitioner_name', 'petitioner_address', 'petitioner_city', 'petitioner_state',
+                'petitioner_zip', 'petitioner_tax_id', 'petitioner_phone',
+                'beneficiary_last_name', 'beneficiary_first_name', 'beneficiary_middle_name',
+                'beneficiary_date_of_birth', 'beneficiary_country_of_birth', 'beneficiary_alien_number',
+                'priority_date', 'classification_requested', 'job_title', 'salary',
+                'attorney_name', 'attorney_firm', 'attorney_phone', 'attorney_email'
+            ],
+            'I-485': [
+                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
+                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
+                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
+                'applicant_country_of_birth', 'applicant_alien_number', 'applicant_ssn',
+                'current_status', 'basis_for_adjustment', 'priority_date',
+                'attorney_last_name', 'attorney_first_name', 'attorney_firm_name'
+            ],
+            'G-28': [
+                'attorney_last_name', 'attorney_first_name', 'attorney_middle_name',
+                'attorney_firm_name', 'attorney_address', 'attorney_city', 'attorney_state',
+                'attorney_zip', 'attorney_phone', 'attorney_email', 'attorney_bar_number',
+                'client_last_name', 'client_first_name', 'client_middle_name',
+                'client_address', 'client_phone', 'receipt_number', 'form_number'
+            ],
+            'I-765': [
+                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
+                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
+                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
+                'applicant_ssn', 'applicant_alien_number', 'eligibility_category',
+                'employer_name', 'employer_address', 'requested_validity_period'
+            ],
+            'Custom': [
+                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
+                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
+                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
+                'petitioner_name', 'petitioner_address', 'attorney_name', 'attorney_phone',
+                'case_type', 'receipt_number', 'part_1_question_a', 'part_2_item_1'
+            ]
+        }
+
+    def extract_pdf_fields(self, pdf_file, form_type: str = 'Custom') -> List[str]:
+        """Extract form fields from PDF or use template"""
         try:
             # Reset file pointer
             pdf_file.seek(0)
@@ -65,44 +117,81 @@ class USCISFormProcessor:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             fields = []
             
-            # Try to get form fields from AcroForm
-            if hasattr(pdf_reader, 'trailer') and "/Root" in pdf_reader.trailer:
-                root = pdf_reader.trailer["/Root"]
-                if "/AcroForm" in root:
-                    acro_form = root["/AcroForm"]
-                    if "/Fields" in acro_form:
-                        for field in acro_form["/Fields"]:
-                            field_obj = field.get_object()
-                            if "/T" in field_obj:
-                                field_name = field_obj["/T"]
-                                fields.append(str(field_name))
+            # Try multiple methods to extract fields
+            methods_tried = []
             
-            # Alternative method: check each page for annotations
+            # Method 1: AcroForm fields
+            try:
+                if hasattr(pdf_reader, 'trailer') and "/Root" in pdf_reader.trailer:
+                    root = pdf_reader.trailer["/Root"]
+                    if "/AcroForm" in root:
+                        acro_form = root["/AcroForm"]
+                        if "/Fields" in acro_form:
+                            for field in acro_form["/Fields"]:
+                                field_obj = field.get_object()
+                                if "/T" in field_obj:
+                                    field_name = field_obj["/T"]
+                                    fields.append(str(field_name))
+                methods_tried.append("AcroForm")
+            except Exception as e:
+                methods_tried.append(f"AcroForm (failed: {str(e)[:50]})")
+            
+            # Method 2: Page annotations
             if not fields:
-                for page in pdf_reader.pages:
-                    if "/Annots" in page:
-                        for annot in page["/Annots"]:
-                            annot_obj = annot.get_object()
-                            if "/T" in annot_obj:
-                                field_name = annot_obj["/T"]
-                                fields.append(str(field_name))
+                try:
+                    for page_num, page in enumerate(pdf_reader.pages):
+                        if "/Annots" in page:
+                            for annot in page["/Annots"]:
+                                annot_obj = annot.get_object()
+                                if "/T" in annot_obj:
+                                    field_name = annot_obj["/T"]
+                                    fields.append(str(field_name))
+                    methods_tried.append("Annotations")
+                except Exception as e:
+                    methods_tried.append(f"Annotations (failed: {str(e)[:50]})")
             
-            # Remove duplicates and clean up
-            fields = list(set(fields))
-            fields = [f for f in fields if f and f.strip()]
+            # Method 3: Try to find form-like text patterns
+            if not fields:
+                try:
+                    text_fields = []
+                    for page in pdf_reader.pages:
+                        text = page.extract_text()
+                        # Look for common form patterns
+                        patterns = [
+                            r'Part\s+\d+[.,]\s*([^:\n]+)',
+                            r'(\d+\.\s*[a-zA-Z][^:\n]+)',
+                            r'([A-Z][a-z]+\s+Name[:\s]*)',
+                            r'([A-Z][a-z]+\s+Address[:\s]*)',
+                        ]
+                        for pattern in patterns:
+                            matches = re.findall(pattern, text)
+                            text_fields.extend(matches)
+                    
+                    if text_fields:
+                        fields = [f.strip().replace(':', '').replace('.', '_') for f in text_fields[:20]]
+                    methods_tried.append("Text Pattern")
+                except Exception as e:
+                    methods_tried.append(f"Text Pattern (failed: {str(e)[:50]})")
             
-            return fields
+            # Clean up fields
+            if fields:
+                fields = list(set(fields))
+                fields = [f for f in fields if f and f.strip() and len(f.strip()) > 1]
+                
+                if fields:
+                    st.info(f"✅ Successfully extracted {len(fields)} fields using: {methods_tried[-1]}")
+                    return fields
+            
+            # Fallback: Use template based on form type
+            st.warning(f"No fillable fields found. Methods tried: {', '.join(methods_tried)}")
+            st.info(f"🎯 Using template fields for {form_type} form type")
+            
+            return self.form_templates.get(form_type, self.form_templates['Custom'])
             
         except Exception as e:
-            st.error(f"Error extracting PDF fields: {str(e)}")
-            # Return some sample fields for demonstration
-            return [
-                "applicant_last_name", "applicant_first_name", "applicant_middle_name",
-                "applicant_address", "applicant_city", "applicant_state", "applicant_zip",
-                "applicant_phone", "applicant_email", "applicant_date_of_birth",
-                "petitioner_name", "petitioner_address", "attorney_name", "attorney_phone",
-                "case_type", "receipt_number", "part_1_question_a", "part_2_item_1"
-            ]
+            st.warning(f"PDF processing error: {str(e)}")
+            st.info(f"🎯 Using template fields for {form_type} form type")
+            return self.form_templates.get(form_type, self.form_templates['Custom'])
 
     def categorize_field(self, field_name: str) -> str:
         """Categorize field based on name patterns"""
@@ -143,6 +232,8 @@ class USCISFormProcessor:
                     return 'customer.signatory_first_name'
                 elif 'last' in field_lower:
                     return 'customer.signatory_last_name'
+                elif 'company' in field_lower:
+                    return 'customer.customer_name'
                 else:
                     return 'customer.customer_name'
             elif 'address' in field_lower:
@@ -163,7 +254,7 @@ class USCISFormProcessor:
             elif 'tax' in field_lower or 'ein' in field_lower:
                 return 'customer.customer_tax_id'
             else:
-                return f'customer.{field_name.lower()}'
+                return f'customer.{field_name.lower().replace(" ", "_")}'
                 
         elif category == 'beneficiary':
             if 'name' in field_lower:
@@ -182,7 +273,7 @@ class USCISFormProcessor:
             elif 'ssn' in field_lower:
                 return 'beneficary.Beneficiary.beneficiarySsn'
             else:
-                return f'beneficary.Beneficiary.{field_name.lower()}'
+                return f'beneficary.Beneficiary.{field_name.lower().replace(" ", "_")}'
                 
         elif category == 'attorney':
             if 'name' in field_lower:
@@ -190,6 +281,8 @@ class USCISFormProcessor:
                     return 'attorney.attorneyInfo.firstName'
                 elif 'last' in field_lower:
                     return 'attorney.attorneyInfo.lastName'
+                elif 'firm' in field_lower:
+                    return 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName'
                 else:
                     return 'attorney.attorneyInfo.lastName'
             elif 'phone' in field_lower:
@@ -199,10 +292,10 @@ class USCISFormProcessor:
             elif 'bar' in field_lower:
                 return 'attorney.attorneyInfo.stateBarNumber'
             else:
-                return f'attorney.attorneyInfo.{field_name.lower()}'
+                return f'attorney.attorneyInfo.{field_name.lower().replace(" ", "_")}'
                 
         else:
-            return f'{field_name}:{self.determine_field_type(field_name).title()}Box'
+            return f'{field_name.replace(" ", "_")}:{self.determine_field_type(field_name).title()}Box'
 
 def generate_typescript_config(form_config: FormConfig) -> str:
     """Generate TypeScript configuration file"""
@@ -212,7 +305,11 @@ def generate_typescript_config(form_config: FormConfig) -> str:
     questionnaire_data = {}
     
     for field in form_config.fields:
-        mapping = f'"{field.mapping_path}:{field.field_type.title()}Box"'
+        # Clean up the mapping path
+        if ':' in field.mapping_path:
+            mapping = f'"{field.mapping_path}"'
+        else:
+            mapping = f'"{field.mapping_path}:{field.field_type.title()}Box"'
         
         if field.category == 'customer':
             customer_data[field.name] = mapping
@@ -254,11 +351,21 @@ def generate_typescript_config(form_config: FormConfig) -> str:
 def generate_questionnaire_json(form_config: FormConfig) -> Dict[str, Any]:
     """Generate questionnaire JSON configuration"""
     controls = []
-    current_section = None
-    section_controls = []
     
+    # Group fields by category
+    categories = {}
     for field in form_config.fields:
-        if field.category == 'questionnaire':
+        if field.category not in categories:
+            categories[field.category] = []
+        categories[field.category].append(field)
+    
+    # Create controls for each category
+    for category, fields in categories.items():
+        if category == 'questionnaire':
+            continue
+            
+        section_controls = []
+        for field in fields:
             control = {
                 "name": field.name,
                 "label": field.name.replace('_', ' ').title(),
@@ -280,8 +387,41 @@ def generate_questionnaire_json(form_config: FormConfig) -> Dict[str, Any]:
                 control["defaultValue"] = False
             
             section_controls.append(control)
+        
+        if section_controls:
+            controls.append({
+                "group_name": f"{category.title()} Information",
+                "group_key": f"{category}_info",
+                "group_definition": section_controls
+            })
     
-    if section_controls:
+    # Add questionnaire fields if any
+    questionnaire_fields = [f for f in form_config.fields if f.category == 'questionnaire']
+    if questionnaire_fields:
+        section_controls = []
+        for field in questionnaire_fields:
+            control = {
+                "name": field.name,
+                "label": field.name.replace('_', ' ').title(),
+                "type": field.field_type,
+                "validators": {
+                    "required": field.required
+                },
+                "style": {
+                    "col": "6" if field.field_type != "textarea" else "12"
+                }
+            }
+            
+            if field.field_type == "dropdown":
+                control["options"] = []
+                control["lookup"] = "Custom"
+            elif field.field_type == "date":
+                control["validators"]["pattern"] = "date"
+            elif field.field_type == "checkbox":
+                control["defaultValue"] = False
+            
+            section_controls.append(control)
+        
         controls.append({
             "group_name": f"{form_config.form_name.upper()} Details",
             "group_key": f"{form_config.form_name.lower()}_details",
@@ -295,9 +435,14 @@ def update_pdf_mapper(form_name: str, fields: List[FormField]) -> str:
     mapper_fields = []
     
     for field in fields:
+        # Clean up mapping path for PDF mapper
+        mapping_path = field.mapping_path
+        if ':' in mapping_path:
+            mapping_path = mapping_path.split(':')[0]
+        
         mapper_field = {
             "Name": field.name,
-            "Value": field.mapping_path,
+            "Value": mapping_path,
             "Type": field.field_type.title() + "Box"
         }
         mapper_fields.append(mapper_field)
@@ -319,6 +464,24 @@ def main():
     st.title("🏛️ USCIS Form Configuration Generator")
     st.markdown("Upload a USCIS form and automatically generate configuration files")
     
+    # Info about PDF types
+    with st.expander("ℹ️ About PDF Types and Templates"):
+        st.markdown("""
+        **Most USCIS PDFs are NOT fillable forms** - they're regular PDFs for printing and manual completion.
+        
+        This tool works in two modes:
+        - **📝 Fillable PDFs**: Extracts actual form fields if available
+        - **📋 Template Mode**: Uses predefined field templates based on form type
+        
+        **Available Templates:**
+        - **I-129**: H-1B, L-1, O-1 petitions
+        - **I-140**: Immigrant Worker petitions  
+        - **I-485**: Adjustment of Status applications
+        - **G-28**: Notice of Entry of Appearance
+        - **I-765**: Employment Authorization Document
+        - **Custom**: Generic template for other forms
+        """)
+    
     # Sidebar for configuration
     with st.sidebar:
         st.header("⚙️ Configuration")
@@ -327,7 +490,7 @@ def main():
         form_type = st.selectbox(
             "Form Type",
             ["I-129", "I-140", "I-485", "G-28", "I-765", "I-539", "Custom"],
-            help="Select the type of USCIS form"
+            help="Select the type of USCIS form - this determines the field template if no fillable fields are found"
         )
         
         # Processing options
@@ -336,6 +499,11 @@ def main():
         generate_questionnaire = st.checkbox("Generate questionnaire JSON", value=True)
         generate_typescript = st.checkbox("Generate TypeScript config", value=True)
         update_mappers = st.checkbox("Update PDF mappers", value=True)
+        
+        # Demo mode option
+        st.subheader("Demo Mode")
+        demo_mode = st.checkbox("Use demo mode (skip PDF upload)", value=False, 
+                               help="Generate configurations using template fields without uploading a PDF")
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -343,72 +511,132 @@ def main():
     with col1:
         st.header("📤 Upload Form")
         
-        # File upload
-        uploaded_file = st.file_uploader(
-            "Choose a PDF file",
-            type=['pdf'],
-            help="Upload the USCIS form PDF file"
-        )
-        
-        if uploaded_file:
-            # Form name input
+        if demo_mode:
+            st.info("🎯 Demo mode: Using template fields for selected form type")
+            uploaded_file = None
+            
+            # Form name input for demo
             form_name = st.text_input(
                 "Form Name",
-                value=uploaded_file.name.split('.')[0],
+                value=form_type.replace("-", ""),
                 help="Enter the form name (e.g., I129, G28, etc.)"
             )
             
-            # PDF name input
+            # PDF name input for demo
             pdf_name = st.text_input(
                 "PDF Display Name",
-                value=form_name.upper(),
+                value=form_type,
                 help="Enter the display name for the PDF"
             )
             
-            if st.button("🔍 Process Form", type="primary"):
-                with st.spinner("Processing form..."):
+            if st.button("🎯 Generate from Template", type="primary"):
+                with st.spinner("Generating from template..."):
                     processor = USCISFormProcessor()
                     
-                    # Extract fields from PDF
-                    fields = processor.extract_pdf_fields(uploaded_file)
+                    # Use template fields
+                    fields = processor.form_templates.get(form_type, processor.form_templates['Custom'])
                     
-                    if fields:
-                        st.success(f"Extracted {len(fields)} fields from the form")
+                    st.success(f"Generated {len(fields)} template fields for {form_type}")
+                    
+                    # Process fields
+                    form_fields = []
+                    for field_name in fields:
+                        category = processor.categorize_field(field_name) if auto_categorize else 'questionnaire'
+                        field_type = processor.determine_field_type(field_name)
+                        mapping_path = processor.generate_mapping_path(field_name, category)
                         
-                        # Process fields
-                        form_fields = []
-                        for field_name in fields:
-                            category = processor.categorize_field(field_name) if auto_categorize else 'questionnaire'
-                            field_type = processor.determine_field_type(field_name)
-                            mapping_path = processor.generate_mapping_path(field_name, category)
-                            
-                            form_field = FormField(
-                                name=field_name,
-                                field_type=field_type,
-                                category=category,
-                                mapping_path=mapping_path,
-                                required=False
-                            )
-                            form_fields.append(form_field)
-                        
-                        # Create form config
-                        form_config = FormConfig(
-                            form_name=form_name,
-                            form_type=form_type,
-                            pdf_name=pdf_name,
-                            fields=form_fields,
-                            sections=list(set([field.category for field in form_fields]))
+                        form_field = FormField(
+                            name=field_name,
+                            field_type=field_type,
+                            category=category,
+                            mapping_path=mapping_path,
+                            required=False
                         )
+                        form_fields.append(form_field)
+                    
+                    # Create form config
+                    form_config = FormConfig(
+                        form_name=form_name,
+                        form_type=form_type,
+                        pdf_name=pdf_name,
+                        fields=form_fields,
+                        sections=list(set([field.category for field in form_fields]))
+                    )
+                    
+                    # Store in session state
+                    st.session_state.form_config = form_config
+                    st.session_state.processing_options = {
+                        'generate_questionnaire': generate_questionnaire,
+                        'generate_typescript': generate_typescript,
+                        'update_mappers': update_mappers
+                    }
+        else:
+            # File upload
+            uploaded_file = st.file_uploader(
+                "Choose a PDF file",
+                type=['pdf'],
+                help="Upload the USCIS form PDF file"
+            )
+            
+            if uploaded_file:
+                # Form name input
+                form_name = st.text_input(
+                    "Form Name",
+                    value=uploaded_file.name.split('.')[0],
+                    help="Enter the form name (e.g., I129, G28, etc.)"
+                )
+                
+                # PDF name input
+                pdf_name = st.text_input(
+                    "PDF Display Name",
+                    value=form_name.upper(),
+                    help="Enter the display name for the PDF"
+                )
+                
+                if st.button("🔍 Process Form", type="primary"):
+                    with st.spinner("Processing form..."):
+                        processor = USCISFormProcessor()
                         
-                        # Store in session state
-                        st.session_state.form_config = form_config
-                        st.session_state.processing_options = {
-                            'generate_questionnaire': generate_questionnaire,
-                            'generate_typescript': generate_typescript,
-                            'update_mappers': update_mappers
-                        }
-                    else:
-                        st.error("No form fields found in the PDF. Please check if the file is a fillable PDF form.")
+                        # Extract fields from PDF
+                        fields = processor.extract_pdf_fields(uploaded_file, form_type)
+                        
+                        if fields:
+                            st.success(f"Processed {len(fields)} fields from the form")
+                            
+                            # Process fields
+                            form_fields = []
+                            for field_name in fields:
+                                category = processor.categorize_field(field_name) if auto_categorize else 'questionnaire'
+                                field_type = processor.determine_field_type(field_name)
+                                mapping_path = processor.generate_mapping_path(field_name, category)
+                                
+                                form_field = FormField(
+                                    name=field_name,
+                                    field_type=field_type,
+                                    category=category,
+                                    mapping_path=mapping_path,
+                                    required=False
+                                )
+                                form_fields.append(form_field)
+                            
+                            # Create form config
+                            form_config = FormConfig(
+                                form_name=form_name,
+                                form_type=form_type,
+                                pdf_name=pdf_name,
+                                fields=form_fields,
+                                sections=list(set([field.category for field in form_fields]))
+                            )
+                            
+                            # Store in session state
+                            st.session_state.form_config = form_config
+                            st.session_state.processing_options = {
+                                'generate_questionnaire': generate_questionnaire,
+                                'generate_typescript': generate_typescript,
+                                'update_mappers': update_mappers
+                            }
+                        else:
+                            st.error("Could not process the PDF. Try demo mode or a different PDF.")
     
     with col2:
         st.header("📊 Field Analysis")
