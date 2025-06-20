@@ -1,789 +1,524 @@
 import streamlit as st
-import pandas as pd
+import PyPDF2
+import pdfplumber
 import json
 import re
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Tuple
+import pandas as pd
 from datetime import datetime
 import io
-from dataclasses import dataclass, asdict
+import base64
 
-# Try importing PyPDF2, with fallback options
-try:
-    import PyPDF2
-except ImportError:
-    try:
-        import pypdf as PyPDF2
-    except ImportError:
-        st.error("PDF processing library not found. Please install PyPDF2 or pypdf: pip install PyPDF2")
-        st.stop()
+# Initialize session state
+if 'form_mappings' not in st.session_state:
+    st.session_state.form_mappings = {}
+if 'questionnaire_data' not in st.session_state:
+    st.session_state.questionnaire_data = {}
 
-# Configuration classes
-@dataclass
-class FormField:
-    name: str
-    field_type: str
-    category: str
-    mapping_path: str
-    required: bool = False
-    validation: Optional[str] = None
-
-@dataclass
-class FormConfig:
-    form_name: str
-    form_type: str
-    pdf_name: str
-    fields: List[FormField]
-    sections: List[str]
+# Known form mappings structure based on provided examples
+KNOWN_FORM_STRUCTURES = {
+    "I-90": {
+        "beneficiaryData": ["beneficiaryLastName", "beneficiaryFirstName", "beneficiaryMiddleName", 
+                           "beneficiaryDateOfBirth", "alienNumber", "beneficiaryGender", "beneficiarySsn"],
+        "customerData": [],
+        "attorneyData": ["lastName", "firstName", "lawFirmName", "workPhone", "emailAddress", 
+                        "stateBarNumber"],
+        "questionnaireData": [],
+        "defaultData": [],
+        "conditionalData": []
+    },
+    "I-129": {
+        "customerData": ["customer_name", "signatory_first_name", "signatory_last_name", 
+                        "address_street", "address_city", "address_state", "address_zip", 
+                        "customer_tax_id"],
+        "beneficiaryData": ["beneficiaryLastName", "beneficiaryFirstName", "beneficiaryMiddleName",
+                           "beneficiaryDateOfBirth", "beneficiaryGender", "alienNumber", "beneficiarySsn"],
+        "attorneyData": ["lastName", "firstName", "lawFirmName", "workPhone", "emailAddress"],
+        "questionnaireData": [],
+        "caseData": ["caseType", "caseSubType"],
+        "defaultData": [],
+        "conditionalData": []
+    },
+    "G-28": {
+        "attorneyData": ["lastName", "firstName", "middleName", "lawFirmName", "addressStreet",
+                        "addressCity", "addressState", "addressZip", "workPhone", "emailAddress",
+                        "stateBarNumber", "licensingAuthority"],
+        "clientData": ["familyName", "givenName", "middleName", "alienNumber", "uscisAccountNumber"],
+        "defaultData": [],
+        "conditionalData": []
+    }
+}
 
 class USCISFormProcessor:
     def __init__(self):
-        self.known_patterns = {
-            'name': ['name', 'first', 'last', 'middle', 'family', 'given'],
-            'address': ['address', 'street', 'city', 'state', 'zip', 'country'],
-            'date': ['date', 'birth', 'expiry', 'arrival', 'departure'],
-            'phone': ['phone', 'telephone', 'mobile', 'cell'],
-            'email': ['email', 'mail'],
-            'number': ['number', 'receipt', 'alien', 'ssn', 'passport'],
-            'checkbox': ['yes', 'no', 'check', 'select'],
-            'signature': ['signature', 'sign'],
+        self.extracted_fields = {}
+        self.form_type = None
+        self.missing_fields = []
+        
+    def detect_form_type(self, text: str) -> str:
+        """Detect the type of USCIS form from extracted text"""
+        form_patterns = {
+            "I-90": r"Form I-90.*Application to Replace",
+            "I-129": r"Form I-129.*Petition for.*Nonimmigrant Worker",
+            "I-140": r"Form I-140.*Immigrant Petition",
+            "I-485": r"Form I-485.*Application to Register",
+            "I-539": r"Form I-539.*Application to Extend",
+            "I-765": r"Form I-765.*Application for Employment",
+            "G-28": r"Form G-28.*Notice of Entry.*Appearance",
+            "I-130": r"Form I-130.*Petition for Alien Relative",
+            "I-131": r"Form I-131.*Application for Travel Document",
+            "I-864": r"Form I-864.*Affidavit of Support"
         }
         
-        self.category_mappings = {
-            'customer': ['petitioner', 'employer', 'company', 'organization'],
-            'beneficiary': ['beneficiary', 'applicant', 'worker', 'employee'],
-            'attorney': ['attorney', 'lawyer', 'representative', 'preparer'],
-            'case': ['case', 'petition', 'application', 'classification'],
-            'questionnaire': ['part', 'section', 'question', 'item']
+        for form_type, pattern in form_patterns.items():
+            if re.search(pattern, text, re.IGNORECASE):
+                return form_type
+                
+        # Try to detect from common keywords
+        upper_text = text.upper()
+        if "H CLASSIFICATION" in upper_text:
+            return "I-129H"
+        elif "ADVANCE PAROLE" in upper_text:
+            return "I-131"
+            
+        return "Unknown"
+    
+    def extract_form_fields(self, pdf_file) -> Dict[str, Any]:
+        """Extract form fields from PDF using multiple methods"""
+        fields = {}
+        text_content = ""
+        
+        # Method 1: Try to extract form fields using PyPDF2
+        try:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            # Extract text content
+            for page in pdf_reader.pages:
+                text_content += page.extract_text()
+            
+            # Extract form fields if available
+            if '/AcroForm' in pdf_reader.trailer['/Root']:
+                form_fields = pdf_reader.get_fields()
+                if form_fields:
+                    for field_name, field_data in form_fields.items():
+                        field_value = field_data.get('/V', '')
+                        if field_value:
+                            fields[field_name] = field_value
+        except Exception as e:
+            st.warning(f"PyPDF2 extraction warning: {str(e)}")
+        
+        # Method 2: Use pdfplumber for better text extraction
+        try:
+            pdf_file.seek(0)  # Reset file pointer
+            with pdfplumber.open(pdf_file) as pdf:
+                for page in pdf.pages:
+                    # Extract tables if present
+                    tables = page.extract_tables()
+                    for table in tables:
+                        for row in table:
+                            if row and len(row) >= 2:
+                                # Simple heuristic: first column might be field name
+                                if row[0] and row[1]:
+                                    fields[self.clean_field_name(str(row[0]))] = str(row[1])
+                    
+                    # Extract text for form type detection
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content += page_text
+        except Exception as e:
+            st.warning(f"pdfplumber extraction warning: {str(e)}")
+        
+        # Detect form type
+        self.form_type = self.detect_form_type(text_content)
+        
+        # Extract common fields using regex patterns
+        common_patterns = {
+            "lastName": r"(?:Family Name|Last Name)[:\s]*([A-Za-z\s]+)",
+            "firstName": r"(?:Given Name|First Name)[:\s]*([A-Za-z\s]+)",
+            "middleName": r"(?:Middle Name)[:\s]*([A-Za-z\s]+)",
+            "dateOfBirth": r"(?:Date of Birth)[:\s]*(\d{1,2}/\d{1,2}/\d{4})",
+            "alienNumber": r"(?:A-Number|Alien Number)[:\s]*([A]\d{8,9})",
+            "ssn": r"(?:Social Security Number|SSN)[:\s]*(\d{3}-\d{2}-\d{4})",
+            "phoneNumber": r"(?:Phone Number|Telephone)[:\s]*(\d{3}-\d{3}-\d{4})",
+            "email": r"(?:Email Address)[:\s]*([\w\.-]+@[\w\.-]+)",
+            "addressStreet": r"(?:Street Address|Street Number and Name)[:\s]*([^\n]+)",
+            "city": r"(?:City)[:\s]*([A-Za-z\s]+)",
+            "state": r"(?:State)[:\s]*([A-Z]{2})",
+            "zipCode": r"(?:ZIP Code|Postal Code)[:\s]*(\d{5}(?:-\d{4})?)"
         }
-
-        # Sample field templates for different USCIS forms
-        self.form_templates = {
-            'I-129': [
-                'petitioner_last_name', 'petitioner_first_name', 'petitioner_middle_name',
-                'petitioner_company_name', 'petitioner_address', 'petitioner_city', 
-                'petitioner_state', 'petitioner_zip', 'petitioner_phone', 'petitioner_email',
-                'beneficiary_last_name', 'beneficiary_first_name', 'beneficiary_middle_name',
-                'beneficiary_date_of_birth', 'beneficiary_country_of_birth', 'beneficiary_passport_number',
-                'classification_sought', 'requested_action', 'start_date', 'end_date',
-                'attorney_last_name', 'attorney_first_name', 'attorney_firm_name',
-                'attorney_phone', 'attorney_email', 'attorney_bar_number',
-                'part_1_question_a', 'part_2_item_1', 'signature_date'
+        
+        for field_name, pattern in common_patterns.items():
+            match = re.search(pattern, text_content, re.IGNORECASE)
+            if match:
+                fields[field_name] = match.group(1).strip()
+        
+        self.extracted_fields = fields
+        return {
+            "form_type": self.form_type,
+            "fields": fields,
+            "text_content": text_content[:1000]  # First 1000 chars for preview
+        }
+    
+    def clean_field_name(self, field_name: str) -> str:
+        """Clean and standardize field names"""
+        # Remove special characters and normalize
+        cleaned = re.sub(r'[^\w\s]', '', field_name)
+        cleaned = re.sub(r'\s+', '_', cleaned.strip())
+        return cleaned.lower()
+    
+    def map_to_database_structure(self, extracted_fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Map extracted fields to database structure"""
+        form_structure = KNOWN_FORM_STRUCTURES.get(self.form_type, {})
+        mapped_data = {
+            "formname": self.form_type.lower().replace("-", ""),
+            "pdfName": self.form_type,
+            "customerData": {},
+            "beneficiaryData": {},
+            "attorneyData": {},
+            "questionnaireData": {},
+            "caseData": {},
+            "defaultData": {},
+            "conditionalData": {}
+        }
+        
+        # Map fields based on common patterns
+        field_mapping_rules = {
+            "customerData": ["customer", "petitioner", "employer", "company"],
+            "beneficiaryData": ["beneficiary", "applicant", "alien", "worker"],
+            "attorneyData": ["attorney", "representative", "lawyer"],
+            "caseData": ["case", "petition", "application"]
+        }
+        
+        for field_name, field_value in extracted_fields.items():
+            mapped = False
+            lower_field = field_name.lower()
+            
+            # Try to map based on field name patterns
+            for data_type, patterns in field_mapping_rules.items():
+                for pattern in patterns:
+                    if pattern in lower_field:
+                        mapped_data[data_type][field_name] = field_value
+                        mapped = True
+                        break
+                if mapped:
+                    break
+            
+            # If not mapped, add to questionnaire data
+            if not mapped:
+                mapped_data["questionnaireData"][field_name] = field_value
+        
+        return mapped_data
+    
+    def identify_missing_fields(self, mapped_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Identify fields that need to be collected via questionnaire"""
+        missing_fields = []
+        
+        # Get expected structure for this form type
+        expected_structure = KNOWN_FORM_STRUCTURES.get(self.form_type, {})
+        
+        # Check each data category
+        for category, expected_fields in expected_structure.items():
+            if category in mapped_data:
+                extracted_field_names = set(mapped_data[category].keys())
+                
+                for expected_field in expected_fields:
+                    if expected_field not in extracted_field_names:
+                        missing_fields.append({
+                            "category": category,
+                            "fieldName": expected_field,
+                            "fieldType": self.determine_field_type(expected_field),
+                            "required": True,
+                            "label": self.generate_field_label(expected_field)
+                        })
+        
+        self.missing_fields = missing_fields
+        return missing_fields
+    
+    def determine_field_type(self, field_name: str) -> str:
+        """Determine the appropriate field type based on field name"""
+        lower_field = field_name.lower()
+        
+        if any(date_word in lower_field for date_word in ["date", "dob", "birth"]):
+            return "date"
+        elif any(num_word in lower_field for num_word in ["number", "phone", "ssn", "zip", "ein"]):
+            return "text"  # Will add pattern validation
+        elif any(email_word in lower_field for email_word in ["email", "mail"]):
+            return "email"
+        elif any(check_word in lower_field for check_word in ["is", "has", "yes", "no"]):
+            return "checkbox"
+        elif any(select_word in lower_field for select_word in ["type", "status", "state"]):
+            return "select"
+        else:
+            return "text"
+    
+    def generate_field_label(self, field_name: str) -> str:
+        """Generate human-readable label from field name"""
+        # Convert camelCase to Title Case
+        label = re.sub(r'([A-Z])', r' \1', field_name)
+        label = label.strip().title()
+        
+        # Replace common abbreviations
+        replacements = {
+            "Ssn": "SSN",
+            "Ein": "EIN",
+            "Dob": "Date of Birth",
+            "Id": "ID"
+        }
+        
+        for old, new in replacements.items():
+            label = label.replace(old, new)
+            
+        return label
+    
+    def generate_questionnaire_json(self, missing_fields: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Generate questionnaire JSON for missing fields"""
+        questionnaire = {
+            "formType": self.form_type,
+            "version": "1.0",
+            "createdAt": datetime.now().isoformat(),
+            "sections": {}
+        }
+        
+        # Group fields by category
+        for field in missing_fields:
+            category = field["category"]
+            if category not in questionnaire["sections"]:
+                questionnaire["sections"][category] = {
+                    "title": category.replace("Data", " Information").title(),
+                    "fields": []
+                }
+            
+            field_def = {
+                "id": field["fieldName"],
+                "label": field["label"],
+                "type": field["fieldType"],
+                "required": field["required"],
+                "validation": self.get_field_validation(field["fieldName"], field["fieldType"])
+            }
+            
+            # Add options for select fields
+            if field["fieldType"] == "select":
+                field_def["options"] = self.get_field_options(field["fieldName"])
+            
+            questionnaire["sections"][category]["fields"].append(field_def)
+        
+        return questionnaire
+    
+    def get_field_validation(self, field_name: str, field_type: str) -> Dict[str, Any]:
+        """Get validation rules for specific fields"""
+        validations = {
+            "ssn": {"pattern": r"^\d{3}-\d{2}-\d{4}$", "message": "Format: XXX-XX-XXXX"},
+            "phone": {"pattern": r"^\d{3}-\d{3}-\d{4}$", "message": "Format: XXX-XXX-XXXX"},
+            "zip": {"pattern": r"^\d{5}(-\d{4})?$", "message": "Format: XXXXX or XXXXX-XXXX"},
+            "alienNumber": {"pattern": r"^A\d{8,9}$", "message": "Format: A followed by 8-9 digits"},
+            "email": {"pattern": r"^[\w\.-]+@[\w\.-]+\.\w+$", "message": "Valid email required"}
+        }
+        
+        for key, validation in validations.items():
+            if key in field_name.lower():
+                return validation
+                
+        return {}
+    
+    def get_field_options(self, field_name: str) -> List[Dict[str, str]]:
+        """Get options for select fields"""
+        options_map = {
+            "state": [{"value": state, "label": state} for state in 
+                     ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", 
+                      "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+                      "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+                      "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+                      "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"]],
+            "gender": [
+                {"value": "M", "label": "Male"},
+                {"value": "F", "label": "Female"},
+                {"value": "O", "label": "Other"}
             ],
-            'I-140': [
-                'petitioner_name', 'petitioner_address', 'petitioner_city', 'petitioner_state',
-                'petitioner_zip', 'petitioner_tax_id', 'petitioner_phone',
-                'beneficiary_last_name', 'beneficiary_first_name', 'beneficiary_middle_name',
-                'beneficiary_date_of_birth', 'beneficiary_country_of_birth', 'beneficiary_alien_number',
-                'priority_date', 'classification_requested', 'job_title', 'salary',
-                'attorney_name', 'attorney_firm', 'attorney_phone', 'attorney_email'
-            ],
-            'I-485': [
-                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
-                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
-                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
-                'applicant_country_of_birth', 'applicant_alien_number', 'applicant_ssn',
-                'current_status', 'basis_for_adjustment', 'priority_date',
-                'attorney_last_name', 'attorney_first_name', 'attorney_firm_name'
-            ],
-            'G-28': [
-                'attorney_last_name', 'attorney_first_name', 'attorney_middle_name',
-                'attorney_firm_name', 'attorney_address', 'attorney_city', 'attorney_state',
-                'attorney_zip', 'attorney_phone', 'attorney_email', 'attorney_bar_number',
-                'client_last_name', 'client_first_name', 'client_middle_name',
-                'client_address', 'client_phone', 'receipt_number', 'form_number'
-            ],
-            'I-765': [
-                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
-                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
-                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
-                'applicant_ssn', 'applicant_alien_number', 'eligibility_category',
-                'employer_name', 'employer_address', 'requested_validity_period'
-            ],
-            'Custom': [
-                'applicant_last_name', 'applicant_first_name', 'applicant_middle_name',
-                'applicant_address', 'applicant_city', 'applicant_state', 'applicant_zip',
-                'applicant_phone', 'applicant_email', 'applicant_date_of_birth',
-                'petitioner_name', 'petitioner_address', 'attorney_name', 'attorney_phone',
-                'case_type', 'receipt_number', 'part_1_question_a', 'part_2_item_1'
+            "maritalStatus": [
+                {"value": "single", "label": "Single"},
+                {"value": "married", "label": "Married"},
+                {"value": "divorced", "label": "Divorced"},
+                {"value": "widowed", "label": "Widowed"}
             ]
         }
-
-    def extract_pdf_fields(self, pdf_file, form_type: str = 'Custom') -> List[str]:
-        """Extract form fields from PDF or use template"""
-        try:
-            # Reset file pointer
-            pdf_file.seek(0)
-            
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
-            fields = []
-            
-            # Try multiple methods to extract fields
-            methods_tried = []
-            
-            # Method 1: AcroForm fields
-            try:
-                if hasattr(pdf_reader, 'trailer') and "/Root" in pdf_reader.trailer:
-                    root = pdf_reader.trailer["/Root"]
-                    if "/AcroForm" in root:
-                        acro_form = root["/AcroForm"]
-                        if "/Fields" in acro_form:
-                            for field in acro_form["/Fields"]:
-                                field_obj = field.get_object()
-                                if "/T" in field_obj:
-                                    field_name = field_obj["/T"]
-                                    fields.append(str(field_name))
-                methods_tried.append("AcroForm")
-            except Exception as e:
-                methods_tried.append(f"AcroForm (failed: {str(e)[:50]})")
-            
-            # Method 2: Page annotations
-            if not fields:
-                try:
-                    for page_num, page in enumerate(pdf_reader.pages):
-                        if "/Annots" in page:
-                            for annot in page["/Annots"]:
-                                annot_obj = annot.get_object()
-                                if "/T" in annot_obj:
-                                    field_name = annot_obj["/T"]
-                                    fields.append(str(field_name))
-                    methods_tried.append("Annotations")
-                except Exception as e:
-                    methods_tried.append(f"Annotations (failed: {str(e)[:50]})")
-            
-            # Method 3: Try to find form-like text patterns
-            if not fields:
-                try:
-                    text_fields = []
-                    for page in pdf_reader.pages:
-                        text = page.extract_text()
-                        # Look for common form patterns
-                        patterns = [
-                            r'Part\s+\d+[.,]\s*([^:\n]+)',
-                            r'(\d+\.\s*[a-zA-Z][^:\n]+)',
-                            r'([A-Z][a-z]+\s+Name[:\s]*)',
-                            r'([A-Z][a-z]+\s+Address[:\s]*)',
-                        ]
-                        for pattern in patterns:
-                            matches = re.findall(pattern, text)
-                            text_fields.extend(matches)
-                    
-                    if text_fields:
-                        fields = [f.strip().replace(':', '').replace('.', '_') for f in text_fields[:20]]
-                    methods_tried.append("Text Pattern")
-                except Exception as e:
-                    methods_tried.append(f"Text Pattern (failed: {str(e)[:50]})")
-            
-            # Clean up fields
-            if fields:
-                fields = list(set(fields))
-                fields = [f for f in fields if f and f.strip() and len(f.strip()) > 1]
+        
+        for key, options in options_map.items():
+            if key.lower() in field_name.lower():
+                return options
                 
-                if fields:
-                    st.info(f"✅ Successfully extracted {len(fields)} fields using: {methods_tried[-1]}")
-                    return fields
-            
-            # Fallback: Use template based on form type
-            st.warning(f"No fillable fields found. Methods tried: {', '.join(methods_tried)}")
-            st.info(f"🎯 Using template fields for {form_type} form type")
-            
-            return self.form_templates.get(form_type, self.form_templates['Custom'])
-            
-        except Exception as e:
-            st.warning(f"PDF processing error: {str(e)}")
-            st.info(f"🎯 Using template fields for {form_type} form type")
-            return self.form_templates.get(form_type, self.form_templates['Custom'])
-
-    def categorize_field(self, field_name: str) -> str:
-        """Categorize field based on name patterns"""
-        field_lower = field_name.lower()
+        return []
+    
+    def generate_typescript_file(self, mapped_data: Dict[str, Any], 
+                               questionnaire: Dict[str, Any]) -> str:
+        """Generate TypeScript file for the form"""
+        ts_content = f"""export const {self.form_type.replace('-', '')} = {{
+    "formname": "{mapped_data['formname']}",
+    "pdfName": "{mapped_data['pdfName']}",
+"""
         
-        for category, keywords in self.category_mappings.items():
-            if any(keyword in field_lower for keyword in keywords):
-                return category
-        
-        return 'questionnaire'
-
-    def determine_field_type(self, field_name: str) -> str:
-        """Determine field type based on name patterns"""
-        field_lower = field_name.lower()
-        
-        if any(pattern in field_lower for pattern in self.known_patterns['date']):
-            return 'date'
-        elif any(pattern in field_lower for pattern in self.known_patterns['phone']):
-            return 'text'
-        elif any(pattern in field_lower for pattern in self.known_patterns['email']):
-            return 'text'
-        elif any(pattern in field_lower for pattern in ['yes', 'no', 'check', 'select', 'box']):
-            return 'checkbox'
-        elif 'signature' in field_lower:
-            return 'signature'
-        elif any(pattern in field_lower for pattern in ['dropdown', 'select', 'option']):
-            return 'dropdown'
-        else:
-            return 'text'
-
-    def generate_mapping_path(self, field_name: str, category: str) -> str:
-        """Generate mapping path for the field"""
-        field_lower = field_name.lower()
-        
-        if category == 'customer':
-            if 'name' in field_lower:
-                if 'first' in field_lower:
-                    return 'customer.signatory_first_name'
-                elif 'last' in field_lower:
-                    return 'customer.signatory_last_name'
-                elif 'company' in field_lower:
-                    return 'customer.customer_name'
-                else:
-                    return 'customer.customer_name'
-            elif 'address' in field_lower:
-                if 'street' in field_lower:
-                    return 'customer.address_street'
-                elif 'city' in field_lower:
-                    return 'customer.address_city'
-                elif 'state' in field_lower:
-                    return 'customer.address_state'
-                elif 'zip' in field_lower:
-                    return 'customer.address_zip'
-                else:
-                    return 'customer.address_street'
-            elif 'phone' in field_lower:
-                return 'customer.signatory_work_phone'
-            elif 'email' in field_lower:
-                return 'customer.signatory_email_id'
-            elif 'tax' in field_lower or 'ein' in field_lower:
-                return 'customer.customer_tax_id'
+        # Add data sections
+        for section in ["customerData", "beneficiaryData", "attorneyData", 
+                       "questionnaireData", "caseData", "defaultData", "conditionalData"]:
+            if section in mapped_data and mapped_data[section]:
+                ts_content += f'    "{section}": {{\n'
+                for field_name, field_value in mapped_data[section].items():
+                    # Generate mapping string
+                    mapping = self.generate_field_mapping(section, field_name)
+                    ts_content += f'        "{field_name}": "{mapping}",\n'
+                ts_content = ts_content.rstrip(',\n') + '\n'
+                ts_content += '    },\n'
             else:
-                return f'customer.{field_name.lower().replace(" ", "_")}'
-                
-        elif category == 'beneficiary':
-            if 'name' in field_lower:
-                if 'first' in field_lower:
-                    return 'beneficary.Beneficiary.beneficiaryFirstName'
-                elif 'last' in field_lower:
-                    return 'beneficary.Beneficiary.beneficiaryLastName'
-                elif 'middle' in field_lower:
-                    return 'beneficary.Beneficiary.beneficiaryMiddleName'
-                else:
-                    return 'beneficary.Beneficiary.beneficiaryFirstName'
-            elif 'birth' in field_lower:
-                return 'beneficary.Beneficiary.beneficiaryDateOfBirth'
-            elif 'alien' in field_lower:
-                return 'beneficary.Beneficiary.alienNumber'
-            elif 'ssn' in field_lower:
-                return 'beneficary.Beneficiary.beneficiarySsn'
-            else:
-                return f'beneficary.Beneficiary.{field_name.lower().replace(" ", "_")}'
-                
-        elif category == 'attorney':
-            if 'name' in field_lower:
-                if 'first' in field_lower:
-                    return 'attorney.attorneyInfo.firstName'
-                elif 'last' in field_lower:
-                    return 'attorney.attorneyInfo.lastName'
-                elif 'firm' in field_lower:
-                    return 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName'
-                else:
-                    return 'attorney.attorneyInfo.lastName'
-            elif 'phone' in field_lower:
-                return 'attorney.attorneyInfo.workPhone'
-            elif 'email' in field_lower:
-                return 'attorney.attorneyInfo.emailAddress'
-            elif 'bar' in field_lower:
-                return 'attorney.attorneyInfo.stateBarNumber'
-            else:
-                return f'attorney.attorneyInfo.{field_name.lower().replace(" ", "_")}'
-                
+                ts_content += f'    "{section}": {{}},\n'
+        
+        ts_content = ts_content.rstrip(',\n') + '\n}'
+        
+        # Add questionnaire fields as comments
+        if questionnaire and questionnaire.get("sections"):
+            ts_content += "\n\n// Questionnaire fields for missing data:\n"
+            for section, section_data in questionnaire["sections"].items():
+                ts_content += f"// {section}:\n"
+                for field in section_data["fields"]:
+                    ts_content += f"//   - {field['id']}: {field['type']} ({field['label']})\n"
+        
+        return ts_content
+    
+    def generate_field_mapping(self, section: str, field_name: str) -> str:
+        """Generate field mapping string based on section and field name"""
+        # Common mapping patterns
+        if section == "customerData":
+            return f"customer.{field_name}:TextBox"
+        elif section == "beneficiaryData":
+            return f"beneficiary.Beneficiary.{field_name}:TextBox"
+        elif section == "attorneyData":
+            return f"attorney.attorneyInfo.{field_name}:TextBox"
+        elif section == "caseData":
+            return f"case.{field_name}:TextBox"
         else:
-            return f'{field_name.replace(" ", "_")}:{self.determine_field_type(field_name).title()}Box'
-
-def generate_typescript_config(form_config: FormConfig) -> str:
-    """Generate TypeScript configuration file"""
-    customer_data = {}
-    beneficiary_data = {}
-    attorney_data = {}
-    questionnaire_data = {}
-    
-    for field in form_config.fields:
-        # Clean up the mapping path
-        if ':' in field.mapping_path:
-            mapping = f'"{field.mapping_path}"'
-        else:
-            mapping = f'"{field.mapping_path}:{field.field_type.title()}Box"'
-        
-        if field.category == 'customer':
-            customer_data[field.name] = mapping
-        elif field.category == 'beneficiary':
-            beneficiary_data[field.name] = mapping
-        elif field.category == 'attorney':
-            attorney_data[field.name] = mapping
-        else:
-            questionnaire_data[field.name] = mapping
-    
-    ts_config = f'''export const {form_config.form_name.upper()} = {{
-    "formname": "{form_config.form_name.lower()}",
-    "pdfName": "{form_config.pdf_name}",
-    "customerData": {{
-        {',\n        '.join([f'"{k}": {v}' for k, v in customer_data.items()])}
-    }},
-    "beneficiaryData": {{
-        {',\n        '.join([f'"{k}": {v}' for k, v in beneficiary_data.items()])}
-    }},
-    "questionnaireData": {{
-        {',\n        '.join([f'"{k}": {v}' for k, v in questionnaire_data.items()])}
-    }},
-    "defaultData": {{
-        // Add default values here
-    }},
-    "conditionalData": {{
-        // Add conditional logic here
-    }},
-    "attorneyData": {{
-        {',\n        '.join([f'"{k}": {v}' for k, v in attorney_data.items()])}
-    }},
-    "caseData": {{
-        // Add case-specific data here
-    }}
-}}'''
-    
-    return ts_config
-
-def generate_questionnaire_json(form_config: FormConfig) -> Dict[str, Any]:
-    """Generate questionnaire JSON configuration"""
-    controls = []
-    
-    # Group fields by category
-    categories = {}
-    for field in form_config.fields:
-        if field.category not in categories:
-            categories[field.category] = []
-        categories[field.category].append(field)
-    
-    # Create controls for each category
-    for category, fields in categories.items():
-        if category == 'questionnaire':
-            continue
-            
-        section_controls = []
-        for field in fields:
-            control = {
-                "name": field.name,
-                "label": field.name.replace('_', ' ').title(),
-                "type": field.field_type,
-                "validators": {
-                    "required": field.required
-                },
-                "style": {
-                    "col": "6" if field.field_type != "textarea" else "12"
-                }
-            }
-            
-            if field.field_type == "dropdown":
-                control["options"] = []
-                control["lookup"] = "Custom"
-            elif field.field_type == "date":
-                control["validators"]["pattern"] = "date"
-            elif field.field_type == "checkbox":
-                control["defaultValue"] = False
-            
-            section_controls.append(control)
-        
-        if section_controls:
-            controls.append({
-                "group_name": f"{category.title()} Information",
-                "group_key": f"{category}_info",
-                "group_definition": section_controls
-            })
-    
-    # Add questionnaire fields if any
-    questionnaire_fields = [f for f in form_config.fields if f.category == 'questionnaire']
-    if questionnaire_fields:
-        section_controls = []
-        for field in questionnaire_fields:
-            control = {
-                "name": field.name,
-                "label": field.name.replace('_', ' ').title(),
-                "type": field.field_type,
-                "validators": {
-                    "required": field.required
-                },
-                "style": {
-                    "col": "6" if field.field_type != "textarea" else "12"
-                }
-            }
-            
-            if field.field_type == "dropdown":
-                control["options"] = []
-                control["lookup"] = "Custom"
-            elif field.field_type == "date":
-                control["validators"]["pattern"] = "date"
-            elif field.field_type == "checkbox":
-                control["defaultValue"] = False
-            
-            section_controls.append(control)
-        
-        controls.append({
-            "group_name": f"{form_config.form_name.upper()} Details",
-            "group_key": f"{form_config.form_name.lower()}_details",
-            "group_definition": section_controls
-        })
-    
-    return {"controls": controls}
-
-def update_pdf_mapper(form_name: str, fields: List[FormField]) -> str:
-    """Generate PDF mapper configuration"""
-    mapper_fields = []
-    
-    for field in fields:
-        # Clean up mapping path for PDF mapper
-        mapping_path = field.mapping_path
-        if ':' in mapping_path:
-            mapping_path = mapping_path.split(':')[0]
-        
-        mapper_field = {
-            "Name": field.name,
-            "Value": mapping_path,
-            "Type": field.field_type.title() + "Box"
-        }
-        mapper_fields.append(mapper_field)
-    
-    mapper_config = f'''public static {form_name.upper()}: any = [
-    {',\n    '.join([f'{{\n        Name: "{field["Name"]}",\n        Value: "{field["Value"]}",\n        Type: "{field["Type"]}"\n    }}' for field in mapper_fields])}
-];'''
-    
-    return mapper_config
+            return f"{field_name}:TextBox"
 
 # Streamlit UI
 def main():
-    st.set_page_config(
-        page_title="USCIS Form Configuration Generator",
-        page_icon="📄",
-        layout="wide"
-    )
+    st.set_page_config(page_title="USCIS Form Processor", layout="wide")
     
-    st.title("🏛️ USCIS Form Configuration Generator")
-    st.markdown("Upload a USCIS form and automatically generate configuration files")
+    st.title("USCIS Form Processor")
+    st.markdown("Upload USCIS forms to extract data, map to database, and generate questionnaires")
     
-    # Info about PDF types
-    with st.expander("ℹ️ About PDF Types and Templates"):
-        st.markdown("""
-        **Most USCIS PDFs are NOT fillable forms** - they're regular PDFs for printing and manual completion.
-        
-        This tool works in two modes:
-        - **📝 Fillable PDFs**: Extracts actual form fields if available
-        - **📋 Template Mode**: Uses predefined field templates based on form type
-        
-        **Available Templates:**
-        - **I-129**: H-1B, L-1, O-1 petitions
-        - **I-140**: Immigrant Worker petitions  
-        - **I-485**: Adjustment of Status applications
-        - **G-28**: Notice of Entry of Appearance
-        - **I-765**: Employment Authorization Document
-        - **Custom**: Generic template for other forms
-        """)
+    # File upload
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     
-    # Sidebar for configuration
-    with st.sidebar:
-        st.header("⚙️ Configuration")
+    if uploaded_file is not None:
+        processor = USCISFormProcessor()
         
-        # Form type selection
-        form_type = st.selectbox(
-            "Form Type",
-            ["I-129", "I-140", "I-485", "G-28", "I-765", "I-539", "Custom"],
-            help="Select the type of USCIS form - this determines the field template if no fillable fields are found"
-        )
+        # Create columns for layout
+        col1, col2 = st.columns([1, 1])
         
-        # Processing options
-        st.subheader("Processing Options")
-        auto_categorize = st.checkbox("Auto-categorize fields", value=True)
-        generate_questionnaire = st.checkbox("Generate questionnaire JSON", value=True)
-        generate_typescript = st.checkbox("Generate TypeScript config", value=True)
-        update_mappers = st.checkbox("Update PDF mappers", value=True)
-        
-        # Demo mode option
-        st.subheader("Demo Mode")
-        demo_mode = st.checkbox("Use demo mode (skip PDF upload)", value=False, 
-                               help="Generate configurations using template fields without uploading a PDF")
-    
-    # Main content area
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.header("📤 Upload Form")
-        
-        if demo_mode:
-            st.info("🎯 Demo mode: Using template fields for selected form type")
-            uploaded_file = None
+        with col1:
+            st.subheader("Form Analysis")
             
-            # Form name input for demo
-            form_name = st.text_input(
-                "Form Name",
-                value=form_type.replace("-", ""),
-                help="Enter the form name (e.g., I129, G28, etc.)"
-            )
+            # Extract form fields
+            with st.spinner("Extracting form fields..."):
+                extraction_result = processor.extract_form_fields(uploaded_file)
             
-            # PDF name input for demo
-            pdf_name = st.text_input(
-                "PDF Display Name",
-                value=form_type,
-                help="Enter the display name for the PDF"
-            )
+            st.success(f"Form Type Detected: **{extraction_result['form_type']}**")
             
-            if st.button("🎯 Generate from Template", type="primary"):
-                with st.spinner("Generating from template..."):
-                    processor = USCISFormProcessor()
-                    
-                    # Use template fields
-                    fields = processor.form_templates.get(form_type, processor.form_templates['Custom'])
-                    
-                    st.success(f"Generated {len(fields)} template fields for {form_type}")
-                    
-                    # Process fields
-                    form_fields = []
-                    for field_name in fields:
-                        category = processor.categorize_field(field_name) if auto_categorize else 'questionnaire'
-                        field_type = processor.determine_field_type(field_name)
-                        mapping_path = processor.generate_mapping_path(field_name, category)
-                        
-                        form_field = FormField(
-                            name=field_name,
-                            field_type=field_type,
-                            category=category,
-                            mapping_path=mapping_path,
-                            required=False
-                        )
-                        form_fields.append(form_field)
-                    
-                    # Create form config
-                    form_config = FormConfig(
-                        form_name=form_name,
-                        form_type=form_type,
-                        pdf_name=pdf_name,
-                        fields=form_fields,
-                        sections=list(set([field.category for field in form_fields]))
-                    )
-                    
-                    # Store in session state
-                    st.session_state.form_config = form_config
-                    st.session_state.processing_options = {
-                        'generate_questionnaire': generate_questionnaire,
-                        'generate_typescript': generate_typescript,
-                        'update_mappers': update_mappers
-                    }
-        else:
-            # File upload
-            uploaded_file = st.file_uploader(
-                "Choose a PDF file",
-                type=['pdf'],
-                help="Upload the USCIS form PDF file"
-            )
-            
-            if uploaded_file:
-                # Form name input
-                form_name = st.text_input(
-                    "Form Name",
-                    value=uploaded_file.name.split('.')[0],
-                    help="Enter the form name (e.g., I129, G28, etc.)"
+            # Display extracted fields
+            st.write("### Extracted Fields")
+            if extraction_result['fields']:
+                df_fields = pd.DataFrame(
+                    [(k, v) for k, v in extraction_result['fields'].items()],
+                    columns=['Field Name', 'Value']
                 )
-                
-                # PDF name input
-                pdf_name = st.text_input(
-                    "PDF Display Name",
-                    value=form_name.upper(),
-                    help="Enter the display name for the PDF"
+                st.dataframe(df_fields, use_container_width=True)
+            else:
+                st.warning("No form fields could be extracted. The PDF might not contain fillable fields.")
+            
+            # Map to database structure
+            st.write("### Database Mapping")
+            mapped_data = processor.map_to_database_structure(extraction_result['fields'])
+            
+            # Display mapping summary
+            mapping_summary = {}
+            for category, data in mapped_data.items():
+                if isinstance(data, dict) and data:
+                    mapping_summary[category] = len(data)
+            
+            if mapping_summary:
+                df_summary = pd.DataFrame(
+                    [(k, v) for k, v in mapping_summary.items()],
+                    columns=['Category', 'Field Count']
                 )
+                st.dataframe(df_summary, use_container_width=True)
+        
+        with col2:
+            st.subheader("Missing Fields & Questionnaire")
+            
+            # Identify missing fields
+            missing_fields = processor.identify_missing_fields(mapped_data)
+            
+            if missing_fields:
+                st.write(f"### {len(missing_fields)} Missing Fields Identified")
                 
-                if st.button("🔍 Process Form", type="primary"):
-                    with st.spinner("Processing form..."):
-                        processor = USCISFormProcessor()
-                        
-                        # Extract fields from PDF
-                        fields = processor.extract_pdf_fields(uploaded_file, form_type)
-                        
-                        if fields:
-                            st.success(f"Processed {len(fields)} fields from the form")
-                            
-                            # Process fields
-                            form_fields = []
-                            for field_name in fields:
-                                category = processor.categorize_field(field_name) if auto_categorize else 'questionnaire'
-                                field_type = processor.determine_field_type(field_name)
-                                mapping_path = processor.generate_mapping_path(field_name, category)
-                                
-                                form_field = FormField(
-                                    name=field_name,
-                                    field_type=field_type,
-                                    category=category,
-                                    mapping_path=mapping_path,
-                                    required=False
-                                )
-                                form_fields.append(form_field)
-                            
-                            # Create form config
-                            form_config = FormConfig(
-                                form_name=form_name,
-                                form_type=form_type,
-                                pdf_name=pdf_name,
-                                fields=form_fields,
-                                sections=list(set([field.category for field in form_fields]))
-                            )
-                            
-                            # Store in session state
-                            st.session_state.form_config = form_config
-                            st.session_state.processing_options = {
-                                'generate_questionnaire': generate_questionnaire,
-                                'generate_typescript': generate_typescript,
-                                'update_mappers': update_mappers
-                            }
-                        else:
-                            st.error("Could not process the PDF. Try demo mode or a different PDF.")
+                # Display missing fields by category
+                missing_by_category = {}
+                for field in missing_fields:
+                    category = field['category']
+                    if category not in missing_by_category:
+                        missing_by_category[category] = []
+                    missing_by_category[category].append(field)
+                
+                for category, fields in missing_by_category.items():
+                    with st.expander(f"{category} ({len(fields)} fields)"):
+                        for field in fields:
+                            st.write(f"- **{field['label']}** ({field['fieldType']})")
+                
+                # Generate questionnaire
+                questionnaire = processor.generate_questionnaire_json(missing_fields)
+                
+                st.write("### Generated Questionnaire")
+                st.json(questionnaire)
+                
+                # Download questionnaire JSON
+                json_str = json.dumps(questionnaire, indent=2)
+                b64 = base64.b64encode(json_str.encode()).decode()
+                href = f'<a href="data:application/json;base64,{b64}" download="{processor.form_type}_questionnaire.json">Download Questionnaire JSON</a>'
+                st.markdown(href, unsafe_allow_html=True)
+            else:
+                st.success("All expected fields were found in the form!")
+        
+        # Generate TypeScript file
+        st.subheader("TypeScript File Generation")
+        ts_content = processor.generate_typescript_file(mapped_data, 
+                                                       questionnaire if missing_fields else {})
+        
+        # Display TypeScript content
+        with st.expander("View Generated TypeScript File"):
+            st.code(ts_content, language="typescript")
+        
+        # Download TypeScript file
+        b64_ts = base64.b64encode(ts_content.encode()).decode()
+        href_ts = f'<a href="data:text/typescript;base64,{b64_ts}" download="{processor.form_type.replace("-", "")}.ts">Download TypeScript File</a>'
+        st.markdown(href_ts, unsafe_allow_html=True)
+        
+        # Save to session state
+        st.session_state.form_mappings[processor.form_type] = mapped_data
+        if missing_fields:
+            st.session_state.questionnaire_data[processor.form_type] = questionnaire
+        
+        # Display session summary
+        st.subheader("Processing Summary")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Form Type", processor.form_type)
+        with col2:
+            st.metric("Fields Extracted", len(extraction_result['fields']))
+        with col3:
+            st.metric("Missing Fields", len(missing_fields))
     
-    with col2:
-        st.header("📊 Field Analysis")
-        
-        if 'form_config' in st.session_state:
-            form_config = st.session_state.form_config
-            
-            # Display field statistics
-            col2a, col2b = st.columns(2)
-            with col2a:
-                st.metric("Total Fields", len(form_config.fields))
-            with col2b:
-                st.metric("Categories", len(form_config.sections))
-            
-            # Category breakdown
-            category_counts = {}
-            for field in form_config.fields:
-                category_counts[field.category] = category_counts.get(field.category, 0) + 1
-            
-            st.subheader("Field Categories")
-            for category, count in category_counts.items():
-                st.write(f"**{category.title()}**: {count} fields")
-            
-            # Field editor
-            st.subheader("✏️ Edit Fields")
-            
-            # Create a DataFrame for editing
-            field_data = []
-            for i, field in enumerate(form_config.fields):
-                field_data.append({
-                    'Index': i,
-                    'Name': field.name,
-                    'Type': field.field_type,
-                    'Category': field.category,
-                    'Mapping Path': field.mapping_path,
-                    'Required': field.required
-                })
-            
-            df = pd.DataFrame(field_data)
-            
-            # Display editable dataframe
-            edited_df = st.data_editor(
-                df,
-                column_config={
-                    "Type": st.column_config.SelectboxColumn(
-                        "Field Type",
-                        options=["text", "textarea", "dropdown", "checkbox", "date", "radio", "number"],
-                        required=True,
-                    ),
-                    "Category": st.column_config.SelectboxColumn(
-                        "Category",
-                        options=["customer", "beneficiary", "attorney", "case", "questionnaire"],
-                        required=True,
-                    ),
-                    "Required": st.column_config.CheckboxColumn("Required"),
-                },
-                disabled=["Index", "Name"],
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            # Update form config with edited data
-            if not edited_df.equals(df):
-                for index, row in edited_df.iterrows():
-                    field_idx = row['Index']
-                    form_config.fields[field_idx].field_type = row['Type']
-                    form_config.fields[field_idx].category = row['Category']
-                    form_config.fields[field_idx].mapping_path = row['Mapping Path']
-                    form_config.fields[field_idx].required = row['Required']
-                
-                st.session_state.form_config = form_config
-    
-    # Generate outputs
-    if 'form_config' in st.session_state:
-        st.header("📋 Generated Configurations")
-        
-        form_config = st.session_state.form_config
-        options = st.session_state.processing_options
-        
-        tabs = st.tabs(["TypeScript Config", "Questionnaire JSON", "PDF Mapper", "Summary"])
-        
-        with tabs[0]:
-            if options['generate_typescript']:
-                st.subheader("📝 TypeScript Configuration")
-                ts_config = generate_typescript_config(form_config)
-                st.code(ts_config, language='typescript')
-                
-                st.download_button(
-                    label="📥 Download TypeScript Config",
-                    data=ts_config,
-                    file_name=f"{form_config.form_name}.ts",
-                    mime="text/typescript"
-                )
-        
-        with tabs[1]:
-            if options['generate_questionnaire']:
-                st.subheader("📋 Questionnaire JSON")
-                questionnaire_json = generate_questionnaire_json(form_config)
-                st.json(questionnaire_json)
-                
-                st.download_button(
-                    label="📥 Download Questionnaire JSON",
-                    data=json.dumps(questionnaire_json, indent=2),
-                    file_name=f"{form_config.form_name}-form.json",
-                    mime="application/json"
-                )
-        
-        with tabs[2]:
-            if options['update_mappers']:
-                st.subheader("🗺️ PDF Mapper Configuration")
-                mapper_config = update_pdf_mapper(form_config.form_name, form_config.fields)
-                st.code(mapper_config, language='typescript')
-                
-                st.download_button(
-                    label="📥 Download PDF Mapper",
-                    data=mapper_config,
-                    file_name=f"{form_config.form_name}-mapper.ts",
-                    mime="text/typescript"
-                )
-        
-        with tabs[3]:
-            st.subheader("📊 Configuration Summary")
-            
-            summary_data = {
-                "Form Name": form_config.form_name,
-                "Form Type": form_config.form_type,
-                "PDF Name": form_config.pdf_name,
-                "Total Fields": len(form_config.fields),
-                "Categories": ", ".join(form_config.sections),
-                "Generated At": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            for key, value in summary_data.items():
-                st.write(f"**{key}**: {value}")
-            
-            # Field breakdown by category
-            st.subheader("Field Breakdown")
-            category_breakdown = {}
-            for field in form_config.fields:
-                if field.category not in category_breakdown:
-                    category_breakdown[field.category] = []
-                category_breakdown[field.category].append(field.name)
-            
-            for category, fields in category_breakdown.items():
-                with st.expander(f"{category.title()} Fields ({len(fields)})"):
-                    for field in fields:
-                        st.write(f"• {field}")
+    # Show processed forms history
+    if st.session_state.form_mappings:
+        st.subheader("Processed Forms History")
+        for form_type, mapping in st.session_state.form_mappings.items():
+            st.write(f"- {form_type}")
 
 if __name__ == "__main__":
     main()
