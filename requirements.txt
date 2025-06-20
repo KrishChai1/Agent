@@ -4,3 +4,7 @@ pandas
 python-docx
 Pillow
 PyPDF2
+reportlab
+pdfplumber
+fillpdf
+pdfrw
