@@ -60,6 +60,18 @@ st.set_page_config(
 
 # Enhanced USCIS Form Database
 USCIS_FORMS_DATABASE = {
+    'G-28': {
+        'title': 'Notice of Entry of Appearance as Attorney or Accredited Representative',
+        'patterns': [r'Form\s*G-28', r'Notice.*Entry.*Appearance'],
+        'parts': OrderedDict([
+            ('Part 1', 'Information About Attorney or Accredited Representative'),
+            ('Part 2', 'Eligibility Information'),
+            ('Part 3', 'Notice of Appearance'),
+            ('Part 4', 'Client\'s Consent to Representation'),
+            ('Part 5', 'Signature of Attorney'),
+            ('Part 6', 'Additional Information')
+        ])
+    },
     'I-129': {
         'title': 'Petition for a Nonimmigrant Worker',
         'patterns': [r'Form\s*I-129', r'Petition.*Nonimmigrant.*Worker'],
@@ -151,17 +163,6 @@ USCIS_FORMS_DATABASE = {
             ('Part 9', 'Preparer\'s Information')
         ])
     },
-    'G-28': {
-        'title': 'Notice of Entry of Appearance as Attorney or Accredited Representative',
-        'patterns': [r'Form\s*G-28', r'Notice.*Entry.*Appearance'],
-        'parts': OrderedDict([
-            ('Part 1', 'Information About Attorney or Representative'),
-            ('Part 2', 'Eligibility Information'),
-            ('Part 3', 'Notice of Appearance'),
-            ('Part 4', 'Client Consent'),
-            ('Part 5', 'Signature of Attorney or Representative')
-        ])
-    },
     'LCA': {
         'title': 'Labor Condition Application (ETA Form 9035)',
         'patterns': [r'ETA.*9035', r'Labor.*Condition.*Application', r'LCA'],
@@ -180,259 +181,324 @@ USCIS_FORMS_DATABASE = {
     }
 }
 
-# Comprehensive Mapping Patterns for USCIS Forms
-USCIS_MAPPING_PATTERNS = {
-    # Company/Petitioner Information
-    'petitioner_info': {
+# Enhanced Mapping Patterns based on your document
+ENHANCED_MAPPING_PATTERNS = {
+    # Customer/Petitioner Information
+    'customer': {
         'patterns': {
-            'company_name': {
-                'regex': [r'petitioner.*name', r'company.*name', r'employer.*name', r'organization.*name', r'legal.*business.*name'],
-                'mapping': 'customer.customer_name'
+            'customer_name': {
+                'regex': [r'petitioner.*name', r'company.*name', r'employer.*name', r'legal.*business.*name', r'name.*entity'],
+                'mapping': 'customer.customer_name',
+                'type': 'TextBox'
             },
-            'tax_id': {
+            'customer_tax_id': {
                 'regex': [r'(?:fein|ein)', r'employer.*identification', r'tax.*id', r'federal.*employer.*identification'],
-                'mapping': 'customer.customer_tax_id'
+                'mapping': 'customer.customer_tax_id',
+                'type': 'TextBox'
             },
-            'address': {
-                'regex': [r'petitioner.*address', r'company.*address', r'mailing.*address', r'employer.*address'],
-                'mapping': 'customer.address_street'
+            'address_street': {
+                'regex': [r'street.*number.*name', r'address.*1', r'street', r'address'],
+                'mapping': 'customer.address_street',
+                'type': 'TextBox'
             },
-            'city': {
+            'address_type': {
+                'regex': [r'apt', r'ste', r'flr', r'address.*2'],
+                'mapping': 'customer.address_type',
+                'type': 'AddressTypeBox'
+            },
+            'address_number': {
+                'regex': [r'apt.*number', r'suite.*number', r'floor.*number'],
+                'mapping': 'customer.address_number',
+                'type': 'TextBox'
+            },
+            'address_city': {
                 'regex': [r'city', r'town'],
-                'mapping': 'customer.address_city'
+                'mapping': 'customer.address_city',
+                'type': 'TextBox'
             },
-            'state': {
+            'address_state': {
                 'regex': [r'state', r'province'],
-                'mapping': 'customer.address_state'
+                'mapping': 'customer.address_state',
+                'type': 'TextBox'
             },
-            'zip': {
+            'address_zip': {
                 'regex': [r'zip.*code', r'postal.*code'],
-                'mapping': 'customer.address_zip'
+                'mapping': 'customer.address_zip',
+                'type': 'TextBox'
             },
-            'signatory_name': {
-                'regex': [r'signatory', r'authorized.*representative', r'contact.*person', r'in.*care.*of'],
-                'mapping': 'customer.signatory_first_name + customer.signatory_last_name'
+            'address_country': {
+                'regex': [r'country'],
+                'mapping': 'customer.address_country',
+                'type': 'TextBox'
             },
-            'signatory_title': {
-                'regex': [r'title', r'job.*title', r'position'],
-                'mapping': 'customer.signatory_job_title'
+            'signatory_first_name': {
+                'regex': [r'given.*name.*first', r'first.*name', r'authorized.*first'],
+                'mapping': 'customer.signatory_first_name',
+                'type': 'TextBox'
             },
-            'phone': {
-                'regex': [r'phone', r'telephone', r'daytime.*phone'],
-                'mapping': 'customer.signatory_work_phone'
+            'signatory_last_name': {
+                'regex': [r'family.*name.*last', r'last.*name', r'authorized.*last'],
+                'mapping': 'customer.signatory_last_name',
+                'type': 'TextBox'
             },
-            'email': {
-                'regex': [r'email', r'e-mail'],
-                'mapping': 'customer.signatory_email_id'
+            'signatory_middle_name': {
+                'regex': [r'middle.*name'],
+                'mapping': 'customer.signatory_middle_name',
+                'type': 'TextBox'
             },
-            'naics': {
-                'regex': [r'naics.*code', r'industry.*code'],
-                'mapping': 'customer.customer_naics_code'
+            'signatory_job_title': {
+                'regex': [r'title.*authorized', r'job.*title', r'position'],
+                'mapping': 'customer.signatory_job_title',
+                'type': 'TextBox'
             },
-            'employees': {
-                'regex': [r'number.*employees', r'total.*employees'],
-                'mapping': 'customer.customer_total_employees'
+            'signatory_work_phone': {
+                'regex': [r'daytime.*phone', r'work.*phone', r'telephone'],
+                'mapping': 'customer.signatory_work_phone',
+                'type': 'TextBox'
             },
-            'h1_dependent': {
-                'regex': [r'h.*1.*b.*dependent', r'dependent.*employer'],
-                'mapping': 'customer.h1_dependent_employer'
+            'signatory_mobile_phone': {
+                'regex': [r'mobile.*phone', r'cell.*phone'],
+                'mapping': 'customer.signatory_mobile_phone',
+                'type': 'TextBox'
             },
-            'willful': {
-                'regex': [r'willful.*violator'],
-                'mapping': 'customer.willful_violator'
-            }
-        }
-    },
-    
-    # Beneficiary Information
-    'beneficiary_info': {
-        'patterns': {
-            'first_name': {
-                'regex': [r'given.*name', r'first.*name', r'beneficiary.*first'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryFirstName'
-            },
-            'last_name': {
-                'regex': [r'family.*name', r'last.*name', r'surname', r'beneficiary.*last'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryLastName'
-            },
-            'middle_name': {
-                'regex': [r'middle.*name', r'middle.*initial'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryMiddleName'
-            },
-            'dob': {
-                'regex': [r'date.*birth', r'birth.*date', r'd\.?o\.?b'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryDateOfBirth'
-            },
-            'alien_number': {
-                'regex': [r'alien.*number', r'a[\-\s]?number', r'uscis.*number'],
-                'mapping': 'beneficiary.Beneficiary.alien_number'
-            },
-            'ssn': {
-                'regex': [r'social.*security', r'ssn', r'ss.*number'],
-                'mapping': 'beneficiary.Beneficiary.beneficiarySsn'
-            },
-            'gender': {
-                'regex': [r'gender', r'sex'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryGender'
-            },
-            'country_birth': {
-                'regex': [r'country.*birth', r'birth.*country'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryCountryOfBirth'
-            },
-            'citizenship': {
-                'regex': [r'citizenship', r'nationality', r'citizen.*country'],
-                'mapping': 'beneficiary.Beneficiary.beneficiaryCitizenOfCountry'
-            },
-            'current_status': {
-                'regex': [r'current.*status', r'nonimmigrant.*status'],
-                'mapping': 'beneficiary.VisaDetails.Visa.visaStatus'
-            },
-            'i94_number': {
-                'regex': [r'i[\-\s]?94.*number', r'arrival.*departure.*record'],
-                'mapping': 'beneficiary.I94Details.I94.i94Number'
-            },
-            'passport': {
-                'regex': [r'passport.*number', r'travel.*document.*number'],
-                'mapping': 'beneficiary.PassportDetails.Passport.passportNumber'
+            'signatory_email_id': {
+                'regex': [r'email.*address', r'e-mail'],
+                'mapping': 'customer.signatory_email_id',
+                'type': 'TextBox'
             }
         }
     },
     
     # Attorney Information
-    'attorney_info': {
+    'attorney': {
         'patterns': {
-            'last_name': {
-                'regex': [r'attorney.*last', r'preparer.*last', r'representative.*last'],
-                'mapping': 'attorney.attorneyInfo.lastName'
+            'attorney_last_name': {
+                'regex': [r'attorney.*last.*name', r'representative.*last', r'family.*name'],
+                'mapping': 'attorney.attorneyInfo.lastName',
+                'type': 'TextBox'
             },
-            'first_name': {
-                'regex': [r'attorney.*first', r'preparer.*first', r'representative.*first'],
-                'mapping': 'attorney.attorneyInfo.firstName'
+            'attorney_first_name': {
+                'regex': [r'attorney.*first.*name', r'representative.*first', r'given.*name'],
+                'mapping': 'attorney.attorneyInfo.firstName',
+                'type': 'TextBox'
             },
-            'bar_number': {
+            'attorney_middle_name': {
+                'regex': [r'attorney.*middle.*name'],
+                'mapping': 'attorney.attorneyInfo.middleName',
+                'type': 'TextBox'
+            },
+            'state_bar_number': {
                 'regex': [r'bar.*number', r'license.*number', r'state.*bar'],
-                'mapping': 'attorney.attorneyInfo.stateBarNumber'
+                'mapping': 'attorney.attorneyInfo.stateBarNumber',
+                'type': 'TextBox'
             },
-            'firm_name': {
-                'regex': [r'firm.*name', r'law.*firm', r'organization.*name'],
-                'mapping': 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName'
+            'law_firm_name': {
+                'regex': [r'law.*firm.*name', r'organization.*name', r'firm.*name'],
+                'mapping': 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName',
+                'type': 'TextBox'
+            },
+            'attorney_work_phone': {
+                'regex': [r'attorney.*phone', r'daytime.*telephone'],
+                'mapping': 'attorney.attorneyInfo.workPhone',
+                'type': 'TextBox'
+            },
+            'attorney_email': {
+                'regex': [r'attorney.*email', r'email.*address'],
+                'mapping': 'attorney.attorneyInfo.emailAddress',
+                'type': 'TextBox'
+            },
+            'attorney_fax': {
+                'regex': [r'fax.*number'],
+                'mapping': 'attorney.attorneyInfo.faxNumber',
+                'type': 'TextBox'
+            },
+            'licensing_authority': {
+                'regex': [r'licensing.*authority'],
+                'mapping': 'attorney.attorneyInfo.licensingAuthority',
+                'type': 'TextBox'
+            }
+        }
+    },
+    
+    # Beneficiary Information
+    'beneficiary': {
+        'patterns': {
+            'beneficiary_last_name': {
+                'regex': [r'beneficiary.*last.*name', r'client.*last.*name', r'family.*name'],
+                'mapping': 'beneficiary.Beneficiary.beneficiaryLastName',
+                'type': 'TextBox'
+            },
+            'beneficiary_first_name': {
+                'regex': [r'beneficiary.*first.*name', r'client.*first.*name', r'given.*name'],
+                'mapping': 'beneficiary.Beneficiary.beneficiaryFirstName',
+                'type': 'TextBox'
+            },
+            'beneficiary_middle_name': {
+                'regex': [r'beneficiary.*middle.*name', r'client.*middle.*name'],
+                'mapping': 'beneficiary.Beneficiary.beneficiaryMiddleName',
+                'type': 'TextBox'
+            },
+            'alien_number': {
+                'regex': [r'alien.*registration.*number', r'a[\-\s]?number', r'uscis.*number'],
+                'mapping': 'beneficiary.Beneficiary.alien_number',
+                'type': 'TextBox'
+            },
+            'beneficiary_dob': {
+                'regex': [r'date.*birth', r'birth.*date', r'd\.?o\.?b'],
+                'mapping': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
+                'type': 'Date'
+            },
+            'beneficiary_ssn': {
+                'regex': [r'social.*security', r'ssn', r'ss.*number'],
+                'mapping': 'beneficiary.Beneficiary.beneficiarySsn',
+                'type': 'TextBox'
+            },
+            'beneficiary_gender': {
+                'regex': [r'gender', r'sex'],
+                'mapping': 'beneficiary.Beneficiary.beneficiaryGender',
+                'type': 'RadioButton'
             }
         }
     },
     
     # LCA Information
-    'lca_info': {
+    'lca': {
         'patterns': {
-            'job_title': {
-                'regex': [r'job.*title', r'position', r'occupation', r'employment.*title'],
-                'mapping': 'lca.position_job_title'
-            },
-            'start_date': {
-                'regex': [r'start.*date', r'begin.*date', r'employment.*start', r'from.*date'],
-                'mapping': 'lca.start_date'
-            },
-            'end_date': {
-                'regex': [r'end.*date', r'employment.*end', r'to.*date'],
-                'mapping': 'lca.end_date'
-            },
-            'wages': {
-                'regex': [r'wage', r'salary', r'compensation', r'pay.*rate'],
-                'mapping': 'lca.gross_salary'
-            },
-            'soc_code': {
-                'regex': [r'soc.*code', r'occupation.*code'],
-                'mapping': 'lca.soc_onet_oes_code'
+            'position_job_title': {
+                'regex': [r'job.*title', r'position', r'occupation'],
+                'mapping': 'lca.position_job_title',
+                'type': 'TextBox'
             },
             'lca_number': {
                 'regex': [r'lca.*number', r'eta.*case', r'lca.*case'],
-                'mapping': 'lca.lcaNumber'
+                'mapping': 'lca.lcaNumber',
+                'type': 'TextBox'
+            },
+            'start_date': {
+                'regex': [r'start.*date', r'begin.*date', r'from.*date'],
+                'mapping': 'lca.start_date',
+                'type': 'Date'
+            },
+            'end_date': {
+                'regex': [r'end.*date', r'to.*date'],
+                'mapping': 'lca.end_date',
+                'type': 'Date'
+            },
+            'gross_salary': {
+                'regex': [r'wage.*rate', r'salary', r'compensation'],
+                'mapping': 'lca.gross_salary',
+                'type': 'Currency'
+            }
+        }
+    },
+    
+    # Case Information
+    'case': {
+        'patterns': {
+            'case_type': {
+                'regex': [r'classification', r'visa.*type', r'case.*type'],
+                'mapping': 'case.caseType',
+                'type': 'TextBox'
+            },
+            'case_sub_type': {
+                'regex': [r'basis.*classification', r'sub.*type'],
+                'mapping': 'case.caseSubType',
+                'type': 'TextBox'
+            },
+            'receipt_number': {
+                'regex': [r'receipt.*number', r'case.*number'],
+                'mapping': 'case.uscisReceiptNumber',
+                'type': 'TextBox'
             }
         }
     }
 }
 
-# Form-specific field mapping rules
+# Form-specific field mapping based on G-28 example
 FORM_SPECIFIC_MAPPINGS = {
-    'I-129': {
-        'Part1_Item2': 'customer.customer_name',
-        'Part1_Item3_InCareOf': 'customer.signatory_first_name + customer.signatory_last_name',
-        'Part1_Item3_Street': 'customer.address_street',
-        'Part1_Item3_City': 'customer.address_city',
-        'Part1_Item3_State': 'customer.address_state',
-        'Part1_Item3_Zip': 'customer.address_zip',
-        'Part1_Item4_Phone': 'customer.signatory_work_phone',
-        'Part1_Item4_Email': 'customer.signatory_email_id',
-        'Part1_Item5_FEIN': 'customer.customer_tax_id',
-        'Part1_Item6': 'customer.nonprofit_research_organization',
-        'Part2_Item1': 'case.caseType',
-        'Part2_Item2': 'case.caseSubType',
-        'Part2_Item3': 'beneficiary.H1bDetails.H1b.h1bReceiptNumber',
-        'Part3_Item2_LastName': 'beneficiary.Beneficiary.beneficiaryLastName',
-        'Part3_Item2_FirstName': 'beneficiary.Beneficiary.beneficiaryFirstName',
-        'Part3_Item5_DOB': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
-        'Part3_Item5_Gender': 'beneficiary.Beneficiary.beneficiaryGender',
-        'Part3_Item5_SSN': 'beneficiary.Beneficiary.beneficiarySsn',
-        'Part3_Item5_AlienNumber': 'beneficiary.Beneficiary.alien_number',
-        'Part3_Item6_I94': 'beneficiary.I94Details.I94.i94Number',
-        'Part3_Item6_Passport': 'beneficiary.PassportDetails.Passport.passportNumber',
-        'Part5_Item1': 'lca.position_job_title',
-        'Part5_Item2': 'lca.lcaNumber',
-        'Part5_Item9': 'lca.gross_salary'
-    },
-    
-    'I-539': {
-        'Part1_Item1a': 'beneficiary.Beneficiary.beneficiaryLastName',
-        'Part1_Item1b': 'beneficiary.Beneficiary.beneficiaryFirstName',
-        'Part1_Item1c': 'beneficiary.Beneficiary.beneficiaryMiddleName',
-        'Part1_Item2': 'beneficiary.Beneficiary.alien_number',
-        'Part1_Item4b_Street': 'beneficiary.WorkAddress.addressStreet',
-        'Part1_Item4d_City': 'beneficiary.WorkAddress.addressCity',
-        'Part1_Item4e_State': 'beneficiary.WorkAddress.addressState',
-        'Part1_Item4f_Zip': 'beneficiary.WorkAddress.addressZip',
-        'Part1_Item6': 'beneficiary.Beneficiary.beneficiaryCountryOfBirth',
-        'Part1_Item7': 'beneficiary.Beneficiary.beneficiaryCitizenOfCountry',
-        'Part1_Item8': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
-        'Part1_Item9': 'beneficiary.Beneficiary.beneficiarySsn',
-        'Part1_Item10': 'beneficiary.I94Details.I94.i94ArrivalDate',
-        'Part1_Item11': 'beneficiary.I94Details.I94.i94Number',
-        'Part1_Item12': 'beneficiary.PassportDetails.Passport.passportNumber',
-        'Part1_Item15a': 'beneficiary.VisaDetails.Visa.visaStatus',
-        'Part1_Item15b': 'beneficiary.VisaDetails.Visa.visaExpiryDate'
-    },
-    
-    'I-140': {
-        'Part1_Item2': 'customer.customer_name',
-        'Part1_Item3a': 'customer.signatory_first_name + customer.signatory_last_name',
-        'Part1_Item3b_Street': 'customer.address_street',
-        'Part1_Item3d_City': 'customer.address_city',
-        'Part1_Item3e_State': 'customer.address_state',
-        'Part1_Item3f_Zip': 'customer.address_zip',
-        'Part1_Item4_FEIN': 'customer.customer_tax_id',
-        'Part3_Item1a': 'beneficiary.Beneficiary.beneficiaryLastName',
-        'Part3_Item1b': 'beneficiary.Beneficiary.beneficiaryFirstName',
-        'Part3_Item1c': 'beneficiary.Beneficiary.beneficiaryMiddleName',
-        'Part3_Item3': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
-        'Part3_Item6': 'beneficiary.Beneficiary.beneficiaryCountryOfBirth',
-        'Part3_Item7': 'beneficiary.Beneficiary.beneficiaryCitizenOfCountry',
-        'Part3_Item8': 'beneficiary.Beneficiary.alien_number',
-        'Part3_Item9': 'beneficiary.Beneficiary.beneficiarySsn'
-    },
-    
     'G-28': {
-        'Part1_Item2a': 'attorney.attorneyInfo.lastName',
-        'Part1_Item2b': 'attorney.attorneyInfo.firstName',
-        'Part1_Item3a': 'attorney.address.addressStreet',
-        'Part1_Item3c': 'attorney.address.addressCity',
-        'Part1_Item3d': 'attorney.address.addressState',
-        'Part1_Item3e': 'attorney.address.addressZip',
-        'Part1_Item4': 'attorney.attorneyInfo.workPhone',
-        'Part1_Item6': 'attorney.attorneyInfo.emailAddress',
-        'Part2_Item1b': 'attorney.attorneyInfo.stateBarNumber',
-        'Part2_Item1d': 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName'
+        # Part 1 - Attorney Information
+        'Part1_Item2a': {'mapping': 'attorney.attorneyInfo.lastName', 'type': 'TextBox'},
+        'Part1_Item2b': {'mapping': 'attorney.attorneyInfo.firstName', 'type': 'TextBox'},
+        'Part1_Item2c': {'mapping': 'attorney.attorneyInfo.middleName', 'type': 'TextBox'},
+        'Part1_Item3a': {'mapping': 'attorneyLawfirmDetails.address.addressStreet', 'type': 'TextBox'},
+        'Part1_Item3b_Apt': {'mapping': 'attorneyLawfirmDetails.address.addressType', 'type': 'CheckBox'},
+        'Part1_Item3b_Ste': {'mapping': 'attorneyLawfirmDetails.address.addressType', 'type': 'CheckBox'},
+        'Part1_Item3b_Flr': {'mapping': 'attorneyLawfirmDetails.address.addressType', 'type': 'CheckBox'},
+        'Part1_Item3b_Number': {'mapping': 'attorneyLawfirmDetails.address.addressNumber', 'type': 'TextBox'},
+        'Part1_Item3c': {'mapping': 'attorneyLawfirmDetails.address.addressCity', 'type': 'TextBox'},
+        'Part1_Item3d': {'mapping': 'attorneyLawfirmDetails.address.addressState', 'type': 'TextBox'},
+        'Part1_Item3e': {'mapping': 'attorneyLawfirmDetails.address.addressZip', 'type': 'TextBox'},
+        'Part1_Item3h': {'mapping': 'attorneyLawfirmDetails.address.addressCountry', 'type': 'TextBox'},
+        'Part1_Item4': {'mapping': 'attorney.attorneyInfo.workPhone', 'type': 'TextBox'},
+        'Part1_Item6': {'mapping': 'attorney.attorneyInfo.emailAddress', 'type': 'TextBox'},
+        'Part1_Item7': {'mapping': 'attorney.attorneyInfo.faxNumber', 'type': 'TextBox'},
+        
+        # Part 2 - Eligibility
+        'Part2_Item1a_Licensing': {'mapping': 'attorney.attorneyInfo.licensingAuthority', 'type': 'TextBox'},
+        'Part2_Item1b': {'mapping': 'attorney.attorneyInfo.stateBarNumber', 'type': 'TextBox'},
+        'Part2_Item1d': {'mapping': 'attorneyLawfirmDetails.lawfirmDetails.lawFirmName', 'type': 'TextBox'},
+        
+        # Part 3 - Client Information
+        'Part3_Item6a': {'mapping': 'customer.signatory_last_name', 'type': 'TextBox'},
+        'Part3_Item6b': {'mapping': 'customer.signatory_first_name', 'type': 'TextBox'},
+        'Part3_Item6c': {'mapping': 'customer.signatory_middle_name', 'type': 'TextBox'},
+        'Part3_Item7a': {'mapping': 'customer.customer_name', 'type': 'TextBox'},
+        'Part3_Item7b': {'mapping': 'customer.signatory_job_title', 'type': 'TextBox'},
+        'Part3_Item10': {'mapping': 'customer.signatory_work_phone', 'type': 'TextBox'},
+        'Part3_Item11': {'mapping': 'customer.signatory_mobile_phone', 'type': 'TextBox'},
+        'Part3_Item12': {'mapping': 'customer.signatory_email_id', 'type': 'TextBox'},
+        'Part3_Item13a': {'mapping': 'customer.address_street', 'type': 'TextBox'},
+        'Part3_Item13b_Apt': {'mapping': 'customer.address_type', 'type': 'CheckBox'},
+        'Part3_Item13b_Number': {'mapping': 'customer.address_number', 'type': 'TextBox'},
+        'Part3_Item13c': {'mapping': 'customer.address_city', 'type': 'TextBox'},
+        'Part3_Item13d': {'mapping': 'customer.address_state', 'type': 'TextBox'},
+        'Part3_Item13e': {'mapping': 'customer.address_zip', 'type': 'TextBox'},
+        'Part3_Item13h': {'mapping': 'customer.address_country', 'type': 'TextBox'}
     }
 }
 
-# Enhanced CSS with improved styling
+# Default field values
+DEFAULT_FIELD_VALUES = {
+    'G-28': {
+        'licensing': {'value': True, 'type': 'CheckBox'},
+        'amnot': {'value': True, 'type': 'CheckBox'},
+        'pt4_1a': {'value': True, 'type': 'CheckBox'},
+        'pt4_1b': {'value': True, 'type': 'CheckBox'}
+    }
+}
+
+# Conditional field mappings
+CONDITIONAL_FIELD_MAPPINGS = {
+    'G-28': {
+        'pt3_1a': {
+            'condition': '1_ag==true',
+            'conditionTrue': 'true',
+            'conditionFalse': '',
+            'conditionType': 'CheckBox'
+        },
+        'pt3_1b': {
+            'condition': '1_ag==true',
+            'conditionTrue': 'formNumApp',
+            'conditionFalse': '',
+            'conditionType': 'TextBox'
+        },
+        'applicant': {
+            'condition': 'representative==1',
+            'conditionTrue': '1',
+            'conditionFalse': '',
+            'conditionType': 'CheckBox'
+        },
+        'petitioner': {
+            'condition': 'representative==2',
+            'conditionTrue': '2',
+            'conditionFalse': '',
+            'conditionType': 'CheckBox'
+        }
+    }
+}
+
+# CSS Styling
 st.markdown("""
 <style>
     /* USCIS Color Scheme */
@@ -594,7 +660,13 @@ def init_session_state():
         'expand_all_parts': False,
         'expanded_parts': set(),
         'mapping_suggestions': {},
-        'field_detection_confidence': {}
+        'field_detection_confidence': {},
+        'customer_data': {},
+        'beneficiary_data': {},
+        'attorney_data': {},
+        'lca_data': {},
+        'case_data': {},
+        'lawfirm_data': {}
     }
     
     for key, default_value in defaults.items():
@@ -660,7 +732,7 @@ def extract_uscis_pdf(pdf_file) -> Tuple[List[Dict[str, Any]], OrderedDict]:
                     field_name = widget.field_name
                     if field_name:
                         # Enhanced field analysis
-                        field_info = analyze_field_name(field_name, extracted_text, form_type)
+                        field_info = analyze_field_name_enhanced(field_name, extracted_text, form_type)
                         
                         field_data = {
                             'name': field_name,
@@ -672,7 +744,8 @@ def extract_uscis_pdf(pdf_file) -> Tuple[List[Dict[str, Any]], OrderedDict]:
                             'rect': list(widget.rect),
                             'source': 'PyMuPDF',
                             'suggested_mapping': field_info['suggested_mapping'],
-                            'confidence': field_info['confidence']
+                            'confidence': field_info['confidence'],
+                            'db_category': field_info['db_category']
                         }
                         fields.append(field_data)
             
@@ -682,31 +755,48 @@ def extract_uscis_pdf(pdf_file) -> Tuple[List[Dict[str, Any]], OrderedDict]:
         except Exception as e:
             processing_log.append(f"PyMuPDF error: {str(e)}")
     
-    # Fallback to other methods if needed
-    if len(fields) < 10:
-        if PDFPLUMBER_AVAILABLE:
-            try:
-                processing_log.append("Trying pdfplumber extraction...")
-                pdf_file.seek(0)
+    # Fallback to PyPDF2 if needed
+    if len(fields) < 10 and PDF_AVAILABLE:
+        try:
+            processing_log.append("Trying PyPDF2 extraction...")
+            pdf_file.seek(0)
+            reader = PdfReader(pdf_file)
+            
+            # Extract text for form detection
+            for page_num in range(min(3, len(reader.pages))):
+                page = reader.pages[page_num]
+                text = page.extract_text()
+                extracted_text += f"\n--- Page {page_num + 1} ---\n{text}"
                 
-                with pdfplumber.open(pdf_file) as pdf:
-                    for page_num, page in enumerate(pdf.pages):
-                        page_text = page.extract_text()
-                        if page_text and not form_type:
-                            # Detect form type
-                            for form_key, form_info in USCIS_FORMS_DATABASE.items():
-                                for pattern in form_info['patterns']:
-                                    if re.search(pattern, page_text, re.IGNORECASE):
-                                        form_type = form_key
-                                        form_number = form_key
-                                        break
-                                if form_type:
-                                    break
-                
-                processing_log.append("pdfplumber extraction completed")
-                
-            except Exception as e:
-                processing_log.append(f"pdfplumber error: {str(e)}")
+                # Detect form type
+                if not form_type:
+                    for form_key, form_info in USCIS_FORMS_DATABASE.items():
+                        for pattern in form_info['patterns']:
+                            if re.search(pattern, text, re.IGNORECASE):
+                                form_type = form_key
+                                form_number = form_key
+                                processing_log.append(f"Detected form type: {form_key}")
+                                break
+                        if form_type:
+                            break
+            
+            # Extract form fields
+            if '/AcroForm' in reader.trailer['/Root']:
+                acroform = reader.trailer['/Root']['/AcroForm']
+                if '/Fields' in acroform:
+                    for field_ref in acroform['/Fields']:
+                        field = field_ref.get_object()
+                        field_info = extract_field_info(field)
+                        if field_info:
+                            # Enhanced field analysis
+                            analysis = analyze_field_name_enhanced(field_info['name'], extracted_text, form_type)
+                            field_info.update(analysis)
+                            fields.append(field_info)
+            
+            processing_log.append(f"Extracted {len(fields)} fields using PyPDF2")
+            
+        except Exception as e:
+            processing_log.append(f"PyPDF2 error: {str(e)}")
     
     # Store extracted info
     st.session_state.extracted_text = extracted_text
@@ -729,22 +819,75 @@ def extract_uscis_pdf(pdf_file) -> Tuple[List[Dict[str, Any]], OrderedDict]:
     
     return fields, form_parts
 
-def analyze_field_name(field_name: str, text: str, form_type: Optional[str]) -> Dict[str, Any]:
-    """Enhanced field analysis with intelligent mapping suggestions"""
+def extract_field_info(field_obj) -> Optional[Dict[str, Any]]:
+    """Extract field information from PDF field object"""
+    try:
+        field_info = {
+            'name': field_obj.get('/T', ''),
+            'type': field_obj.get('/FT', '/Tx'),
+            'value': field_obj.get('/V', ''),
+            'required': bool(field_obj.get('/Ff', 0) & 2),
+            'page': 1,
+            'part': 'Unassigned Fields',
+            'source': 'PyPDF2'
+        }
+        
+        # Map field types
+        type_map = {
+            '/Tx': 'TextBox',
+            '/Btn': 'CheckBox' if field_obj.get('/Ff', 0) & 65536 else 'RadioButton',
+            '/Ch': 'DropDown',
+            '/Sig': 'Signature'
+        }
+        field_info['type'] = type_map.get(field_info['type'], 'TextBox')
+        
+        return field_info
+    except:
+        return None
+
+def analyze_field_name_enhanced(field_name: str, text: str, form_type: Optional[str]) -> Dict[str, Any]:
+    """Enhanced field analysis with database object categorization"""
     result = {
         'part': 'Unassigned Fields',
         'suggested_mapping': None,
-        'confidence': 0.0
+        'confidence': 0.0,
+        'db_category': None
     }
     
     field_lower = field_name.lower()
     
-    # Check if it's an attorney/preparer field
-    attorney_keywords = ['attorney', 'preparer', 'representative', 'declaration', 'g-28']
-    if any(keyword in field_lower for keyword in attorney_keywords):
-        result['part'] = 'Part 0 - Attorney/Preparer Information'
-        result['suggested_mapping'], result['confidence'] = suggest_mapping_enhanced(field_name, 'attorney')
-        return result
+    # Check if it's a form-specific field
+    if form_type and form_type in FORM_SPECIFIC_MAPPINGS:
+        for field_key, mapping_info in FORM_SPECIFIC_MAPPINGS[form_type].items():
+            if field_key.lower() in field_lower or field_lower in field_key.lower():
+                result['suggested_mapping'] = mapping_info['mapping']
+                result['confidence'] = 0.95
+                result['db_category'] = determine_db_category(mapping_info['mapping'])
+                
+                # Determine part from field name
+                part_match = re.search(r'Part(\d+)', field_key)
+                if part_match and form_type in USCIS_FORMS_DATABASE:
+                    part_num = part_match.group(1)
+                    parts = USCIS_FORMS_DATABASE[form_type]['parts']
+                    part_key = f'Part {part_num}'
+                    if part_key in parts:
+                        result['part'] = f'{part_key} - {parts[part_key]}'
+                
+                return result
+    
+    # Try pattern matching for each database category
+    for category, category_info in ENHANCED_MAPPING_PATTERNS.items():
+        for field_type, field_patterns in category_info['patterns'].items():
+            for pattern in field_patterns['regex']:
+                if re.search(pattern, field_lower):
+                    result['suggested_mapping'] = field_patterns['mapping']
+                    result['confidence'] = 0.8
+                    result['db_category'] = category
+                    break
+            if result['suggested_mapping']:
+                break
+        if result['suggested_mapping']:
+            break
     
     # Try to extract part number from field name
     part_match = re.search(r'(?:part|p)[\s_\-]*(\d+)', field_lower)
@@ -756,61 +899,24 @@ def analyze_field_name(field_name: str, text: str, form_type: Optional[str]) -> 
             if part_key in parts:
                 result['part'] = f'{part_key} - {parts[part_key]}'
     
-    # Check form-specific mappings
-    if form_type and form_type in FORM_SPECIFIC_MAPPINGS:
-        for field_key, mapping in FORM_SPECIFIC_MAPPINGS[form_type].items():
-            if field_key.lower() in field_lower or field_lower in field_key.lower():
-                result['suggested_mapping'] = mapping
-                result['confidence'] = 0.9
-                return result
-    
-    # Use pattern matching for suggestions
-    if not result['suggested_mapping']:
-        result['suggested_mapping'], result['confidence'] = suggest_mapping_enhanced(field_name)
-    
     return result
 
-def suggest_mapping_enhanced(field_name: str, category: str = None) -> Tuple[Optional[str], float]:
-    """Enhanced mapping suggestion with confidence scoring"""
-    field_lower = field_name.lower()
-    field_clean = re.sub(r'[^\w\s]', ' ', field_lower).strip()
-    
-    best_match = None
-    best_confidence = 0.0
-    
-    # Check specific category if provided
-    categories_to_check = [category] if category else USCIS_MAPPING_PATTERNS.keys()
-    
-    for cat in categories_to_check:
-        if cat not in USCIS_MAPPING_PATTERNS:
-            continue
-            
-        category_patterns = USCIS_MAPPING_PATTERNS[cat]['patterns']
-        
-        for field_type, field_info in category_patterns.items():
-            for pattern in field_info['regex']:
-                match = re.search(pattern, field_clean)
-                if match:
-                    # Calculate confidence based on match quality
-                    match_length = len(match.group(0))
-                    field_length = len(field_clean)
-                    confidence = match_length / field_length if field_length > 0 else 0
-                    
-                    # Boost confidence for exact matches
-                    if match.group(0) == field_clean:
-                        confidence = 1.0
-                    
-                    # Boost confidence for specific patterns
-                    if any(keyword in field_clean for keyword in ['item', 'part', 'section']):
-                        confidence *= 1.2
-                    
-                    confidence = min(confidence, 1.0)
-                    
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_match = field_info['mapping']
-    
-    return best_match, best_confidence
+def determine_db_category(mapping: str) -> str:
+    """Determine database category from mapping string"""
+    if mapping.startswith('customer'):
+        return 'customer'
+    elif mapping.startswith('attorney'):
+        return 'attorney'
+    elif mapping.startswith('beneficiary'):
+        return 'beneficiary'
+    elif mapping.startswith('lca'):
+        return 'lca'
+    elif mapping.startswith('case'):
+        return 'case'
+    elif mapping.startswith('lawfirm'):
+        return 'lawfirm'
+    else:
+        return 'other'
 
 def extract_fields_from_text_enhanced(text: str, form_type: Optional[str]) -> List[Dict[str, Any]]:
     """Enhanced field extraction from text using USCIS-specific patterns"""
@@ -819,7 +925,7 @@ def extract_fields_from_text_enhanced(text: str, form_type: Optional[str]) -> Li
     
     # Enhanced USCIS-specific field patterns
     patterns = [
-        # Part-based patterns (I-129 style)
+        # Part-based patterns (standard forms)
         (r'Part\s+(\d+)[\.\s]*(?:Item\s*Number\s*)?(\d+)\.?([a-z]?)[\.\s]*([A-Za-z][A-Za-z\s\-\(\)]{2,50})', 'uscis_part'),
         # Section patterns (LCA style)
         (r'Section\s+([A-Z])[\.\s]*(?:Item\s*)?(\d+)\.?([a-z]?)[\.\s]*([A-Za-z][A-Za-z\s\-]{2,50})', 'uscis_section'),
@@ -830,11 +936,7 @@ def extract_fields_from_text_enhanced(text: str, form_type: Optional[str]) -> Li
         # Checkbox patterns
         (r'\[\s*\]\s*([A-Za-z][A-Za-z\s\-]{2,50})', 'checkbox'),
         # Radio button patterns
-        (r'\(\s*\)\s*([A-Za-z][A-Za-z\s\-]{2,50})', 'radio'),
-        # Field with underscores
-        (r'([A-Za-z][A-Za-z\s\-]{2,50})[\s]*:?[\s]*_{3,}', 'text_field'),
-        # Field with parentheses instructions
-        (r'([A-Za-z][A-Za-z\s\-]{2,50})\s*\([^)]+\)', 'field_with_instruction')
+        (r'\(\s*\)\s*([A-Za-z][A-Za-z\s\-]{2,50})', 'radio')
     ]
     
     for pattern, pattern_type in patterns:
@@ -846,7 +948,7 @@ def extract_fields_from_text_enhanced(text: str, form_type: Optional[str]) -> Li
                 seen_fields.add(field_name.lower())
                 
                 # Enhanced field analysis
-                field_info = analyze_field_name(field_name, text, form_type)
+                field_info = analyze_field_name_enhanced(field_name, text, form_type)
                 field_type = determine_field_type_enhanced(field_name, pattern_type)
                 
                 fields.append({
@@ -858,7 +960,8 @@ def extract_fields_from_text_enhanced(text: str, form_type: Optional[str]) -> Li
                     'part': field_info['part'],
                     'source': 'text_extraction',
                     'suggested_mapping': field_info['suggested_mapping'],
-                    'confidence': field_info['confidence']
+                    'confidence': field_info['confidence'],
+                    'db_category': field_info['db_category']
                 })
     
     return fields
@@ -874,7 +977,7 @@ def create_field_name_enhanced(match, pattern_type: str, form_type: Optional[str
         
         # Form-specific naming
         if form_type:
-            return f"{form_type}_Part{part}_Item{item}{sub}_{desc_clean}"
+            return f"Part{part}_Item{item}{sub}_{desc_clean}"
         return f"Part{part}_Item{item}{sub}_{desc_clean}"
     
     elif pattern_type == 'uscis_section':
@@ -885,24 +988,21 @@ def create_field_name_enhanced(match, pattern_type: str, form_type: Optional[str
         desc_clean = re.sub(r'[^\w]', '_', desc)[:40]
         return f"Section{section}_Item{item}{sub}_{desc_clean}"
     
-    elif pattern_type == 'uscis_item':
-        item = match.group(1)
-        sub = match.group(2) or ''
-        desc = match.group(3).strip()
-        desc_clean = re.sub(r'[^\w]', '_', desc)[:40]
-        return f"Item{item}{sub}_{desc_clean}"
+    elif pattern_type == 'checkbox':
+        field_text = match.group(1).strip()
+        return re.sub(r'\s+', '_', field_text)
     
-    elif pattern_type == 'question':
-        num = match.group(1)
-        sub = match.group(2) or ''
-        desc = match.group(3).strip()
-        desc_clean = re.sub(r'[^\w]', '_', desc)[:40]
-        return f"Q{num}{sub}_{desc_clean}"
+    elif pattern_type == 'radio':
+        field_text = match.group(1).strip()
+        return re.sub(r'\s+', '_', field_text)
     
     else:
         # Generic field name
-        field_text = match.group(1).strip()
-        return re.sub(r'\s+', '_', field_text)
+        if match.groups():
+            field_text = match.group(0).strip()
+        else:
+            field_text = match.string[match.start():match.end()].strip()
+        return re.sub(r'[^\w]', '_', field_text)[:50]
 
 def determine_field_type_enhanced(field_name: str, pattern_type: str) -> str:
     """Enhanced field type determination for USCIS forms"""
@@ -925,11 +1025,13 @@ def determine_field_type_enhanced(field_name: str, pattern_type: str) -> str:
     elif any(word in field_lower for word in ['describe', 'explain', 'additional', 'details', 'summary']):
         return 'TextArea'
     elif any(word in field_lower for word in ['phone', 'telephone', 'fax']):
-        return 'Phone'
+        return 'TextBox'
     elif any(word in field_lower for word in ['email', 'e-mail']):
-        return 'Email'
+        return 'TextBox'
     elif any(word in field_lower for word in ['number', 'count', 'total']):
-        return 'Number'
+        return 'TextBox'
+    elif any(word in field_lower for word in ['apt', 'ste', 'flr']):
+        return 'AddressTypeBox'
     
     return 'TextBox'
 
@@ -951,9 +1053,6 @@ def organize_fields_by_parts_enhanced(fields: List[Dict], form_type: Optional[st
     """Enhanced organization of fields by form parts"""
     form_parts = OrderedDict()
     
-    # Always add attorney section first
-    form_parts['Part 0 - Attorney/Preparer Information'] = []
-    
     # Add known parts for the form type
     if form_type and form_type in USCIS_FORMS_DATABASE:
         for part_key, part_desc in USCIS_FORMS_DATABASE[form_type]['parts'].items():
@@ -962,7 +1061,7 @@ def organize_fields_by_parts_enhanced(fields: List[Dict], form_type: Optional[st
     # Add unassigned section
     form_parts['Unassigned Fields'] = []
     
-    # Organize fields into parts with confidence tracking
+    # Organize fields into parts
     for field in fields:
         part = field.get('part', 'Unassigned Fields')
         
@@ -970,19 +1069,20 @@ def organize_fields_by_parts_enhanced(fields: List[Dict], form_type: Optional[st
         if part not in form_parts:
             form_parts[part] = []
         
-        # Store confidence and suggestion
+        form_parts[part].append(field)
+        
+        # Store suggestions
         if field.get('suggested_mapping'):
             st.session_state.mapping_suggestions[field['name']] = {
                 'mapping': field['suggested_mapping'],
-                'confidence': field.get('confidence', 0.0)
+                'confidence': field.get('confidence', 0.0),
+                'db_category': field.get('db_category', 'other')
             }
-        
-        form_parts[part].append(field)
     
-    # Remove empty parts except Part 0 and Unassigned
+    # Remove empty parts
     parts_to_keep = OrderedDict()
     for part_name, part_fields in form_parts.items():
-        if part_fields or part_name in ['Part 0 - Attorney/Preparer Information', 'Unassigned Fields']:
+        if part_fields or part_name == 'Unassigned Fields':
             parts_to_keep[part_name] = part_fields
     
     return parts_to_keep
@@ -1001,79 +1101,8 @@ def map_widget_type(widget_type: str) -> str:
     return type_map.get(widget_type, 'TextBox')
 
 # UI Components
-def render_part_container(part_name: str, part_fields: List[Dict], part_index: int):
-    """Render a collapsible part container"""
-    # Calculate statistics
-    total = len(part_fields)
-    mapped = sum(1 for f in part_fields if f['name'] in st.session_state.mapped_fields)
-    questionnaire = sum(1 for f in part_fields if f['name'] in st.session_state.questionnaire_fields)
-    unmapped = total - mapped - questionnaire
-    
-    # Check if part is expanded
-    is_expanded = part_name in st.session_state.expanded_parts or st.session_state.expand_all_parts
-    
-    # Part header
-    header_class = "attorney" if "Attorney" in part_name else ""
-    
-    col1, col2 = st.columns([4, 1])
-    
-    with col1:
-        if st.button(
-            f"{'▼' if is_expanded else '▶'} {part_name}",
-            key=f"toggle_{part_index}",
-            use_container_width=True,
-            help=f"Click to {'collapse' if is_expanded else 'expand'}"
-        ):
-            if is_expanded:
-                st.session_state.expanded_parts.discard(part_name)
-            else:
-                st.session_state.expanded_parts.add(part_name)
-            st.rerun()
-    
-    with col2:
-        # Statistics
-        st.markdown(f"""
-        <div style="text-align: right; font-size: 0.9em;">
-            Total: {total} | 
-            <span style="color: #2e8540;">✓ {mapped}</span> | 
-            <span style="color: #00a6d2;">? {questionnaire}</span> | 
-            <span style="color: #fdb81e;">○ {unmapped}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Part content (if expanded)
-    if is_expanded:
-        # Part actions
-        if unmapped > 0:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if st.button(f"🤖 Auto-map all in {part_name[:6]}...", key=f"automap_{part_index}"):
-                    auto_map_part_fields(part_fields)
-                    st.rerun()
-            with col2:
-                if st.button(f"❓ All to questionnaire", key=f"quest_{part_index}"):
-                    move_part_to_questionnaire(part_fields)
-                    st.rerun()
-            with col3:
-                if st.button(f"🗑️ Remove all", key=f"remove_{part_index}"):
-                    remove_part_fields(part_fields)
-                    st.rerun()
-        
-        # Add field button
-        if st.button(f"➕ Add field to {part_name[:20]}...", key=f"add_{part_index}"):
-            show_add_field_form(part_name)
-        
-        # Show fields
-        for field_idx, field in enumerate(part_fields):
-            if field['name'] in st.session_state.removed_fields:
-                continue
-            render_field_row_enhanced(field, f"{part_index}_{field_idx}")
-        
-        # Add some spacing
-        st.markdown("<br>", unsafe_allow_html=True)
-
 def render_field_row_enhanced(field: Dict, unique_key: str):
-    """Enhanced field row rendering with confidence display"""
+    """Enhanced field row rendering with database categorization"""
     field_name = field['name']
     field_type = field['type']
     
@@ -1096,21 +1125,25 @@ def render_field_row_enhanced(field: Dict, unique_key: str):
         if field.get('required'):
             st.caption("*Required")
         
-        # Show confidence if available
+        # Show confidence and category if available
         if field_name in st.session_state.mapping_suggestions:
             suggestion_info = st.session_state.mapping_suggestions[field_name]
             confidence = suggestion_info['confidence']
+            db_category = suggestion_info.get('db_category', 'other')
             if confidence > 0:
                 confidence_color = "#2e8540" if confidence > 0.7 else "#fdb81e" if confidence > 0.4 else "#e21727"
-                st.markdown(f'<span style="color: {confidence_color}; font-size: 0.85em;">Confidence: {confidence:.0%}</span>', unsafe_allow_html=True)
+                st.markdown(f'<span style="color: {confidence_color}; font-size: 0.85em;">Confidence: {confidence:.0%} | Category: {db_category}</span>', unsafe_allow_html=True)
     
     with col2:
         if is_mapped:
             # Show current mapping
             mapping = st.session_state.mapped_fields[field_name]
             if ':' in mapping:
-                mapping = mapping.split(':')[0]
-            st.text_input("Mapped to", value=mapping, disabled=True, key=f"mapped_{unique_key}")
+                mapping_path, mapping_type = mapping.split(':', 1)
+            else:
+                mapping_path = mapping
+                mapping_type = field_type
+            st.text_input("Mapped to", value=mapping_path, disabled=True, key=f"mapped_{unique_key}")
         elif is_questionnaire:
             # Show questionnaire status
             st.info("In questionnaire")
@@ -1128,30 +1161,61 @@ def render_field_row_enhanced(field: Dict, unique_key: str):
             )
             if new_mapping:
                 st.session_state.mapped_fields[field_name] = f"{new_mapping}:{field_type}"
+                # Categorize the mapping
+                db_cat = determine_db_category(new_mapping)
+                if db_cat:
+                    if db_cat not in st.session_state:
+                        st.session_state[f'{db_cat}_data'] = {}
+                    st.session_state[f'{db_cat}_data'][field_name] = f"{new_mapping}:{field_type}"
                 st.rerun()
     
     with col3:
         if is_mapped:
             if st.button("❌", key=f"unmap_{unique_key}", help="Remove mapping"):
                 del st.session_state.mapped_fields[field_name]
+                # Remove from categorized data
+                for cat in ['customer_data', 'attorney_data', 'beneficiary_data', 'lca_data', 'case_data', 'lawfirm_data']:
+                    if field_name in st.session_state.get(cat, {}):
+                        del st.session_state[cat][field_name]
                 st.rerun()
         else:
             if st.button("✓", key=f"map_{unique_key}", help="Quick map with suggestion"):
                 if field_name in st.session_state.mapping_suggestions:
                     suggested = st.session_state.mapping_suggestions[field_name]['mapping']
-                    st.session_state.mapped_fields[field_name] = f"{suggested}:{field_type}"
+                    field_type_to_use = field_type
+                    
+                    # Check if there's a specific type in the mapping patterns
+                    db_cat = st.session_state.mapping_suggestions[field_name].get('db_category')
+                    if db_cat and db_cat in ENHANCED_MAPPING_PATTERNS:
+                        for pattern_key, pattern_info in ENHANCED_MAPPING_PATTERNS[db_cat]['patterns'].items():
+                            if pattern_info['mapping'] == suggested and 'type' in pattern_info:
+                                field_type_to_use = pattern_info['type']
+                                break
+                    
+                    st.session_state.mapped_fields[field_name] = f"{suggested}:{field_type_to_use}"
+                    
+                    # Add to categorized data
+                    if db_cat:
+                        if f'{db_cat}_data' not in st.session_state:
+                            st.session_state[f'{db_cat}_data'] = {}
+                        st.session_state[f'{db_cat}_data'][field_name] = f"{suggested}:{field_type_to_use}"
+                    
                     st.rerun()
     
     with col4:
         if not is_questionnaire:
             if st.button("❓", key=f"quest_{unique_key}", help="Move to questionnaire"):
+                # Determine appropriate questionnaire type
+                q_type = 'checkbox' if field_type == 'CheckBox' else 'radio' if field_type == 'RadioButton' else 'text'
+                
                 st.session_state.questionnaire_fields[field_name] = {
-                    'type': 'checkbox' if field_type == 'CheckBox' else 'text',
+                    'type': q_type,
                     'required': field.get('required', False),
                     'label': beautify_field_name(field_name),
-                    'options': 'Yes\nNo' if field_type == 'CheckBox' else '',
+                    'options': 'Yes\nNo' if field_type in ['CheckBox', 'RadioButton'] else '',
                     'validation': '',
-                    'style': {"col": "12"}
+                    'style': {"col": "12"},
+                    'original_type': field_type
                 }
                 st.rerun()
     
@@ -1172,97 +1236,146 @@ def beautify_field_name(field_name: str) -> str:
     words = name.split()
     capitalized = []
     for word in words:
-        if word.upper() in ['SSN', 'DOB', 'EIN', 'FEIN', 'LCA', 'US', 'USA']:
+        if word.upper() in ['SSN', 'DOB', 'EIN', 'FEIN', 'LCA', 'US', 'USA', 'USCIS', 'ICE', 'CBP']:
             capitalized.append(word.upper())
         else:
             capitalized.append(word.capitalize())
     return ' '.join(capitalized).strip()
 
-def auto_map_part_fields(part_fields: List[Dict]):
-    """Auto-map all unmapped fields in a part with enhanced intelligence"""
-    for field in part_fields:
-        field_name = field['name']
-        if (field_name not in st.session_state.mapped_fields and 
-            field_name not in st.session_state.questionnaire_fields and
-            field_name not in st.session_state.removed_fields):
-            
-            # Check if we have a suggestion with high confidence
-            if field_name in st.session_state.mapping_suggestions:
-                suggestion_info = st.session_state.mapping_suggestions[field_name]
-                if suggestion_info['confidence'] > 0.5:  # Only auto-map if confidence > 50%
-                    st.session_state.mapped_fields[field_name] = f"{suggestion_info['mapping']}:{field['type']}"
+def generate_typescript_g28_format() -> str:
+    """Generate TypeScript in exact G-28 format"""
+    form_name = st.session_state.form_name or 'USCISForm'
+    form_name_clean = re.sub(r'[^\w]', '', form_name)
+    
+    # Organize mapped fields by database category
+    customer_data = {}
+    beneficiary_data = {}
+    attorney_data = {}
+    lca_data = {}
+    case_data = {}
+    
+    # Process mapped fields
+    for field_name, mapping in st.session_state.mapped_fields.items():
+        if ':' in mapping:
+            mapping_path, field_type = mapping.split(':', 1)
+        else:
+            mapping_path = mapping
+            field_type = 'TextBox'
+        
+        # Create a clean field key
+        field_key = re.sub(r'^Part\d+_Item\d+[a-z]?_', '', field_name)
+        field_key = re.sub(r'[^\w]', '', field_key)
+        
+        # Categorize by database object
+        if mapping_path.startswith('customer'):
+            customer_data[field_key] = f"{mapping_path}:{field_type}"
+        elif mapping_path.startswith('beneficiary'):
+            beneficiary_data[field_key] = f"{mapping_path}:{field_type}"
+        elif mapping_path.startswith('attorney'):
+            attorney_data[field_key] = f"{mapping_path}:{field_type}"
+        elif mapping_path.startswith('lca'):
+            lca_data[field_key] = f"{mapping_path}:{field_type}"
+        elif mapping_path.startswith('case'):
+            case_data[field_key] = f"{mapping_path}:{field_type}"
+    
+    # Process questionnaire fields
+    questionnaire_data = {}
+    for field_name, config in st.session_state.questionnaire_fields.items():
+        # Create questionnaire field key
+        field_key = re.sub(r'[^\w]', '', field_name)[:30]
+        
+        # Determine questionnaire type
+        q_type = 'ConditionBox' if config['type'] in ['checkbox', 'radio'] else 'SingleBox'
+        
+        questionnaire_data[field_key] = f"{field_key}:{q_type}"
+    
+    # Process default fields
+    default_data = {}
+    if st.session_state.form_type in DEFAULT_FIELD_VALUES:
+        for field_key, field_info in DEFAULT_FIELD_VALUES[st.session_state.form_type].items():
+            default_data[field_key] = f":{field_info['type']}"
+    
+    # Process conditional fields
+    conditional_data = {}
+    if st.session_state.form_type in CONDITIONAL_FIELD_MAPPINGS:
+        conditional_data = CONDITIONAL_FIELD_MAPPINGS[st.session_state.form_type]
+    
+    # Generate TypeScript
+    ts_content = f"""export const {form_name_clean} = {{
+    "formname": "{form_name_clean}",
+    "customerData": {json.dumps(customer_data, indent=8) if customer_data else 'null'},
+    "beneficiaryData": {json.dumps(beneficiary_data, indent=8) if beneficiary_data else 'null'},
+    "questionnaireData": {json.dumps(questionnaire_data, indent=8)},
+    "defaultData": {json.dumps(default_data, indent=8) if default_data else '{}'},
+    "conditionalData": {json.dumps(conditional_data, indent=8) if conditional_data else '{}'},
+    "attorneyData": {json.dumps(attorney_data, indent=8) if attorney_data else 'null'},
+    "pdfName": "{form_name_clean}",
+    "caseData": {json.dumps(case_data, indent=8) if case_data else 'null'}
+}}"""
+    
+    return ts_content
 
-def move_part_to_questionnaire(part_fields: List[Dict]):
-    """Move all unmapped fields in a part to questionnaire"""
-    for field in part_fields:
+def generate_json_for_unmapped() -> str:
+    """Generate JSON for unmapped fields with questionnaire format"""
+    unmapped_fields = []
+    
+    for field in st.session_state.pdf_fields:
         field_name = field['name']
         if (field_name not in st.session_state.mapped_fields and 
             field_name not in st.session_state.questionnaire_fields and
             field_name not in st.session_state.removed_fields):
             
-            st.session_state.questionnaire_fields[field_name] = {
-                'type': 'checkbox' if field['type'] == 'CheckBox' else 'text',
-                'required': field.get('required', False),
-                'label': beautify_field_name(field_name),
-                'options': 'Yes\nNo' if field['type'] == 'CheckBox' else '',
-                'validation': '',
-                'style': {"col": "12"}
+            # Create questionnaire control structure
+            control = {
+                "name": field_name,
+                "label": beautify_field_name(field_name),
+                "type": map_field_type_to_questionnaire(field['type']),
+                "validators": {
+                    "required": field.get('required', False)
+                },
+                "style": {
+                    "col": "12" if field['type'] in ['TextArea', 'Signature'] else "7"
+                }
             }
+            
+            # Add specific properties based on type
+            if field['type'] in ['CheckBox', 'RadioButton']:
+                control["value"] = "1"
+                control["className"] = "pt-15"
+            elif field['type'] == 'TextBox' and 'email' in field_name.lower():
+                control["validators"]["email"] = True
+            elif field['type'] == 'Date':
+                control["validators"]["date"] = True
+            
+            unmapped_fields.append(control)
+    
+    # Create the questionnaire structure
+    questionnaire = {
+        "controls": unmapped_fields
+    }
+    
+    return json.dumps(questionnaire, indent=2)
 
-def remove_part_fields(part_fields: List[Dict]):
-    """Remove all fields in a part"""
-    for field in part_fields:
-        if field['name'] not in st.session_state.removed_fields:
-            st.session_state.removed_fields.append(field['name'])
+def map_field_type_to_questionnaire(field_type: str) -> str:
+    """Map PDF field types to questionnaire control types"""
+    type_map = {
+        'TextBox': 'text',
+        'TextArea': 'textarea',
+        'CheckBox': 'colorSwitch',
+        'RadioButton': 'radio',
+        'DropDown': 'select',
+        'Date': 'date',
+        'Signature': 'signature',
+        'Currency': 'text',
+        'Email': 'text',
+        'Phone': 'text',
+        'Number': 'number'
+    }
+    return type_map.get(field_type, 'text')
 
-def show_add_field_form(part_name: str):
-    """Show form to add a new field to a part"""
-    with st.expander(f"Add field to {part_name}", expanded=True):
-        col1, col2, col3, col4 = st.columns([3, 2, 1, 1])
-        
-        with col1:
-            field_name = st.text_input("Field name", placeholder="e.g., Part1_Item5a_MiddleName")
-        
-        with col2:
-            field_type = st.selectbox("Type", ["TextBox", "CheckBox", "RadioButton", "Date", "DropDown", "TextArea", "Signature", "Currency", "Phone", "Email"])
-        
-        with col3:
-            is_required = st.checkbox("Required")
-        
-        with col4:
-            if st.button("Add", type="primary"):
-                if field_name:
-                    # Analyze the new field
-                    field_info = analyze_field_name(field_name, "", st.session_state.form_type)
-                    
-                    new_field = {
-                        'name': field_name,
-                        'type': field_type,
-                        'value': '',
-                        'required': is_required,
-                        'page': 0,
-                        'part': part_name,
-                        'source': 'manual',
-                        'suggested_mapping': field_info['suggested_mapping'],
-                        'confidence': field_info['confidence']
-                    }
-                    st.session_state.pdf_fields.append(new_field)
-                    
-                    # Add to the part
-                    if part_name in st.session_state.form_parts:
-                        st.session_state.form_parts[part_name].append(new_field)
-                    
-                    # Add suggestion if found
-                    if field_info['suggested_mapping']:
-                        st.session_state.mapping_suggestions[field_name] = {
-                            'mapping': field_info['suggested_mapping'],
-                            'confidence': field_info['confidence']
-                        }
-                    
-                    st.rerun()
-
+# Auto-mapping functions
 def auto_map_all_fields():
-    """Enhanced auto-mapping with intelligent detection"""
+    """Enhanced auto-mapping with database categorization"""
     mapped_count = 0
     
     for field in st.session_state.pdf_fields:
@@ -1277,163 +1390,44 @@ def auto_map_all_fields():
                     'type': 'checkbox' if field['type'] == 'CheckBox' else 'radio',
                     'required': field.get('required', False),
                     'label': beautify_field_name(field_name),
-                    'options': 'Yes\nNo' if field['type'] == 'CheckBox' else '',
+                    'options': 'Yes\nNo',
                     'validation': '',
-                    'style': {"col": "12"}
+                    'style': {"col": "12"},
+                    'original_type': field['type']
                 }
                 mapped_count += 1
             else:
                 # Try to map with confidence threshold
                 if field_name in st.session_state.mapping_suggestions:
                     suggestion_info = st.session_state.mapping_suggestions[field_name]
-                    if suggestion_info['confidence'] > 0.3:  # Lower threshold for auto-map all
-                        st.session_state.mapped_fields[field_name] = f"{suggestion_info['mapping']}:{field['type']}"
+                    if suggestion_info['confidence'] > 0.3:
+                        mapping = suggestion_info['mapping']
+                        db_cat = suggestion_info.get('db_category', 'other')
+                        
+                        # Get the appropriate field type
+                        field_type = field['type']
+                        if db_cat in ENHANCED_MAPPING_PATTERNS:
+                            for pattern_key, pattern_info in ENHANCED_MAPPING_PATTERNS[db_cat]['patterns'].items():
+                                if pattern_info['mapping'] == mapping and 'type' in pattern_info:
+                                    field_type = pattern_info['type']
+                                    break
+                        
+                        st.session_state.mapped_fields[field_name] = f"{mapping}:{field_type}"
+                        
+                        # Add to categorized data
+                        if db_cat:
+                            if f'{db_cat}_data' not in st.session_state:
+                                st.session_state[f'{db_cat}_data'] = {}
+                            st.session_state[f'{db_cat}_data'][field_name] = f"{mapping}:{field_type}"
+                        
                         mapped_count += 1
     
     return mapped_count
 
-def generate_typescript_enhanced() -> str:
-    """Generate enhanced TypeScript configuration for USCIS forms"""
-    form_name = st.session_state.form_name or 'USCISForm'
-    form_name_clean = re.sub(r'[^\w]', '', form_name)
-    
-    # Organize mapped fields by category
-    categories = defaultdict(dict)
-    for field_name, mapping in st.session_state.mapped_fields.items():
-        if ':' in mapping:
-            mapping_path, field_type = mapping.split(':', 1)
-        else:
-            mapping_path = mapping
-            field_type = 'TextBox'
-        
-        # Determine category
-        if mapping_path.startswith('customer'):
-            categories['customerData'][field_name] = f"{mapping_path}:{field_type}"
-        elif mapping_path.startswith('beneficiary'):
-            categories['beneficiaryData'][field_name] = f"{mapping_path}:{field_type}"
-        elif mapping_path.startswith('attorney'):
-            categories['attorneyData'][field_name] = f"{mapping_path}:{field_type}"
-        elif mapping_path.startswith('lca'):
-            categories['lcaData'][field_name] = f"{mapping_path}:{field_type}"
-        else:
-            categories['otherData'][field_name] = f"{mapping_path}:{field_type}"
-    
-    # Format questionnaire
-    questionnaire_data = {}
-    for field_name, config in st.session_state.questionnaire_fields.items():
-        questionnaire_data[field_name] = {
-            'type': config['type'],
-            'label': config['label'],
-            'required': config.get('required', False),
-            'options': config.get('options', '').split('\n') if config.get('options') else []
-        }
-    
-    # Generate TypeScript with interfaces
-    ts_content = f"""// Auto-generated USCIS form configuration
-// Form: {form_name} ({st.session_state.form_type or 'Unknown'})
-// Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-interface FormField {{
-    mapping: string;
-    type: string;
-}}
-
-interface QuestionnaireField {{
-    type: string;
-    label: string;
-    required: boolean;
-    options?: string[];
-}}
-
-interface USCISFormConfig {{
-    formname: string;
-    formType: string;
-    customerData: {{ [key: string]: string }} | null;
-    beneficiaryData: {{ [key: string]: string }} | null;
-    attorneyData: {{ [key: string]: string }} | null;
-    lcaData: {{ [key: string]: string }} | null;
-    otherData: {{ [key: string]: string }} | null;
-    questionnaireData: {{ [key: string]: QuestionnaireField }};
-    formStructure: {{ [part: string]: string[] }};
-    metadata: {{
-        totalFields: number;
-        mappedFields: number;
-        questionnaireFields: number;
-        extractedFrom: string;
-        mappingConfidence: {{ [field: string]: number }};
-    }};
-}}
-
-export const {form_name_clean}: USCISFormConfig = {{
-    formname: "{form_name_clean}",
-    formType: "{st.session_state.form_type or 'Unknown'}",
-    customerData: {json.dumps(categories.get('customerData', {}), indent=8) if categories.get('customerData') else 'null'},
-    beneficiaryData: {json.dumps(categories.get('beneficiaryData', {}), indent=8) if categories.get('beneficiaryData') else 'null'},
-    attorneyData: {json.dumps(categories.get('attorneyData', {}), indent=8) if categories.get('attorneyData') else 'null'},
-    lcaData: {json.dumps(categories.get('lcaData', {}), indent=8) if categories.get('lcaData') else 'null'},
-    otherData: {json.dumps(categories.get('otherData', {}), indent=8) if categories.get('otherData') else 'null'},
-    questionnaireData: {json.dumps(questionnaire_data, indent=8)},
-    formStructure: {{
-{format_form_structure()}
-    }},
-    metadata: {{
-        totalFields: {len(st.session_state.pdf_fields)},
-        mappedFields: {len(st.session_state.mapped_fields)},
-        questionnaireFields: {len(st.session_state.questionnaire_fields)},
-        extractedFrom: "{st.session_state.form_type or 'Unknown USCIS Form'}",
-        mappingConfidence: {json.dumps(get_mapping_confidence(), indent=12)}
-    }}
-}};
-
-export default {form_name_clean};"""
-    
-    return ts_content
-
-def format_form_structure() -> str:
-    """Format form structure for TypeScript export"""
-    structure_lines = []
-    for part_name, fields in st.session_state.form_parts.items():
-        field_names = [f['name'] for f in fields if f['name'] not in st.session_state.removed_fields]
-        structure_lines.append(f'        "{part_name}": {json.dumps(field_names)}')
-    return ',\n'.join(structure_lines)
-
-def get_mapping_confidence() -> Dict[str, float]:
-    """Get mapping confidence scores"""
-    confidence_scores = {}
-    for field_name, suggestion_info in st.session_state.mapping_suggestions.items():
-        if field_name in st.session_state.mapped_fields:
-            confidence_scores[field_name] = suggestion_info['confidence']
-    return confidence_scores
-
-def generate_json_enhanced() -> str:
-    """Generate enhanced JSON configuration for USCIS forms"""
-    config = {
-        "formName": st.session_state.form_name or "USCISForm",
-        "formType": st.session_state.form_type,
-        "formDatabase": USCIS_FORMS_DATABASE.get(st.session_state.form_type, {}),
-        "mappedFields": st.session_state.mapped_fields,
-        "questionnaireFields": st.session_state.questionnaire_fields,
-        "formStructure": {
-            part_name: [f['name'] for f in fields if f['name'] not in st.session_state.removed_fields]
-            for part_name, fields in st.session_state.form_parts.items()
-        },
-        "mappingSuggestions": st.session_state.mapping_suggestions,
-        "metadata": {
-            "totalFields": len(st.session_state.pdf_fields),
-            "mappedFields": len(st.session_state.mapped_fields),
-            "questionnaireFields": len(st.session_state.questionnaire_fields),
-            "removedFields": len(st.session_state.removed_fields),
-            "timestamp": datetime.now().isoformat(),
-            "extractionMethod": st.session_state.processing_log[-1] if st.session_state.processing_log else "Unknown"
-        }
-    }
-    
-    return json.dumps(config, indent=2)
-
 # Main Application
 def main():
     st.title("🏛️ USCIS PDF Form Automation System")
-    st.markdown("Extract and intelligently map fields from USCIS immigration forms")
+    st.markdown("Extract and intelligently map fields from USCIS immigration forms to database objects")
     
     # Check PDF library
     if not PDF_AVAILABLE:
@@ -1487,10 +1481,21 @@ def main():
                 st.progress(progress / 100)
                 st.caption(f"{progress:.1f}% Complete")
             
-            # Confidence metrics
-            if st.session_state.mapping_suggestions:
-                avg_confidence = sum(s['confidence'] for s in st.session_state.mapping_suggestions.values()) / len(st.session_state.mapping_suggestions)
-                st.metric("Avg. Confidence", f"{avg_confidence:.0%}")
+            # Database object distribution
+            st.markdown("---")
+            st.header("🗄️ Database Objects")
+            
+            db_counts = {
+                'Customer': len(st.session_state.get('customer_data', {})),
+                'Attorney': len(st.session_state.get('attorney_data', {})),
+                'Beneficiary': len(st.session_state.get('beneficiary_data', {})),
+                'LCA': len(st.session_state.get('lca_data', {})),
+                'Case': len(st.session_state.get('case_data', {}))
+            }
+            
+            for obj_name, count in db_counts.items():
+                if count > 0:
+                    st.metric(obj_name, count)
         
         st.markdown("---")
         
@@ -1512,7 +1517,8 @@ def main():
                         'label': beautify_field_name(field['name']),
                         'options': 'Yes\nNo',
                         'validation': '',
-                        'style': {"col": "12"}
+                        'style': {"col": "12"},
+                        'original_type': field['type']
                     }
                     count += 1
             st.success(f"Moved {count} fields to questionnaire!")
@@ -1523,10 +1529,9 @@ def main():
             st.rerun()
     
     # Main content
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📤 Upload & Process",
         "🗂️ Field Mapping",
-        "❓ Questionnaire",
         "📥 Export",
         "📊 Analysis"
     ])
@@ -1550,7 +1555,7 @@ def main():
         uploaded_file = st.file_uploader(
             "Choose a USCIS PDF form",
             type="pdf",
-            help="Supported forms: I-129, I-539, I-140, I-485, I-765, I-131, G-28, LCA, and more"
+            help="Supported forms: G-28, I-129, I-539, I-140, I-485, I-765, I-131, LCA, and more"
         )
         
         if uploaded_file:
@@ -1589,11 +1594,6 @@ def main():
             with st.expander("📜 Extraction Log"):
                 for log in st.session_state.processing_log:
                     st.text(log)
-        
-        # Show extracted text preview
-        if st.session_state.extracted_text:
-            with st.expander("📄 Extracted Text Preview"):
-                st.text_area("Text", st.session_state.extracted_text[:2000] + "...", height=200)
     
     # Tab 2: Field Mapping
     with tab2:
@@ -1602,108 +1602,15 @@ def main():
         if not st.session_state.form_parts:
             st.warning("⚠️ Please upload and extract a form first")
         else:
-            # Mapping statistics
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                high_conf_fields = [f for f in st.session_state.pdf_fields 
-                                   if f['name'] in st.session_state.mapping_suggestions 
-                                   and st.session_state.mapping_suggestions[f['name']]['confidence'] > 0.7]
-                st.info(f"🎯 {len(high_conf_fields)} high-confidence suggestions")
-            
-            with col2:
-                form_specific = sum(1 for f in st.session_state.mapped_fields.values() 
-                                  if any(db_field in f for db_field in ['customer', 'beneficiary', 'lca', 'attorney']))
-                st.info(f"🔗 {form_specific} database mappings")
-            
-            with col3:
-                unmapped_required = sum(1 for f in st.session_state.pdf_fields 
-                                      if f.get('required') and f['name'] not in st.session_state.mapped_fields 
-                                      and f['name'] not in st.session_state.questionnaire_fields)
-                if unmapped_required > 0:
-                    st.warning(f"⚠️ {unmapped_required} required fields unmapped")
-                else:
-                    st.success("✅ All required fields mapped")
-            
-            # Part navigation
+            # Show form parts
             for idx, (part_name, part_fields) in enumerate(st.session_state.form_parts.items()):
-                render_part_container(part_name, part_fields, idx)
+                with st.expander(f"{part_name} ({len(part_fields)} fields)", expanded=idx == 0):
+                    for field_idx, field in enumerate(part_fields):
+                        if field['name'] not in st.session_state.removed_fields:
+                            render_field_row_enhanced(field, f"{idx}_{field_idx}")
     
-    # Tab 3: Questionnaire
+    # Tab 3: Export
     with tab3:
-        st.header("Questionnaire Configuration")
-        
-        # Add new field
-        with st.expander("➕ Add Questionnaire Field"):
-            col1, col2, col3 = st.columns([3, 2, 1])
-            
-            with col1:
-                q_label = st.text_input("Label", placeholder="e.g., Have you ever been arrested?")
-            
-            with col2:
-                q_type = st.selectbox("Type", ["text", "checkbox", "radio", "select", "date", "textarea"])
-            
-            with col3:
-                q_required = st.checkbox("Required", value=False)
-            
-            if q_type in ['radio', 'select']:
-                q_options = st.text_area("Options (one per line)", placeholder="Yes\nNo")
-            else:
-                q_options = ""
-            
-            if st.button("Add Field", type="primary"):
-                if q_label:
-                    field_key = re.sub(r'[^\w]', '_', q_label)
-                    st.session_state.questionnaire_fields[field_key] = {
-                        'type': q_type,
-                        'required': q_required,
-                        'label': q_label,
-                        'options': q_options,
-                        'validation': '',
-                        'style': {"col": "12"}
-                    }
-                    st.rerun()
-        
-        # Display questionnaire fields
-        if st.session_state.questionnaire_fields:
-            for field_key, config in list(st.session_state.questionnaire_fields.items()):
-                with st.expander(f"{config['label']} ({config['type']})"):
-                    col1, col2 = st.columns([4, 1])
-                    
-                    with col1:
-                        config['label'] = st.text_input("Label", value=config['label'], key=f"q_label_{field_key}")
-                        config['type'] = st.selectbox(
-                            "Type",
-                            ["text", "checkbox", "radio", "select", "date", "textarea"],
-                            index=["text", "checkbox", "radio", "select", "date", "textarea"].index(config['type']),
-                            key=f"q_type_{field_key}"
-                        )
-                        config['required'] = st.checkbox("Required", value=config.get('required', False), key=f"q_req_{field_key}")
-                        
-                        if config['type'] in ['radio', 'select']:
-                            config['options'] = st.text_area(
-                                "Options (one per line)",
-                                value=config.get('options', ''),
-                                key=f"q_opt_{field_key}"
-                            )
-                        
-                        # Add validation rules
-                        if config['type'] == 'text':
-                            config['validation'] = st.text_input(
-                                "Validation pattern (regex)",
-                                value=config.get('validation', ''),
-                                placeholder="e.g., ^[A-Za-z]+$",
-                                key=f"q_val_{field_key}"
-                            )
-                    
-                    with col2:
-                        if st.button("🗑️", key=f"q_del_{field_key}"):
-                            del st.session_state.questionnaire_fields[field_key]
-                            st.rerun()
-        else:
-            st.info("No questionnaire fields added yet. Fields marked as checkboxes or radio buttons will appear here.")
-    
-    # Tab 4: Export
-    with tab4:
         st.header("Export Configuration")
         
         if not st.session_state.pdf_fields:
@@ -1712,61 +1619,37 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("📄 TypeScript Export")
+                st.subheader("📄 TypeScript Export (G-28 Format)")
+                st.caption("For mapped fields organized by database objects")
+                
                 if st.button("Generate TypeScript", type="primary", use_container_width=True):
-                    ts_content = generate_typescript_enhanced()
+                    ts_content = generate_typescript_g28_format()
                     st.download_button(
                         "📥 Download TypeScript",
                         data=ts_content,
                         file_name=f"{st.session_state.form_name or 'USCIS_Form'}.ts",
                         mime="text/plain"
                     )
-                    with st.expander("Preview"):
+                    with st.expander("Preview TypeScript"):
                         st.code(ts_content, language="typescript")
             
             with col2:
-                st.subheader("📋 JSON Export")
+                st.subheader("📋 JSON Export (Questionnaire Format)")
+                st.caption("For unmapped fields as questionnaire controls")
+                
                 if st.button("Generate JSON", type="primary", use_container_width=True):
-                    json_content = generate_json_enhanced()
+                    json_content = generate_json_for_unmapped()
                     st.download_button(
                         "📥 Download JSON",
                         data=json_content,
-                        file_name=f"{st.session_state.form_name or 'USCIS_Form'}.json",
+                        file_name=f"{st.session_state.form_name or 'USCIS_Form'}_questionnaire.json",
                         mime="application/json"
                     )
-                    with st.expander("Preview"):
+                    with st.expander("Preview JSON"):
                         st.code(json_content, language="json")
-            
-            # Additional export options
-            st.subheader("🔧 Advanced Export Options")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.checkbox("Include unmapped fields in export"):
-                    st.info("Unmapped fields will be included with null mappings")
-                
-                if st.checkbox("Include field metadata"):
-                    st.info("Field types, requirements, and confidence scores will be included")
-            
-            with col2:
-                export_format = st.selectbox(
-                    "Export format",
-                    ["Standard", "Compact", "Detailed"],
-                    help="Choose the level of detail in the export"
-                )
-                
-                if st.button("📊 Export Mapping Report"):
-                    # Generate detailed mapping report
-                    report = generate_mapping_report()
-                    st.download_button(
-                        "📥 Download Report",
-                        data=report,
-                        file_name=f"{st.session_state.form_name or 'USCIS_Form'}_mapping_report.md",
-                        mime="text/markdown"
-                    )
     
-    # Tab 5: Analysis
-    with tab5:
+    # Tab 4: Analysis
+    with tab4:
         st.header("Form Analysis & Insights")
         
         if st.session_state.pdf_fields:
@@ -1779,7 +1662,6 @@ def main():
                 for field in st.session_state.pdf_fields:
                     field_types[field['type']] += 1
                 
-                # Create a simple bar chart representation
                 for ftype, count in sorted(field_types.items(), key=lambda x: x[1], reverse=True):
                     progress = count / len(st.session_state.pdf_fields)
                     st.metric(ftype, count)
@@ -1809,120 +1691,17 @@ def main():
             # Database mapping coverage
             st.subheader("🗄️ Database Mapping Coverage")
             db_coverage = {
-                'Customer Data': 0,
-                'Beneficiary Data': 0,
-                'Attorney Data': 0,
-                'LCA Data': 0,
-                'Other Data': 0
+                'Customer Data': len(st.session_state.get('customer_data', {})),
+                'Beneficiary Data': len(st.session_state.get('beneficiary_data', {})),
+                'Attorney Data': len(st.session_state.get('attorney_data', {})),
+                'LCA Data': len(st.session_state.get('lca_data', {})),
+                'Case Data': len(st.session_state.get('case_data', {}))
             }
-            
-            for mapping in st.session_state.mapped_fields.values():
-                if 'customer' in mapping:
-                    db_coverage['Customer Data'] += 1
-                elif 'beneficiary' in mapping:
-                    db_coverage['Beneficiary Data'] += 1
-                elif 'attorney' in mapping:
-                    db_coverage['Attorney Data'] += 1
-                elif 'lca' in mapping:
-                    db_coverage['LCA Data'] += 1
-                else:
-                    db_coverage['Other Data'] += 1
             
             cols = st.columns(len(db_coverage))
             for idx, (category, count) in enumerate(db_coverage.items()):
                 with cols[idx]:
                     st.metric(category, count)
-            
-            # Required fields analysis
-            st.subheader("⚠️ Required Fields Analysis")
-            required_fields = [f for f in st.session_state.pdf_fields if f.get('required')]
-            required_mapped = sum(1 for f in required_fields if f['name'] in st.session_state.mapped_fields)
-            required_questionnaire = sum(1 for f in required_fields if f['name'] in st.session_state.questionnaire_fields)
-            required_unmapped = len(required_fields) - required_mapped - required_questionnaire
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total Required", len(required_fields))
-            with col2:
-                st.metric("Mapped", required_mapped)
-            with col3:
-                st.metric("Unmapped", required_unmapped)
-            
-            if required_unmapped > 0:
-                st.warning(f"⚠️ {required_unmapped} required fields are not mapped!")
-                with st.expander("Show unmapped required fields"):
-                    for field in required_fields:
-                        if (field['name'] not in st.session_state.mapped_fields and 
-                            field['name'] not in st.session_state.questionnaire_fields):
-                            st.write(f"- {field['name']} ({field['type']})")
-
-def generate_mapping_report() -> str:
-    """Generate a detailed mapping report"""
-    report = f"""# USCIS Form Mapping Report
-
-## Form Information
-- **Form Type**: {st.session_state.form_type or 'Unknown'}
-- **Form Name**: {st.session_state.form_name or 'Unknown'}
-- **Generated**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-## Summary Statistics
-- **Total Fields**: {len(st.session_state.pdf_fields)}
-- **Mapped Fields**: {len(st.session_state.mapped_fields)}
-- **Questionnaire Fields**: {len(st.session_state.questionnaire_fields)}
-- **Removed Fields**: {len(st.session_state.removed_fields)}
-- **Unmapped Fields**: {len(st.session_state.pdf_fields) - len(st.session_state.mapped_fields) - len(st.session_state.questionnaire_fields) - len(st.session_state.removed_fields)}
-
-## Field Mappings by Part
-
-"""
-    
-    for part_name, part_fields in st.session_state.form_parts.items():
-        report += f"### {part_name}\n\n"
-        
-        if part_fields:
-            report += "| Field Name | Type | Status | Mapping | Confidence |\n"
-            report += "|------------|------|--------|---------|------------|\n"
-            
-            for field in part_fields:
-                field_name = field['name']
-                field_type = field['type']
-                
-                if field_name in st.session_state.mapped_fields:
-                    status = "Mapped"
-                    mapping = st.session_state.mapped_fields[field_name].split(':')[0]
-                elif field_name in st.session_state.questionnaire_fields:
-                    status = "Questionnaire"
-                    mapping = "N/A"
-                elif field_name in st.session_state.removed_fields:
-                    status = "Removed"
-                    mapping = "N/A"
-                else:
-                    status = "Unmapped"
-                    mapping = st.session_state.mapping_suggestions.get(field_name, {}).get('mapping', 'No suggestion')
-                
-                confidence = ""
-                if field_name in st.session_state.mapping_suggestions:
-                    conf = st.session_state.mapping_suggestions[field_name]['confidence']
-                    confidence = f"{conf:.0%}"
-                
-                report += f"| {field_name} | {field_type} | {status} | {mapping} | {confidence} |\n"
-        else:
-            report += "_No fields in this part_\n"
-        
-        report += "\n"
-    
-    # Add questionnaire configuration
-    if st.session_state.questionnaire_fields:
-        report += "## Questionnaire Configuration\n\n"
-        for field_key, config in st.session_state.questionnaire_fields.items():
-            report += f"- **{config['label']}**\n"
-            report += f"  - Type: {config['type']}\n"
-            report += f"  - Required: {config.get('required', False)}\n"
-            if config.get('options'):
-                report += f"  - Options: {config['options'].replace(chr(10), ', ')}\n"
-            report += "\n"
-    
-    return report
 
 # Run the application
 if __name__ == "__main__":
