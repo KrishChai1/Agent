@@ -8,3 +8,5 @@ reportlab
 pdfplumber
 fillpdf
 pdfrw
+PyMuPDF
+pyyaml
