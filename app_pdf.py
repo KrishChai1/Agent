@@ -100,6 +100,7 @@ def init_session_state():
         'pdf_fields': [],
         'mapped_fields': {},
         'questionnaire_fields': {},
+        'questionnaire_controls': [],  # New: For JSON-like questionnaire structure
         'conditional_fields': {},
         'default_fields': {},
         'field_groups': {},
@@ -757,9 +758,16 @@ def generate_enhanced_typescript(
     
     # Process mapped fields
     for field_name, mapping in mapped_fields.items():
+        # Handle mapping with type format (e.g., "customer.name:TextBox")
+        if ':' in mapping:
+            mapping_path, field_type = mapping.split(':', 1)
+        else:
+            mapping_path = mapping
+            field_type = determine_field_type(field_name)
+        
         field_info = {
-            'mapping': mapping,
-            'type': determine_field_type(field_name),
+            'mapping': mapping_path,
+            'type': field_type,
             'validation': validation_rules.get(field_name, ''),
             'required': any(f['name'] == field_name and f.get('required', False) 
                           for f in st.session_state.pdf_fields)
@@ -768,7 +776,7 @@ def generate_enhanced_typescript(
         # Determine category
         category = 'other'
         for cat in categories.keys():
-            if mapping.startswith(f'{cat}.'):
+            if mapping_path.startswith(f'{cat}.'):
                 category = cat
                 break
         
@@ -926,6 +934,7 @@ def export_mapping_configuration(form_name: str) -> str:
         "pdfFields": st.session_state.pdf_fields,
         "mappedFields": st.session_state.mapped_fields,
         "questionnaireFields": st.session_state.questionnaire_fields,
+        "questionnaire_controls": st.session_state.questionnaire_controls,  # Add this
         "conditionalFields": st.session_state.conditional_fields,
         "defaultFields": st.session_state.default_fields,
         "validationRules": st.session_state.validation_rules,
@@ -957,6 +966,7 @@ def import_mapping_configuration(config_json: str):
         # Import configuration
         st.session_state.mapped_fields = config.get('mappedFields', {})
         st.session_state.questionnaire_fields = config.get('questionnaireFields', {})
+        st.session_state.questionnaire_controls = config.get('questionnaire_controls', [])  # Add this
         st.session_state.conditional_fields = config.get('conditionalFields', {})
         st.session_state.default_fields = config.get('defaultFields', {})
         st.session_state.validation_rules = config.get('validationRules', {})
@@ -1029,7 +1039,12 @@ def display_mapping_visualization():
             field_name = field['name']
             if field_name in st.session_state.mapped_fields:
                 mapping = st.session_state.mapped_fields[field_name]
-                category = mapping.split('.')[0]
+                # Handle mapping with type format
+                if ':' in mapping:
+                    mapping_path, _ = mapping.split(':', 1)
+                else:
+                    mapping_path = mapping
+                category = mapping_path.split('.')[0]
                 field_categories[category].append(field_name)
             elif field_name in st.session_state.questionnaire_fields:
                 field_categories['questionnaire'].append(field_name)
@@ -1050,6 +1065,151 @@ def display_mapping_visualization():
                         mapping = st.session_state.mapped_fields.get(field, '')
                         st.markdown(f'<div class="field-mapped">✅ {field} → {mapping}</div>', 
                                   unsafe_allow_html=True)
+
+# Helper function for field mapping display (moved before it's used)
+def display_field_mapping_row(field):
+    """Display a single field mapping row"""
+    field_name = field['name']
+    field_type = field['type']
+    
+    # Create unique key for this field
+    field_key = hashlib.md5(field_name.encode()).hexdigest()[:8]
+    
+    col1, col2, col3, col4, col5 = st.columns([3, 3, 1, 1, 1])
+    
+    with col1:
+        # Field name and type
+        st.text_input(
+            "Field",
+            value=f"{field_name} ({field_type})",
+            disabled=True,
+            key=f"display_{field_key}"
+        )
+    
+    with col2:
+        # Mapping input
+        current_mapping = st.session_state.mapped_fields.get(field_name, '')
+        
+        # Suggest mapping if none exists
+        if not current_mapping and field_name not in st.session_state.questionnaire_fields:
+            suggested, confidence = auto_map_field_enhanced(
+                field_name,
+                st.session_state.get('extracted_text', '')
+            )
+            placeholder = suggested if suggested else "e.g., customer.field_name"
+        else:
+            placeholder = "e.g., customer.field_name"
+        
+        mapping = st.text_input(
+            "Mapping",
+            value=current_mapping,
+            key=f"map_{field_key}",
+            placeholder=placeholder,
+            disabled=field_name in st.session_state.questionnaire_fields
+        )
+        
+        # Update mapping if changed
+        if mapping != current_mapping and field_name not in st.session_state.questionnaire_fields:
+            if mapping:
+                st.session_state.mapped_fields[field_name] = mapping
+            elif field_name in st.session_state.mapped_fields:
+                del st.session_state.mapped_fields[field_name]
+    
+    with col3:
+        # Quick actions
+        if field_name not in st.session_state.questionnaire_fields:
+            if st.button("❓", key=f"quest_{field_key}",
+                       help="Move to questionnaire", use_container_width=True):
+                st.session_state.questionnaire_fields[field_name] = {
+                    'type': field_type,
+                    'required': field.get('required', False),
+                    'options': '',
+                    'validation': ''
+                }
+                if field_name in st.session_state.mapped_fields:
+                    del st.session_state.mapped_fields[field_name]
+                st.rerun()
+    
+    with col4:
+        # Validation indicator
+        if field_name in st.session_state.validation_rules:
+            st.button("✓", key=f"val_ind_{field_key}",
+                    help=f"Validation: {st.session_state.validation_rules[field_name]}",
+                    use_container_width=True, disabled=True)
+        else:
+            if st.button("＋", key=f"add_val_{field_key}",
+                       help="Add validation", use_container_width=True):
+                suggested = suggest_validation_rule(field_name, field_type)
+                if suggested:
+                    st.session_state.validation_rules[field_name] = suggested
+                    st.rerun()
+    
+    with col5:
+        # Status indicator
+        if field_name in st.session_state.mapped_fields:
+            st.success("✅")
+        elif field_name in st.session_state.questionnaire_fields:
+            st.info("❓")
+        else:
+            st.error("❌")
+
+# Function to convert questionnaire fields to JSON control format
+def generate_questionnaire_json(questionnaire_fields: Dict) -> str:
+    """Generate JSON controls array from questionnaire fields"""
+    controls = []
+    
+    for idx, (field_name, field_info) in enumerate(questionnaire_fields.items()):
+        control = {
+            "name": re.sub(r'[^\w]', '_', field_name),
+            "label": field_name,
+            "type": field_info.get('type', 'text').lower()
+        }
+        
+        # Map field types to control types
+        type_mapping = {
+            'TextBox': 'text',
+            'CheckBox': 'checkbox',
+            'RadioButton': 'radio',
+            'DropDown': 'select',
+            'Date': 'date',
+            'TextArea': 'textarea',
+            'Currency': 'text',
+            'colorSwitch': 'colorSwitch',
+            'title': 'title'
+        }
+        
+        control['type'] = type_mapping.get(field_info.get('type', 'TextBox'), 'text')
+        
+        # Add validators
+        validators = {}
+        if field_info.get('required', False):
+            validators['required'] = True
+        if field_info.get('validation'):
+            validators['pattern'] = field_info.get('validation')
+        
+        control['validators'] = validators
+        
+        # Add style
+        control['style'] = {"col": "12"}
+        
+        # Add options for select/radio
+        if control['type'] in ['select', 'radio'] and field_info.get('options'):
+            options = field_info.get('options', '').split('\n')
+            if control['type'] == 'radio':
+                # For radio buttons, create separate controls
+                for opt_idx, option in enumerate(options):
+                    radio_control = control.copy()
+                    radio_control['value'] = str(opt_idx + 1)
+                    radio_control['label'] = option
+                    radio_control['id'] = f"{control['name']}_{opt_idx}"
+                    controls.append(radio_control)
+                continue
+            else:
+                control['options'] = options
+        
+        controls.append(control)
+    
+    return json.dumps({"controls": controls}, indent=2)
 
 # Main UI
 st.title("📄 Enhanced PDF Form Automation System")
@@ -1431,6 +1591,39 @@ elif step == "2. Field Mapping":
 elif step == "3. Questionnaire Setup":
     st.header("❓ Step 3: Questionnaire Setup")
     
+    # Toggle between old and new questionnaire format
+    use_json_format = st.checkbox("Use JSON Control Format (like g28.json)", value=True)
+    
+    if use_json_format:
+        st.info("Using JSON control format for questionnaire. Fields will be structured like the g28.json example.")
+        
+        # Import JSON controls
+        with st.expander("📥 Import JSON Controls", expanded=False):
+            json_file = st.file_uploader("Upload JSON controls file", type="json")
+            if json_file:
+                if st.button("Import Controls"):
+                    try:
+                        controls_data = json.loads(json_file.read().decode('utf-8'))
+                        if 'controls' in controls_data:
+                            st.session_state.questionnaire_controls = controls_data['controls']
+                            # Convert to questionnaire_fields format for compatibility
+                            for control in controls_data['controls']:
+                                field_name = control.get('label', control.get('name'))
+                                st.session_state.questionnaire_fields[field_name] = {
+                                    'type': control.get('type', 'text'),
+                                    'required': control.get('validators', {}).get('required', False),
+                                    'validation': control.get('validators', {}).get('pattern', ''),
+                                    'options': '\n'.join(control.get('options', [])) if control.get('options') else '',
+                                    'value': control.get('value', ''),
+                                    'style': control.get('style', {"col": "12"}),
+                                    'className': control.get('className', ''),
+                                    'id': control.get('id', control.get('name'))
+                                }
+                            st.success(f"Imported {len(controls_data['controls'])} controls!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Error importing JSON: {str(e)}")
+    
     # Add new questionnaire field
     with st.expander("➕ Add New Questionnaire Field", expanded=True):
         col1, col2, col3 = st.columns([3, 2, 1])
@@ -1442,10 +1635,13 @@ elif step == "3. Questionnaire Setup":
             )
         
         with col2:
+            field_types = ["text", "checkbox", "radio", "select", "date", 
+                          "textarea", "colorSwitch", "title"] if use_json_format else \
+                         ["TextBox", "CheckBox", "RadioButton", "DropDown", "Date", 
+                          "TextArea", "MultipleBox", "Currency"]
             new_q_type = st.selectbox(
                 "Field Type",
-                ["TextBox", "CheckBox", "RadioButton", "DropDown", "Date", 
-                 "TextArea", "MultipleBox", "Currency"]
+                field_types
             )
         
         with col3:
@@ -1458,10 +1654,23 @@ elif step == "3. Questionnaire Setup":
                         'required': new_q_required,
                         'options': '',
                         'validation': '',
-                        'description': ''
+                        'description': '',
+                        'style': {"col": "12"}
                     }
                     st.success(f"Added question: {new_q_name}")
                     st.rerun()
+    
+    # Export questionnaire as JSON
+    if st.session_state.questionnaire_fields and use_json_format:
+        if st.button("📤 Export as JSON Controls", type="primary", use_container_width=True):
+            json_controls = generate_questionnaire_json(st.session_state.questionnaire_fields)
+            st.download_button(
+                label="💾 Download JSON Controls",
+                data=json_controls,
+                file_name=f"{st.session_state.get('form_name', 'form')}_controls.json",
+                mime="application/json",
+                use_container_width=True
+            )
     
     # Questionnaire builder
     if st.session_state.questionnaire_fields:
@@ -1493,14 +1702,16 @@ elif step == "3. Questionnaire Setup":
                 
                 with col1:
                     # Field properties
+                    field_types = ["text", "checkbox", "radio", "select", "date", 
+                                  "textarea", "colorSwitch", "title"] if use_json_format else \
+                                 ["TextBox", "CheckBox", "RadioButton", "DropDown", 
+                                  "Date", "TextArea", "MultipleBox", "Currency"]
+                    
                     field_info['type'] = st.selectbox(
                         "Field Type",
-                        ["TextBox", "CheckBox", "RadioButton", "DropDown", 
-                         "Date", "TextArea", "MultipleBox", "Currency"],
-                        index=["TextBox", "CheckBox", "RadioButton", "DropDown", 
-                               "Date", "TextArea", "MultipleBox", "Currency"].index(
-                            field_info.get('type', 'TextBox')
-                        ),
+                        field_types,
+                        index=field_types.index(field_info.get('type', field_types[0])) 
+                              if field_info.get('type', field_types[0]) in field_types else 0,
                         key=f"q_type_{idx}_{field_name}"
                     )
                     
@@ -1511,7 +1722,7 @@ elif step == "3. Questionnaire Setup":
                     )
                     
                     # Type-specific options
-                    if field_info['type'] in ["RadioButton", "DropDown", "CheckBox"]:
+                    if field_info['type'] in ["radio", "select", "checkbox", "RadioButton", "DropDown", "CheckBox"]:
                         field_info['options'] = st.text_area(
                             "Options (one per line)",
                             value=field_info.get('options', ''),
@@ -1528,6 +1739,26 @@ elif step == "3. Questionnaire Setup":
                             key=f"q_sub_{idx}_{field_name}",
                             placeholder="First Name\nLast Name\nMiddle Name"
                         )
+                    
+                    # Style configuration for JSON format
+                    if use_json_format:
+                        col_style1, col_style2 = st.columns(2)
+                        with col_style1:
+                            col_width = st.selectbox(
+                                "Column Width",
+                                ["12", "6", "4", "3", "8", "9"],
+                                index=0,
+                                key=f"q_col_{idx}_{field_name}"
+                            )
+                            field_info['style'] = {"col": col_width}
+                        
+                        with col_style2:
+                            field_info['className'] = st.text_input(
+                                "CSS Class",
+                                value=field_info.get('className', ''),
+                                key=f"q_class_{idx}_{field_name}",
+                                placeholder="pt-15 custom-control-success"
+                            )
                     
                     # Validation rule
                     col_val1, col_val2 = st.columns([3, 1])
@@ -2064,7 +2295,7 @@ elif step == "5. Generate Output":
                     
                     # Check for empty questionnaire options
                     for field_name, field_info in st.session_state.questionnaire_fields.items():
-                        if field_info['type'] in ['RadioButton', 'DropDown'] and not field_info.get('options'):
+                        if field_info['type'] in ['RadioButton', 'DropDown', 'radio', 'select'] and not field_info.get('options'):
                             issues.append(f"⚠️ {field_name} is missing options")
                     
                     # Check conditional fields
@@ -2352,93 +2583,6 @@ elif step == "6. Mapping Overview":
             else:
                 st.info("No results found")
 
-# Helper function for field mapping display
-def display_field_mapping_row(field):
-    """Display a single field mapping row"""
-    field_name = field['name']
-    field_type = field['type']
-    
-    # Create unique key for this field
-    field_key = hashlib.md5(field_name.encode()).hexdigest()[:8]
-    
-    col1, col2, col3, col4, col5 = st.columns([3, 3, 1, 1, 1])
-    
-    with col1:
-        # Field name and type
-        st.text_input(
-            "Field",
-            value=f"{field_name} ({field_type})",
-            disabled=True,
-            key=f"display_{field_key}"
-        )
-    
-    with col2:
-        # Mapping input
-        current_mapping = st.session_state.mapped_fields.get(field_name, '')
-        
-        # Suggest mapping if none exists
-        if not current_mapping and field_name not in st.session_state.questionnaire_fields:
-            suggested, confidence = auto_map_field_enhanced(
-                field_name,
-                st.session_state.get('extracted_text', '')
-            )
-            placeholder = suggested if suggested else "e.g., customer.field_name"
-        else:
-            placeholder = "e.g., customer.field_name"
-        
-        mapping = st.text_input(
-            "Mapping",
-            value=current_mapping,
-            key=f"map_{field_key}",
-            placeholder=placeholder,
-            disabled=field_name in st.session_state.questionnaire_fields
-        )
-        
-        # Update mapping if changed
-        if mapping != current_mapping and field_name not in st.session_state.questionnaire_fields:
-            if mapping:
-                st.session_state.mapped_fields[field_name] = mapping
-            elif field_name in st.session_state.mapped_fields:
-                del st.session_state.mapped_fields[field_name]
-    
-    with col3:
-        # Quick actions
-        if field_name not in st.session_state.questionnaire_fields:
-            if st.button("❓", key=f"quest_{field_key}",
-                       help="Move to questionnaire", use_container_width=True):
-                st.session_state.questionnaire_fields[field_name] = {
-                    'type': field_type,
-                    'required': field.get('required', False),
-                    'options': '',
-                    'validation': ''
-                }
-                if field_name in st.session_state.mapped_fields:
-                    del st.session_state.mapped_fields[field_name]
-                st.rerun()
-    
-    with col4:
-        # Validation indicator
-        if field_name in st.session_state.validation_rules:
-            st.button("✓", key=f"val_ind_{field_key}",
-                    help=f"Validation: {st.session_state.validation_rules[field_name]}",
-                    use_container_width=True, disabled=True)
-        else:
-            if st.button("＋", key=f"add_val_{field_key}",
-                       help="Add validation", use_container_width=True):
-                suggested = suggest_validation_rule(field_name, field_type)
-                if suggested:
-                    st.session_state.validation_rules[field_name] = suggested
-                    st.rerun()
-    
-    with col5:
-        # Status indicator
-        if field_name in st.session_state.mapped_fields:
-            st.success("✅")
-        elif field_name in st.session_state.questionnaire_fields:
-            st.info("❓")
-        else:
-            st.error("❌")
-
 # Footer
 st.markdown("---")
 with st.expander("💡 Help & Documentation", expanded=False):
@@ -2451,6 +2595,7 @@ with st.expander("💡 Help & Documentation", expanded=False):
     - **Smart Field Extraction**: Multiple methods to extract fields from PDFs
     - **Intelligent Auto-Mapping**: Pattern-based field mapping with confidence scoring
     - **Questionnaire Builder**: Create dynamic forms with validation
+    - **JSON Control Format**: Support for g28.json-style questionnaire controls
     - **Conditional Logic**: Define fields that appear based on conditions
     - **Field Groups**: Organize related fields together
     - **Validation Rules**: Regex-based field validation
@@ -2470,6 +2615,7 @@ with st.expander("💡 Help & Documentation", expanded=False):
     - Add validation for data integrity
     - Test conditional logic thoroughly
     - Export configurations for reuse
+    - Use JSON control format for better questionnaire structure
     
     #### 🔧 Common Mappings:
     - Customer: `customer.customer_name`, `customer.customer_tax_id`
