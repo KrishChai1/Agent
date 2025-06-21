@@ -621,7 +621,7 @@ def main():
         if hasattr(st, 'secrets') and "OPENAI_API_KEY" in st.secrets:
             st.markdown("""
             <div class="success-box">
-                <strong>[OK] API Status:</strong> OpenAI connectivity confirmed.
+                <strong>[OK] API Status:</strong>  connectivity confirmed.
             </div>
             """, unsafe_allow_html=True)
         else:
