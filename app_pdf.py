@@ -1571,7 +1571,7 @@ if __name__ == "__main__":
     main()
 ,
         # Extract anything that looks like Part/Item pattern
-        r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]',
+        r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]'
     ]
     
     cleaned_name = raw_field_name
