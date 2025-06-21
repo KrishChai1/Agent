@@ -760,17 +760,34 @@ def determine_field_type_enhanced(field_name: str) -> str:
 
 # Enhanced field name cleaning for USCIS forms
 def clean_uscis_field_name(raw_field_name: str) -> str:
-    """Clean and standardize USCIS PDF field names"""
-    # Common USCIS field name patterns
+    """
+    Clean and standardize USCIS PDF field names by extracting meaningful parts
+    from common form naming patterns.
+
+    Parameters:
+        raw_field_name (str): The raw field name from the USCIS form.
+
+    Returns:
+        str: Cleaned and simplified field name.
+    """
     patterns = [
         # G-28 style: form[0].#subform[0].Pt1Line1a_FamilyName[0]
         r'form\[\d+\]\.#?subform\[\d+\]\.(.*?)\[\d+\]',
         # I-129 style: topmostSubform[0].Page1[0].Part1_Item2_CompanyName[0]
         r'topmostSubform\[\d+\]\.Page\d+\[\d+\]\.(.*?)\[\d+\]',
-        # Alternative: Form1[0].Page1[0].Part1_1a_LastName[0]
+        # Alternate style: Form1[0].Page1[0].Part1_1a_LastName[0]
         r'Form\d*\[\d+\]\.Page\d+\[\d+\]\.(.*?)\[\d+\]',
-        # Simple pattern: just the field name part
-        r'.*\.(P(?:art|t)\d+.*?)
+        # Simple fallback: capture anything after a known dot part
+        r'.*\.(P(?:art|t)\d+.*?)'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, raw_field_name)
+        if match:
+            return match.group(1)
+
+    # Return original if no pattern matched
+    return raw_field_name
 
 def organize_fields_by_parts_enhanced(fields: List[Dict], form_type: Optional[str]) -> OrderedDict:
     """Enhanced organization of fields by form parts using field name analysis"""
