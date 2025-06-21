@@ -187,92 +187,78 @@ ENHANCED_MAPPING_PATTERNS = {
         'customer_name': [
             r'(?:petitioner|company|employer|organization|legal\s*business)\s*name',
             r'name\s*of\s*(?:petitioner|employer|company)',
-            r'item\s*2(?:\s|$)',  # I-129 Part 1 Item 2
-            r'legal\s*business\s*name'
+            r'(?:P|Part)1.*Item2(?:_|\.)?(?:Company|Petitioner)?Name',  # I-129 Part 1 Item 2
+            r'legal\s*business\s*name',
+            r'entity.*name'
         ],
         'customer_tax_id': [
             r'(?:fein|ein|tax\s*id)',
             r'employer.*identification',
             r'federal.*employer.*identification',
-            r'item\s*5(?:\s|$).*fein',  # I-129 Part 1 Item 5
-            r'item\s*12(?:\s|$).*fein'  # LCA Section C Item 12
+            r'(?:P|Part)1.*Item5(?:_|\.)?FEIN',  # I-129 Part 1 Item 5
+            r'(?:P|Part)1.*Item4(?:_|\.)?FEIN'   # I-140 Part 1 Item 4
         ],
         'signatory_name': [
             r'in\s*care\s*of',
             r'signatory',
             r'authorized.*representative',
             r'contact.*person',
-            r'item\s*3(?:\s|$).*care'  # I-129 Part 1 Item 3
+            r'(?:P|Part)1.*Item3(?:_|\.)?InCareOf'  # I-129 Part 1 Item 3
         ],
         'signatory_first_name': [
             r'(?:signatory|contact).*first.*name',
             r'first\s*name.*(?:signatory|contact)',
-            r'given\s*name.*(?:signatory|contact)'
+            r'given\s*name.*(?:signatory|contact)',
+            r'(?:P|Part)1.*Item3a(?:_|\.)?First'
         ],
         'signatory_last_name': [
             r'(?:signatory|contact).*last.*name',
             r'last\s*name.*(?:signatory|contact)',
-            r'family\s*name.*(?:signatory|contact)'
+            r'family\s*name.*(?:signatory|contact)',
+            r'(?:P|Part)1.*Item3a(?:_|\.)?Last'
         ],
         'signatory_job_title': [
             r'(?:title|job\s*title|position)',
             r'contact.*job\s*title',
-            r'item\s*4(?:\s|$).*title'  # LCA Section D Item 4
+            r'(?:P|Part)1.*Item7b(?:_|\.)?Title'  # G-28 Part 3 Item 7b
         ],
         'signatory_work_phone': [
             r'(?:daytime\s*)?phone',
             r'telephone.*number',
-            r'item\s*4(?:\s|$).*phone',  # I-129 Part 1 Item 4
-            r'item\s*10(?:\s|$).*phone'  # LCA Section C Item 10
+            r'(?:P|Part)1.*Item4(?:_|\.)?Phone',  # I-129 Part 1 Item 4
+            r'(?:P|Part)1.*Item10(?:_|\.)?Phone'  # G-28 Part 3 Item 10
         ],
         'signatory_email_id': [
             r'email',
             r'e-mail',
-            r'item\s*4(?:\s|$).*email',  # I-129 Part 1 Item 4
-            r'item\s*14(?:\s|$).*email'  # LCA Section D Item 14
+            r'(?:P|Part)1.*Item4(?:_|\.)?Email',  # I-129 Part 1 Item 4
+            r'(?:P|Part)1.*Item12(?:_|\.)?Email'  # G-28 Part 3 Item 12
         ],
         'address_street': [
             r'(?:street|address\s*1)',
             r'petitioner.*address',
             r'company.*address',
             r'employer.*address',
-            r'item\s*3(?:\s|$).*street'  # I-129 Part 1 Item 3
+            r'(?:P|Part)1.*Item3(?:_|\.)?Street',  # I-129 Part 1 Item 3
+            r'(?:P|Part)1.*Item13a(?:_|\.)?Street'  # G-28 Part 3 Item 13a
         ],
         'address_city': [
             r'city',
             r'town',
-            r'item\s*3(?:\s|$).*city'
+            r'(?:P|Part)1.*Item3(?:_|\.)?City',
+            r'(?:P|Part)1.*Item13c(?:_|\.)?City'
         ],
         'address_state': [
             r'state',
             r'province',
-            r'item\s*3(?:\s|$).*state'
+            r'(?:P|Part)1.*Item3(?:_|\.)?State',
+            r'(?:P|Part)1.*Item13d(?:_|\.)?State'
         ],
         'address_zip': [
             r'zip.*code',
             r'postal.*code',
-            r'item\s*3(?:\s|$).*zip'
-        ],
-        'customer_naics_code': [
-            r'naics.*code',
-            r'industry.*code',
-            r'item\s*13(?:\s|$).*naics'  # LCA Section C Item 13
-        ],
-        'customer_total_employees': [
-            r'number.*employees',
-            r'total.*employees',
-            r'#.*employees'
-        ],
-        'h1_dependent_employer': [
-            r'h.*1.*b.*dependent',
-            r'dependent.*employer'
-        ],
-        'willful_violator': [
-            r'willful.*violator'
-        ],
-        'nonprofit_research_organization': [
-            r'nonprofit.*research',
-            r'item\s*6(?:\s|$)'  # I-129 Part 1 Item 6
+            r'(?:P|Part)1.*Item3(?:_|\.)?Zip',
+            r'(?:P|Part)1.*Item13e(?:_|\.)?Zip'
         ]
     },
     
@@ -281,66 +267,83 @@ ENHANCED_MAPPING_PATTERNS = {
         'beneficiaryFirstName': [
             r'(?:given|first)\s*name',
             r'beneficiary.*first',
-            r'item\s*2(?:\s|$).*first'  # I-129 Part 3 Item 2
+            r'(?:P|Part)3.*Item2(?:_|\.)?FirstName',  # I-129 Part 3 Item 2
+            r'(?:P|Part)1.*Item1b(?:_|\.)?FirstName',  # I-539 Part 1 Item 1b
+            r'(?:P|Part)3.*Item1b(?:_|\.)?FirstName'   # I-140 Part 3 Item 1b
         ],
         'beneficiaryLastName': [
             r'(?:family|last)\s*name',
             r'surname',
             r'beneficiary.*last',
-            r'item\s*2(?:\s|$).*last'  # I-129 Part 3 Item 2
+            r'(?:P|Part)3.*Item2(?:_|\.)?LastName',   # I-129 Part 3 Item 2
+            r'(?:P|Part)1.*Item1a(?:_|\.)?LastName',   # I-539 Part 1 Item 1a
+            r'(?:P|Part)3.*Item1a(?:_|\.)?LastName'    # I-140 Part 3 Item 1a
         ],
         'beneficiaryMiddleName': [
             r'middle.*name',
-            r'middle.*initial'
+            r'middle.*initial',
+            r'(?:P|Part)1.*Item1c(?:_|\.)?MiddleName',
+            r'(?:P|Part)3.*Item1c(?:_|\.)?MiddleName'
         ],
         'beneficiaryDateOfBirth': [
             r'date.*birth',
             r'birth.*date',
             r'd\.?o\.?b',
-            r'item\s*5(?:\s|$).*dob'  # I-129 Part 3 Item 5
+            r'(?:P|Part)3.*Item5(?:_|\.)?DOB',        # I-129 Part 3 Item 5
+            r'(?:P|Part)1.*Item8(?:_|\.)?DOB',        # I-539 Part 1 Item 8
+            r'(?:P|Part)3.*Item3(?:_|\.)?DOB'         # I-140 Part 3 Item 3
         ],
         'alien_number': [
             r'alien.*number',
             r'a[\-\s]?number',
             r'uscis.*number',
-            r'item\s*5(?:\s|$).*alien'  # I-129 Part 3 Item 5
+            r'(?:P|Part)3.*Item5(?:_|\.)?AlienNumber',  # I-129 Part 3 Item 5
+            r'(?:P|Part)1.*Item2(?:_|\.)?AlienNumber',  # I-539 Part 1 Item 2
+            r'(?:P|Part)3.*Item8(?:_|\.)?AlienNumber'   # I-140 Part 3 Item 8
         ],
         'beneficiarySsn': [
             r'social.*security',
             r'ssn',
             r'ss.*number',
-            r'item\s*5(?:\s|$).*ssn'  # I-129 Part 3 Item 5
+            r'(?:P|Part)3.*Item5(?:_|\.)?SSN',         # I-129 Part 3 Item 5
+            r'(?:P|Part)1.*Item9(?:_|\.)?SSN',         # I-539 Part 1 Item 9
+            r'(?:P|Part)3.*Item9(?:_|\.)?SSN'          # I-140 Part 3 Item 9
         ],
         'beneficiaryGender': [
             r'gender',
             r'sex',
-            r'item\s*5(?:\s|$).*gender'  # I-129 Part 3 Item 5
+            r'(?:P|Part)3.*Item5(?:_|\.)?Gender'       # I-129 Part 3 Item 5
         ],
         'beneficiaryCountryOfBirth': [
             r'country.*birth',
             r'birth.*country',
-            r'item\s*4(?:\s|$).*country'  # I-129 Part 3 Item 4
+            r'(?:P|Part)3.*Item4(?:_|\.)?CountryOfBirth',  # I-129 Part 3 Item 4
+            r'(?:P|Part)1.*Item6(?:_|\.)?CountryOfBirth',  # I-539 Part 1 Item 6
+            r'(?:P|Part)3.*Item6(?:_|\.)?CountryOfBirth'   # I-140 Part 3 Item 6
         ],
         'beneficiaryCitizenOfCountry': [
             r'citizenship',
             r'nationality',
             r'citizen.*country',
-            r'item\s*4(?:\s|$).*citizenship'  # I-129 Part 3 Item 4
+            r'(?:P|Part)3.*Item4(?:_|\.)?Citizenship',     # I-129 Part 3 Item 4
+            r'(?:P|Part)1.*Item7(?:_|\.)?Citizenship'      # I-539 Part 1 Item 7
         ],
         'i94Number': [
             r'i[\-\s]?94.*number',
             r'arrival.*departure.*record',
-            r'item\s*6(?:\s|$).*i94'  # I-129 Part 3 Item 6
+            r'(?:P|Part)3.*Item6(?:_|\.)?I94',             # I-129 Part 3 Item 6
+            r'(?:P|Part)1.*Item11(?:_|\.)?I94'             # I-539 Part 1 Item 11
         ],
         'passportNumber': [
             r'passport.*number',
             r'travel.*document.*number',
-            r'item\s*6(?:\s|$).*passport'  # I-129 Part 3 Item 6
+            r'(?:P|Part)3.*Item6(?:_|\.)?Passport',        # I-129 Part 3 Item 6
+            r'(?:P|Part)1.*Item12(?:_|\.)?Passport'        # I-539 Part 1 Item 12
         ],
         'visaStatus': [
             r'current.*status',
             r'nonimmigrant.*status',
-            r'item\s*15a'  # I-539 Part 1 Item 15a
+            r'(?:P|Part)1.*Item15a(?:_|\.)?Status'         # I-539 Part 1 Item 15a
         ]
     },
     
@@ -350,35 +353,44 @@ ENHANCED_MAPPING_PATTERNS = {
             r'attorney.*last',
             r'preparer.*last',
             r'representative.*last',
-            r'item\s*1(?:\s|$).*last'  # I-129 Part 8 Item 1
+            r'(?:P|Part)8.*Item1(?:_|\.)?LastName',     # I-129 Part 8 Item 1
+            r'(?:P|Part)1.*Item2a(?:_|\.)?FamilyName',  # G-28 Part 1 Item 2a
+            r'(?:Pt|P)1Line1a(?:_|\.)?FamilyName'       # G-28 simplified format
         ],
         'firstName': [
             r'attorney.*first',
             r'preparer.*first',
             r'representative.*first',
-            r'item\s*1(?:\s|$).*first'  # I-129 Part 8 Item 1
+            r'(?:P|Part)8.*Item1(?:_|\.)?FirstName',    # I-129 Part 8 Item 1
+            r'(?:P|Part)1.*Item2b(?:_|\.)?GivenName',   # G-28 Part 1 Item 2b
+            r'(?:Pt|P)1Line1b(?:_|\.)?GivenName'        # G-28 simplified format
         ],
         'stateBarNumber': [
             r'bar.*number',
             r'license.*number',
             r'state.*bar',
-            r'item\s*1b'  # G-28 Part 2 Item 1b
+            r'(?:P|Part)2.*Item1b(?:_|\.)?BarNumber',   # G-28 Part 2 Item 1b
+            r'(?:Pt|P)2Line1b(?:_|\.)?BarNumber'        # G-28 simplified format
         ],
         'lawFirmName': [
             r'firm.*name',
             r'law.*firm',
             r'organization.*name',
-            r'item\s*2(?:\s|$)'  # I-129 Part 8 Item 2
+            r'(?:P|Part)8.*Item2(?:_|\.)?Organization', # I-129 Part 8 Item 2
+            r'(?:P|Part)2.*Item1d(?:_|\.)?LawFirm',     # G-28 Part 2 Item 1d
+            r'(?:P|Part)1.*Item1d(?:_|\.)?LawFirm'      # G-28 Part 1 Item 1d
         ],
         'workPhone': [
             r'(?:attorney|preparer).*phone',
             r'daytime.*telephone',
-            r'item\s*4(?:\s|$).*phone'  # G-28 Part 1 Item 4
+            r'(?:P|Part)1.*Item4(?:_|\.)?DaytimePhone', # G-28 Part 1 Item 4
+            r'(?:Pt|P)1Line4(?:_|\.)?DaytimePhone'      # G-28 simplified format
         ],
         'emailAddress': [
             r'(?:attorney|preparer).*email',
             r'email.*address',
-            r'item\s*6(?:\s|$)'  # G-28 Part 1 Item 6
+            r'(?:P|Part)1.*Item6(?:_|\.)?Email',        # G-28 Part 1 Item 6
+            r'(?:Pt|P)1Line6(?:_|\.)?Email'             # G-28 simplified format
         ]
     },
     
@@ -389,42 +401,33 @@ ENHANCED_MAPPING_PATTERNS = {
             r'position',
             r'occupation',
             r'employment.*title',
-            r'item\s*1(?:\s|$)'  # I-129 Part 5 Item 1
+            r'(?:P|Part)5.*Item1(?:_|\.)?JobTitle'      # I-129 Part 5 Item 1
         ],
         'lcaNumber': [
             r'lca.*number',
             r'eta.*case',
             r'lca.*case.*#',
-            r'item\s*2(?:\s|$)'  # I-129 Part 5 Item 2
+            r'(?:P|Part)5.*Item2(?:_|\.)?LCANumber'     # I-129 Part 5 Item 2
         ],
         'start_date': [
             r'start.*date',
             r'begin.*date',
             r'employment.*start',
             r'from.*date',
-            r'item\s*11(?:\s|$).*from'  # I-129 Part 5 Item 11
+            r'(?:P|Part)5.*Item11(?:_|\.)?From'         # I-129 Part 5 Item 11
         ],
         'end_date': [
             r'end.*date',
             r'employment.*end',
             r'to.*date',
-            r'item\s*11(?:\s|$).*to'  # I-129 Part 5 Item 11
+            r'(?:P|Part)5.*Item11(?:_|\.)?To'           # I-129 Part 5 Item 11
         ],
         'gross_salary': [
             r'wage',
             r'salary',
             r'compensation',
             r'pay.*rate',
-            r'item\s*9(?:\s|$)'  # I-129 Part 5 Item 9
-        ],
-        'soc_onet_oes_code': [
-            r'soc.*code',
-            r'occupation.*code'
-        ],
-        'inhouseProject': [
-            r'third.*party.*location',
-            r'inhouse.*project',
-            r'item\s*5(?:\s|$)'  # I-129 Part 5 Item 5
+            r'(?:P|Part)5.*Item9(?:_|\.)?Salary'        # I-129 Part 5 Item 9
         ]
     },
     
@@ -434,12 +437,12 @@ ENHANCED_MAPPING_PATTERNS = {
             r'classification',
             r'visa.*type',
             r'petition.*type',
-            r'item\s*1(?:\s|$)'  # I-129 Part 2 Item 1
+            r'(?:P|Part)2.*Item1(?:_|\.)?Classification' # I-129 Part 2 Item 1
         ],
         'caseSubType': [
             r'basis.*classification',
             r'requested.*action',
-            r'item\s*2(?:\s|$)'  # I-129 Part 2 Item 2
+            r'(?:P|Part)2.*Item2(?:_|\.)?Basis'         # I-129 Part 2 Item 2
         ],
         'h1BPetitionType': [
             r'cap.*exempt',
@@ -649,6 +652,7 @@ def init_session_state():
         'show_mapped': True,
         'show_unmapped': True,
         'show_questionnaire': True,
+        'show_raw_names': False,
         'removed_fields': [],
         'processing_log': [],
         'attorney_fields': [],
@@ -1082,21 +1086,63 @@ def determine_questionnaire_type(field_type: str) -> str:
 
 def beautify_field_name(field_name: str) -> str:
     """Convert field name to human-readable label"""
-    # Remove form type prefix if present
-    name = re.sub(r'^[A-Z]-?\d+[A-Z]?_', '', field_name)
-    # Remove prefixes
-    name = re.sub(r'^(Part|Section|Item|Field|Q)\d+[_\.\s]*', '', name)
-    # Replace underscores
-    name = name.replace('_', ' ')
-    # Capitalize properly
-    words = name.split()
-    capitalized = []
-    for word in words:
-        if word.upper() in ['SSN', 'DOB', 'EIN', 'FEIN', 'LCA', 'US', 'USA', 'I94']:
-            capitalized.append(word.upper())
-        else:
-            capitalized.append(word.capitalize())
-    return ' '.join(capitalized).strip()
+    # Handle specific USCIS patterns
+    patterns = [
+        # P1Line1a_FamilyName -> Family Name
+        (r'(?:P|Part)(\d+)(?:Line|Item)(\d+[a-z]?)(?:_|\.)?(.+)', r'Part \1 Item \2 - \3'),
+        # Part1_Item2_CompanyName -> Company Name  
+        (r'Part(\d+)_Item(\d+[a-z]?)_(.+)', r'Part \1 Item \2 - \3'),
+        # Pt1Line1a_FamilyName -> Family Name
+        (r'Pt(\d+)Line(\d+[a-z]?)(?:_|\.)?(.+)', r'Part \1 Line \2 - \3'),
+        # Item2_FirstName -> First Name
+        (r'Item(\d+[a-z]?)_(.+)', r'Item \1 - \2'),
+        # Remove form type prefix
+        (r'^[A-Z]-?\d+[A-Z]?_', ''),
+        # Remove other prefixes
+        (r'^(Part|Section|Item|Field|Q)\d+[_\.\s]*', '')
+    ]
+    
+    # Apply patterns
+    result = field_name
+    for pattern, replacement in patterns:
+        match = re.match(pattern, result)
+        if match:
+            if '\3' in replacement:  # Has capture groups
+                # Extract the field description part
+                field_desc = match.group(3)
+                # Convert CamelCase/snake_case to words
+                field_desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', field_desc)
+                field_desc = field_desc.replace('_', ' ')
+                # Capitalize properly
+                words = field_desc.split()
+                capitalized = []
+                for word in words:
+                    if word.upper() in ['SSN', 'DOB', 'EIN', 'FEIN', 'LCA', 'US', 'USA', 'I94']:
+                        capitalized.append(word.upper())
+                    else:
+                        capitalized.append(word.capitalize())
+                field_desc = ' '.join(capitalized)
+                # Apply the replacement
+                result = re.sub(pattern, replacement.replace(r'\3', field_desc), result)
+            else:
+                result = re.sub(pattern, replacement, result)
+            break
+    
+    # If no pattern matched, do basic cleanup
+    if result == field_name:
+        # Replace underscores
+        result = result.replace('_', ' ')
+        # Capitalize properly
+        words = result.split()
+        capitalized = []
+        for word in words:
+            if word.upper() in ['SSN', 'DOB', 'EIN', 'FEIN', 'LCA', 'US', 'USA', 'I94']:
+                capitalized.append(word.upper())
+            else:
+                capitalized.append(word.capitalize())
+        result = ' '.join(capitalized).strip()
+    
+    return result
 
 def auto_map_part_fields(part_fields: List[Dict]):
     """Auto-map all unmapped fields in a part"""
@@ -1199,27 +1245,40 @@ def generate_json_for_unmapped() -> str:
             
             suggestion_info = st.session_state.mapping_suggestions.get(field_name, {})
             
+            # Extract part information
+            part_id, _ = extract_part_from_field_name(field_name)
+            
             unmapped_field = {
                 "fieldName": field_name,
                 "fieldType": field['type'],
                 "required": field.get('required', False),
                 "page": field.get('page', 0),
-                "part": field.get('part', 'Unassigned'),
+                "part": part_id,
+                "rawFieldName": field.get('raw_name', field_name),
                 "suggestedMapping": suggestion_info.get('mapping'),
                 "confidence": suggestion_info.get('confidence', 0.0),
                 "humanReadableLabel": beautify_field_name(field_name)
             }
             unmapped_fields.append(unmapped_field)
     
-    # Sort by confidence (highest first)
-    unmapped_fields.sort(key=lambda x: x['confidence'], reverse=True)
+    # Sort by confidence (highest first), then by part, then by field name
+    unmapped_fields.sort(key=lambda x: (-x['confidence'], x['part'], x['fieldName']))
+    
+    # Group by part for better organization
+    grouped_fields = {}
+    for field in unmapped_fields:
+        part = field['part']
+        if part not in grouped_fields:
+            grouped_fields[part] = []
+        grouped_fields[part].append(field)
     
     result = {
         "formName": st.session_state.form_name or "Unknown",
         "formType": st.session_state.form_type or "Unknown",
         "unmappedFieldsCount": len(unmapped_fields),
         "timestamp": datetime.now().isoformat(),
-        "unmappedFields": unmapped_fields
+        "unmappedFieldsByPart": grouped_fields,
+        "highConfidenceSuggestions": [f for f in unmapped_fields if f['confidence'] > 0.7][:10]  # Top 10 high confidence
     }
     
     return json.dumps(result, indent=2)
@@ -1255,6 +1314,10 @@ def main():
         with col2:
             st.session_state.show_unmapped = st.checkbox("Unmapped", value=True)
             st.session_state.expand_all_parts = st.checkbox("Expand all", value=False)
+        
+        # Debug options
+        with st.expander("🔧 Debug Options"):
+            st.session_state.show_raw_names = st.checkbox("Show raw field names", value=False)
         
         st.markdown("---")
         
@@ -1403,6 +1466,30 @@ def main():
         if not st.session_state.form_parts:
             st.warning("⚠️ Please upload and extract a form first")
         else:
+            # Field extraction summary
+            with st.expander("📋 Field Extraction Summary", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Parts", len(st.session_state.form_parts))
+                    st.caption("Including attorney section")
+                with col2:
+                    st.metric("Fields per Part", 
+                             f"~{len(st.session_state.pdf_fields) // max(len(st.session_state.form_parts)-2, 1)}")
+                    st.caption("Average distribution")
+                with col3:
+                    st.metric("Field Name Pattern", 
+                             "USCIS Standard" if any('Part' in f['name'] or 'Line' in f['name'] for f in st.session_state.pdf_fields) else "Unknown")
+                    st.caption("Detected naming convention")
+                
+                # Show sample field names
+                if st.session_state.pdf_fields:
+                    st.subheader("Sample Extracted Field Names:")
+                    sample_fields = st.session_state.pdf_fields[:5]
+                    for field in sample_fields:
+                        st.code(f"{field['name']} → {beautify_field_name(field['name'])}")
+                    if len(st.session_state.pdf_fields) > 5:
+                        st.caption(f"... and {len(st.session_state.pdf_fields) - 5} more fields")
+            
             # Mapping statistics
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -1571,7 +1658,7 @@ if __name__ == "__main__":
     main()
 ,
         # Extract anything that looks like Part/Item pattern
-        r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]'
+        r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]',
     ]
     
     cleaned_name = raw_field_name
