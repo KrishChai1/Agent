@@ -1670,14 +1670,20 @@ def main():
                         for field, mapping in mappings.items():
                             st.text(f"{field} → {mapping}")
 
+
+    # Add this to your regex pattern list ABOVE main()
+patterns = [
+    r'form\[\d+\]\.#?subform\[\d+\]\.(.*?)\[\d+\]',
+    r'topmostSubform\[\d+\]\.Page\d+\[\d+\]\.(.*?)\[\d+\]',
+    r'Form\d*\[\d+\]\.Page\d+\[\d+\]\.(.*?)\[\d+\]',
+    r'.*\.(P(?:art|t)\d+.*?)',
+    # Extract anything that looks like Part/Item pattern
+    r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]'
+]
+
 # Run the application
 if __name__ == "__main__":
     main()
-,
-        # Extract anything that looks like Part/Item pattern
-        r'.*((?:Part|Pt|P)\d+.*(?:Item|Line|Field|_)\d+.*?)[\[\.]',
-    ]
-    
     cleaned_name = raw_field_name
     
     # Try each pattern to extract the meaningful part
