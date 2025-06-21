@@ -32,7 +32,7 @@ except ImportError:
 
 # Page configuration
 st.set_page_config(
-    page_title="Enhanced PDF Form Automation System",
+    page_title="PDF Form Automation System",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -72,6 +72,13 @@ st.markdown("""
         border-radius: 5px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     }
+    .part-header {
+        background-color: #e9ecef;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -81,36 +88,24 @@ if not PDF_AVAILABLE:
     st.code("pip install PyPDF2")
     st.stop()
 
-# Enhanced session state initialization
-@dataclass
-class FormField:
-    name: str
-    type: str
-    value: str = ""
-    required: bool = False
-    page: int = 0
-    options: List[str] = None
-    validation: str = ""
-    description: str = ""
-    coordinates: Dict[str, float] = None
-
+# Session state initialization
 def init_session_state():
     """Initialize all session state variables"""
     defaults = {
         'pdf_fields': [],
         'mapped_fields': {},
         'questionnaire_fields': {},
-        'questionnaire_controls': [],  # New: For JSON-like questionnaire structure
         'conditional_fields': {},
         'default_fields': {},
         'field_groups': {},
         'validation_rules': {},
         'form_metadata': {},
-        'mapping_history': [],
-        'auto_save': True,
-        'mapping_templates': {},
         'extracted_text': "",
-        'pdf_preview': None
+        'form_name': 'UnknownForm',
+        'current_step': 1,
+        'auto_save': True,
+        'show_removed_fields': False,
+        'removed_fields': []
     }
     
     for key, default_value in defaults.items():
@@ -119,285 +114,161 @@ def init_session_state():
 
 init_session_state()
 
-# Enhanced mapping patterns with more comprehensive rules
+# Enhanced mapping patterns
 MAPPING_PATTERNS = {
-    'customer': {
-        'patterns': [
-            r'customer[_\s]?name', r'company[_\s]?name', r'employer[_\s]?name',
-            r'petitioner[_\s]?name', r'organization[_\s]?name', r'business[_\s]?name',
-            r'firm[_\s]?name', r'entity[_\s]?name'
-        ],
+    # Customer/Petitioner patterns
+    'customer_name': {
+        'patterns': [r'customer.*name', r'petitioner.*name', r'employer.*name', r'company.*name'],
         'mapping': 'customer.customer_name',
         'type': 'TextBox'
     },
     'customer_tax_id': {
-        'patterns': [
-            r'ein', r'fein', r'tax[_\s]?id', r'employer[_\s]?id',
-            r'federal[_\s]?tax[_\s]?id', r'irs[_\s]?number'
-        ],
+        'patterns': [r'ein', r'fein', r'tax.*id', r'employer.*id'],
         'mapping': 'customer.customer_tax_id',
-        'type': 'TextBox',
-        'validation': r'^\d{2}-\d{7}$'
-    },
-    'customer_address': {
-        'patterns': [
-            r'company[_\s]?address', r'employer[_\s]?address', r'business[_\s]?address',
-            r'petitioner[_\s]?address'
-        ],
-        'mapping': 'customer.address',
         'type': 'TextBox'
     },
-    'customer_signatory_first': {
-        'patterns': [
-            r'signatory[_\s]?first[_\s]?name', r'authorized[_\s]?official[_\s]?first',
-            r'representative[_\s]?first[_\s]?name'
-        ],
+    'signatory_first': {
+        'patterns': [r'signatory.*first', r'authorized.*first', r'representative.*first'],
         'mapping': 'customer.signatory_first_name',
         'type': 'TextBox'
     },
-    'customer_signatory_last': {
-        'patterns': [
-            r'signatory[_\s]?last[_\s]?name', r'authorized[_\s]?official[_\s]?last',
-            r'representative[_\s]?last[_\s]?name'
-        ],
+    'signatory_last': {
+        'patterns': [r'signatory.*last', r'authorized.*last', r'representative.*last'],
         'mapping': 'customer.signatory_last_name',
         'type': 'TextBox'
     },
-    'beneficiary_first_name': {
-        'patterns': [
-            r'beneficiary[_\s]?first[_\s]?name', r'given[_\s]?name',
-            r'ben[_\s]?firstname', r'ben[_\s]?givenname', r'employee[_\s]?first[_\s]?name',
-            r'worker[_\s]?first[_\s]?name', r'P5_[0-9]+b.*first.*name'
-        ],
+    
+    # Beneficiary patterns
+    'beneficiary_first': {
+        'patterns': [r'beneficiary.*first', r'given.*name', r'employee.*first', r'worker.*first'],
         'mapping': 'beneficiary.Beneficiary.beneficiaryFirstName',
         'type': 'TextBox'
     },
-    'beneficiary_last_name': {
-        'patterns': [
-            r'beneficiary[_\s]?last[_\s]?name', r'family[_\s]?name',
-            r'ben[_\s]?lastname', r'ben[_\s]?familyname', r'employee[_\s]?last[_\s]?name',
-            r'worker[_\s]?last[_\s]?name', r'surname', r'P5_[0-9]+a.*family.*name'
-        ],
+    'beneficiary_last': {
+        'patterns': [r'beneficiary.*last', r'family.*name', r'employee.*last', r'surname'],
         'mapping': 'beneficiary.Beneficiary.beneficiaryLastName',
         'type': 'TextBox'
     },
-    'beneficiary_middle_name': {
-        'patterns': [
-            r'beneficiary[_\s]?middle[_\s]?name', r'ben[_\s]?middlename',
-            r'employee[_\s]?middle[_\s]?name', r'P5_[0-9]+c.*middle.*name'
-        ],
-        'mapping': 'beneficiary.Beneficiary.beneficiaryMiddleName',
-        'type': 'TextBox'
-    },
-    'attorney_last_name': {
-        'patterns': [
-            r'attorney[_\s]?last[_\s]?name', r'att[_\s]?lastname',
-            r'lawyer[_\s]?last[_\s]?name', r'representative[_\s]?last[_\s]?name'
-        ],
-        'mapping': 'attorney.attorneyInfo.lastName',
-        'type': 'TextBox'
-    },
-    'attorney_first_name': {
-        'patterns': [
-            r'attorney[_\s]?first[_\s]?name', r'att[_\s]?firstname',
-            r'lawyer[_\s]?first[_\s]?name', r'representative[_\s]?first[_\s]?name'
-        ],
-        'mapping': 'attorney.attorneyInfo.firstName',
-        'type': 'TextBox'
-    },
-    'attorney_bar_number': {
-        'patterns': [
-            r'bar[_\s]?number', r'bar[_\s]?no', r'attorney[_\s]?bar[_\s]?number',
-            r'license[_\s]?number'
-        ],
-        'mapping': 'attorney.attorneyInfo.barNumber',
-        'type': 'TextBox'
-    },
-    'address_street': {
-        'patterns': [
-            r'street[_\s]?number[_\s]?and[_\s]?name', r'address[_\s]?street', 
-            r'street[_\s]?address', r'mailing[_\s]?address', r'P5_[0-9]+_strtnumname'
-        ],
-        'mapping': 'address.addressStreet',
-        'type': 'TextBox'
-    },
-    'address_city': {
-        'patterns': [
-            r'city', r'address[_\s]?city', r'city[_\s]?or[_\s]?town',
-            r'municipality', r'P5_[0-9]+_city'
-        ],
-        'mapping': 'address.addressCity',
-        'type': 'TextBox'
-    },
-    'address_state': {
-        'patterns': [
-            r'state', r'address[_\s]?state', r'province', r'P5_[0-9]+_state'
-        ],
-        'mapping': 'address.addressState',
-        'type': 'TextBox'
-    },
-    'address_zip': {
-        'patterns': [
-            r'zip[_\s]?code', r'postal[_\s]?code', r'address[_\s]?zip',
-            r'zip', r'P5_[0-9]+_zipcode'
-        ],
-        'mapping': 'address.addressZip',
-        'type': 'TextBox',
-        'validation': r'^\d{5}(-\d{4})?$'
-    },
-    'ssn': {
-        'patterns': [
-            r'social[_\s]?security[_\s]?number', r'ssn', r'ussocialssn',
-            r'social[_\s]?security', r'ss[_\s]?no'
-        ],
-        'mapping': 'beneficiary.Beneficiary.beneficiarySsn',
-        'type': 'TextBox',
-        'validation': r'^\d{3}-\d{2}-\d{4}$'
-    },
-    'alien_number': {
-        'patterns': [
-            r'alien[_\s]?number', r'a[\-\s]?number', r'dbalien',
-            r'alien[_\s]?registration[_\s]?number', r'uscis[_\s]?number'
-        ],
-        'mapping': 'beneficiary.Beneficiary.alienNumber',
-        'type': 'TextBox',
-        'validation': r'^A\d{8,9}$'
-    },
-    'date_of_birth': {
-        'patterns': [
-            r'date[_\s]?of[_\s]?birth', r'dob', r'birth[_\s]?date',
-            r'birthdate', r'born[_\s]?on'
-        ],
+    'beneficiary_dob': {
+        'patterns': [r'date.*birth', r'dob', r'birth.*date'],
         'mapping': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
         'type': 'Date'
     },
-    'i94_number': {
-        'patterns': [
-            r'i[\-\s]?94[_\s]?number', r'arrival[_\s]?number',
-            r'admission[_\s]?number', r'i94[\-\s]?no'
-        ],
-        'mapping': 'beneficiary.I94Details.I94.i94Number',
+    'alien_number': {
+        'patterns': [r'alien.*number', r'a[\-\s]?number', r'uscis.*number'],
+        'mapping': 'beneficiary.Beneficiary.alienNumber',
         'type': 'TextBox'
     },
-    'passport_number': {
-        'patterns': [
-            r'passport[_\s]?number', r'travel[_\s]?document',
-            r'passport[_\s]?no', r'travel[_\s]?doc[_\s]?number'
-        ],
-        'mapping': 'beneficiary.PassportDetails.Passport.passportNumber',
+    'ssn': {
+        'patterns': [r'social.*security', r'ssn', r'ss.*number'],
+        'mapping': 'beneficiary.Beneficiary.beneficiarySsn',
         'type': 'TextBox'
     },
+    
+    # Attorney patterns
+    'attorney_last': {
+        'patterns': [r'attorney.*last', r'lawyer.*last', r'att.*last'],
+        'mapping': 'attorney.attorneyInfo.lastName',
+        'type': 'TextBox'
+    },
+    'attorney_first': {
+        'patterns': [r'attorney.*first', r'lawyer.*first', r'att.*first'],
+        'mapping': 'attorney.attorneyInfo.firstName',
+        'type': 'TextBox'
+    },
+    'attorney_bar': {
+        'patterns': [r'bar.*number', r'license.*number', r'attorney.*bar'],
+        'mapping': 'attorney.attorneyInfo.barNumber',
+        'type': 'TextBox'
+    },
+    
+    # Address patterns
+    'street_address': {
+        'patterns': [r'street.*address', r'address.*street', r'street.*name'],
+        'mapping': 'address.addressStreet',
+        'type': 'TextBox'
+    },
+    'city': {
+        'patterns': [r'city', r'town', r'municipality'],
+        'mapping': 'address.addressCity',
+        'type': 'TextBox'
+    },
+    'state': {
+        'patterns': [r'state', r'province'],
+        'mapping': 'address.addressState',
+        'type': 'TextBox'
+    },
+    'zip': {
+        'patterns': [r'zip.*code', r'postal.*code', r'zip'],
+        'mapping': 'address.addressZip',
+        'type': 'TextBox'
+    },
+    
+    # Case patterns
     'case_type': {
-        'patterns': [
-            r'case[_\s]?type', r'petition[_\s]?type', r'classification',
-            r'visa[_\s]?type', r'category'
-        ],
+        'patterns': [r'case.*type', r'petition.*type', r'classification', r'visa.*type'],
         'mapping': 'case.caseType',
         'type': 'DropDown'
     },
     'job_title': {
-        'patterns': [
-            r'job[_\s]?title', r'position[_\s]?title', r'occupation',
-            r'employment[_\s]?title', r'P5_1'
-        ],
+        'patterns': [r'job.*title', r'position.*title', r'occupation', r'employment.*title'],
         'mapping': 'case.jobTitle',
         'type': 'TextBox'
     },
     'wages': {
-        'patterns': [
-            r'wage', r'salary', r'compensation', r'pay[_\s]?rate',
-            r'annual[_\s]?salary', r'P5_9_cur'
-        ],
+        'patterns': [r'wage', r'salary', r'compensation', r'pay.*rate'],
         'mapping': 'case.wages',
         'type': 'Currency'
-    },
-    'email': {
-        'patterns': [
-            r'email[_\s]?address', r'e[\-\s]?mail', r'electronic[_\s]?mail',
-            r'contact[_\s]?email'
-        ],
-        'mapping': 'contact.email',
-        'type': 'TextBox',
-        'validation': r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    },
-    'phone': {
-        'patterns': [
-            r'phone[_\s]?number', r'telephone', r'contact[_\s]?number',
-            r'phone', r'tel', r'daytime[_\s]?phone'
-        ],
-        'mapping': 'contact.phone',
-        'type': 'TextBox',
-        'validation': r'^[\d\s\-\(\)\+]+$'
     }
 }
 
-# Enhanced field types with more granular detection
+# Field type detection patterns
 FIELD_TYPES = {
-    'TextBox': {
-        'keywords': ['text', 'name', 'address', 'title', 'number', 'description'],
-        'patterns': [r'_{3,}', r'\[[\s]*\]', r'\.{3,}']
-    },
     'CheckBox': {
-        'keywords': ['checkbox', 'check', 'yes/no', 'option', 'select', 'mark'],
-        'patterns': [r'\[\s*\]', r'\(\s*\)', r'☐', r'□']
-    },
-    'Date': {
-        'keywords': ['date', 'dob', 'birth', 'expiry', 'issue', 'mm/dd/yyyy', 'from', 'to'],
-        'patterns': [r'\d{1,2}/\d{1,2}/\d{2,4}', r'mm/dd/yyyy', r'__/__/____']
+        'patterns': [r'\[\s*\]', r'\(\s*\)', r'☐', r'□', r'checkbox', r'check\s+box'],
+        'keywords': ['yes/no', 'check', 'select', 'mark']
     },
     'RadioButton': {
-        'keywords': ['radio', 'select one', 'choice', 'option'],
-        'patterns': [r'\(\s*\)', r'○', r'◯']
+        'patterns': [r'\(\s*\)', r'○', r'◯', r'radio'],
+        'keywords': ['select one', 'choose one', 'option']
     },
-    'DropDown': {
-        'keywords': ['dropdown', 'select', 'list', 'choose from', 'per'],
-        'patterns': [r'▼', r'⌄', r'\[Select\]']
-    },
-    'Signature': {
-        'keywords': ['signature', 'sign', 'signed by', 'authorized'],
-        'patterns': [r'signature[:\s]*_{3,}', r'sign[:\s]*_{3,}']
+    'Date': {
+        'patterns': [r'\d{1,2}/\d{1,2}/\d{4}', r'mm/dd/yyyy', r'__/__/____'],
+        'keywords': ['date', 'dob', 'birth', 'expiry', 'expire']
     },
     'Currency': {
-        'keywords': ['wage', 'salary', 'amount', 'fee', 'cost', 'price', '$'],
-        'patterns': [r'\$[\d,]+', r'USD', r'dollars']
+        'patterns': [r'\$[\d,]+', r'USD', r'dollars'],
+        'keywords': ['wage', 'salary', 'amount', 'fee', 'cost', '$']
     },
-    'MultipleBox': {
-        'keywords': ['multiple', 'list', 'array', 'add more'],
-        'patterns': [r'add\s*another', r'additional']
+    'DropDown': {
+        'patterns': [r'▼', r'⌄', r'\[Select\]'],
+        'keywords': ['dropdown', 'select', 'choose from', 'list']
     },
     'TextArea': {
-        'keywords': ['explain', 'describe', 'details', 'notes', 'comments'],
-        'patterns': [r'provide\s*details', r'explanation']
+        'patterns': [],
+        'keywords': ['explain', 'describe', 'details', 'notes', 'comments']
+    },
+    'Signature': {
+        'patterns': [r'signature[:\s]*_{3,}', r'sign[:\s]*_{3,}'],
+        'keywords': ['signature', 'sign', 'signed by']
     }
 }
 
-# Validation patterns
-VALIDATION_PATTERNS = {
-    'ssn': r'^\d{3}-\d{2}-\d{4}$',
-    'ein': r'^\d{2}-\d{7}$',
-    'email': r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
-    'phone': r'^[\d\s\-\(\)\+]+$',
-    'zip': r'^\d{5}(-\d{4})?$',
-    'alien_number': r'^A\d{8,9}$',
-    'date': r'^\d{1,2}/\d{1,2}/\d{4}$'
-}
-
-def extract_pdf_fields_enhanced(pdf_file) -> List[Dict[str, Any]]:
-    """Enhanced PDF field extraction with multiple methods"""
+def extract_pdf_fields(pdf_file) -> List[Dict[str, Any]]:
+    """Extract fields from PDF using multiple methods"""
     fields = []
     extracted_text = ""
     
     try:
-        # Method 1: Try PyPDF2 form fields
         pdf_reader = PdfReader(pdf_file)
         
-        # Extract text for context
+        # Extract text
         for page in pdf_reader.pages:
             extracted_text += page.extract_text() + "\n"
         
         st.session_state.extracted_text = extracted_text
         
-        # Try to get form fields
+        # Method 1: Try form fields
         if hasattr(pdf_reader, 'get_form_text_fields'):
             form_fields = pdf_reader.get_form_text_fields()
             if form_fields:
@@ -409,799 +280,389 @@ def extract_pdf_fields_enhanced(pdf_file) -> List[Dict[str, Any]]:
                         'value': field_value or '',
                         'required': is_field_required(field_name, extracted_text),
                         'page': 0,
-                        'method': 'form_fields'
+                        'source': 'form_fields'
                     })
         
-        # Try to get fields from annotations
+        # Method 2: Try annotations
         if hasattr(pdf_reader, 'get_fields'):
             pdf_fields = pdf_reader.get_fields()
             if pdf_fields:
                 for field_name, field_obj in pdf_fields.items():
-                    field_type = 'TextBox'
-                    if isinstance(field_obj, dict):
-                        if field_obj.get('/FT') == '/Btn':
-                            if field_obj.get('/Ff', 0) & 65536:  # Radio button
-                                field_type = 'RadioButton'
-                            else:
-                                field_type = 'CheckBox'
-                        elif field_obj.get('/FT') == '/Ch':
-                            field_type = 'DropDown'
-                        elif field_obj.get('/FT') == '/Tx':
-                            field_type = 'TextBox'
-                    
                     if not any(f['name'] == field_name for f in fields):
+                        field_type = 'TextBox'
+                        if isinstance(field_obj, dict):
+                            if field_obj.get('/FT') == '/Btn':
+                                field_type = 'CheckBox' if not (field_obj.get('/Ff', 0) & 65536) else 'RadioButton'
+                            elif field_obj.get('/FT') == '/Ch':
+                                field_type = 'DropDown'
+                        
                         fields.append({
                             'name': field_name,
                             'type': field_type,
                             'value': '',
                             'required': is_field_required(field_name, extracted_text),
                             'page': 0,
-                            'method': 'annotations'
+                            'source': 'annotations'
                         })
         
-        # Method 2: Try pdfplumber if available
-        if PDFPLUMBER_AVAILABLE and not fields:
-            pdf_file.seek(0)  # Reset file pointer
-            import pdfplumber
-            with pdfplumber.open(pdf_file) as pdf:
-                for page_num, page in enumerate(pdf.pages):
-                    # Extract form elements
-                    if hasattr(page, 'extract_form_fields'):
-                        page_fields = page.extract_form_fields()
-                        if page_fields:
-                            for field in page_fields:
-                                fields.append({
-                                    'name': field.get('name', f'field_{len(fields)}'),
-                                    'type': field.get('type', 'TextBox'),
-                                    'value': field.get('value', ''),
-                                    'required': False,
-                                    'page': page_num,
-                                    'method': 'pdfplumber'
-                                })
-        
         # Method 3: Extract from text patterns
-        if not fields or len(fields) < 5:  # If few fields found, try text extraction
+        if len(fields) < 10:  # If few fields found, try text extraction
             text_fields = extract_fields_from_text(extracted_text)
-            
-            # Merge with existing fields
             existing_names = {f['name'].lower() for f in fields}
+            
             for text_field in text_fields:
                 if text_field['name'].lower() not in existing_names:
                     fields.append(text_field)
         
-        # Sort fields by appearance order
-        fields = sorted(fields, key=lambda x: (x['page'], x.get('order', 0)))
-        
     except Exception as e:
         st.error(f"Error extracting PDF fields: {str(e)}")
-        st.info("You can manually add fields or try a different PDF.")
     
     return fields
 
 def extract_fields_from_text(text: str) -> List[Dict[str, Any]]:
-    """Extract potential form fields from text using advanced pattern matching"""
+    """Extract potential form fields from text"""
     fields = []
     seen_fields = set()
     
-    # Clean and normalize text
-    text = re.sub(r'\s+', ' ', text)
-    lines = text.split('\n')
-    
-    # Enhanced patterns for different form structures
+    # Common form field patterns
     patterns = [
-        # USCIS form patterns (e.g., "1.a. Family Name")
-        {
-            'pattern': r'(\d+\.?[a-z]?\.\s+)([A-Za-z][A-Za-z\s]{2,50})(?:\s*:?\s*)(?:_{3,}|\[[\s]*\]|\([\s]*\))',
-            'type': 'TextBox',
-            'name_group': 2
-        },
+        # Part.Number.Letter format (e.g., P1_1a, Part 2.3.b)
+        (r'(?:P|Part)\s*(\d+)[_\.\s]+(\d+)([a-z]?)\.\s*([A-Za-z][A-Za-z\s]{2,50})', 'form_section'),
+        # Numbered fields (e.g., 1. Name, 2.a. Address)
+        (r'(\d+)\.([a-z]?\.)?\s*([A-Za-z][A-Za-z\s]{2,50})(?:\s*:?\s*(?:_{3,}|\[[\s]*\]))', 'numbered'),
         # Label with underscores
-        {
-            'pattern': r'([A-Za-z][A-Za-z\s\-]{2,50})(?:\s*:?\s*)(?:_{3,})',
-            'type': 'TextBox',
-            'name_group': 1
-        },
+        (r'([A-Za-z][A-Za-z\s\-]{2,50})(?:\s*:?\s*)(?:_{3,})', 'underscore'),
         # Checkbox patterns
-        {
-            'pattern': r'\[\s*\]\s*([A-Za-z][A-Za-z\s\-]{2,50})',
-            'type': 'CheckBox',
-            'name_group': 1
-        },
+        (r'\[\s*\]\s*([A-Za-z][A-Za-z\s\-]{2,50})', 'checkbox'),
         # Radio button patterns
-        {
-            'pattern': r'\(\s*\)\s*([A-Za-z][A-Za-z\s\-]{2,50})',
-            'type': 'RadioButton',
-            'name_group': 1
-        },
+        (r'\(\s*\)\s*([A-Za-z][A-Za-z\s\-]{2,50})', 'radio'),
         # Date patterns
-        {
-            'pattern': r'([A-Za-z\s]*Date[A-Za-z\s]*|DOB|Birth\s*Date)(?:\s*:?\s*)(?:_{3,}|mm/dd/yyyy)',
-            'type': 'Date',
-            'name_group': 1
-        },
-        # Signature patterns
-        {
-            'pattern': r'(Signature[A-Za-z\s]*)(?:\s*:?\s*)_{3,}',
-            'type': 'Signature',
-            'name_group': 1
-        },
-        # Yes/No patterns
-        {
-            'pattern': r'([A-Za-z][A-Za-z\s\?]{5,100})\s*(?:Yes|No)\s*\[\s*\]',
-            'type': 'CheckBox',
-            'name_group': 1
-        }
+        (r'([A-Za-z\s]*Date[A-Za-z\s]*|DOB|Birth\s*Date)(?:\s*:?\s*)(?:_{3,}|mm/dd/yyyy)', 'date')
     ]
     
-    # Process each pattern
-    for pattern_info in patterns:
-        pattern = pattern_info['pattern']
-        field_type = pattern_info['type']
-        name_group = pattern_info['name_group']
-        
+    for pattern, pattern_type in patterns:
         matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
         for match in matches:
-            field_name = match.group(name_group).strip()
-            
-            # Clean field name
-            field_name = re.sub(r'\s+', ' ', field_name)
-            field_name = re.sub(r'[^\w\s\-\.]', '', field_name).strip()
-            
-            # Skip if too short or already seen
-            if len(field_name) < 3 or field_name.lower() in seen_fields:
+            # Extract field name based on pattern type
+            if pattern_type == 'form_section':
+                part = match.group(1)
+                number = match.group(2)
+                letter = match.group(3) or ''
+                label = match.group(4).strip()
+                field_name = f"P{part}_{number}{letter}_{re.sub(r'[^\w]', '', label)}"
+            elif pattern_type == 'numbered':
+                number = match.group(1)
+                letter = match.group(2) or ''
+                label = match.group(3).strip()
+                field_name = f"Field_{number}{letter.strip('.')}_{re.sub(r'[^\w]', '', label)}"
+            elif pattern_type in ['underscore', 'checkbox', 'radio', 'date']:
+                field_name = match.group(1).strip()
+                field_name = re.sub(r'\s+', '_', field_name)
+                field_name = re.sub(r'[^\w\-\.]', '', field_name)
+            else:
                 continue
             
-            # Skip common non-field text
-            skip_words = ['page', 'form', 'instructions', 'section', 'part', 'continues']
-            if any(skip in field_name.lower() for skip in skip_words):
+            # Skip if already seen or too short
+            if len(field_name) < 3 or field_name.lower() in seen_fields:
                 continue
             
             seen_fields.add(field_name.lower())
             
-            # Determine if field is required
-            required = is_field_required(field_name, text)
+            # Determine field type
+            if pattern_type == 'checkbox':
+                field_type = 'CheckBox'
+            elif pattern_type == 'radio':
+                field_type = 'RadioButton'
+            elif pattern_type == 'date':
+                field_type = 'Date'
+            else:
+                field_type = determine_field_type(field_name, text)
             
             fields.append({
                 'name': field_name,
-                'type': determine_field_type(field_name, text, field_type),
+                'type': field_type,
                 'value': '',
-                'required': required,
+                'required': is_field_required(field_name, text),
                 'page': 0,
-                'method': 'text_extraction',
-                'confidence': calculate_field_confidence(field_name, text)
+                'source': 'text_extraction'
             })
     
     return fields
 
-def determine_field_type(field_name: str, context: str = "", default_type: str = 'TextBox') -> str:
-    """Enhanced field type determination using context and patterns"""
+def determine_field_type(field_name: str, context: str = "") -> str:
+    """Determine field type based on name and context"""
     field_lower = field_name.lower()
     
-    # Check for explicit type indicators in context
-    if context:
-        context_lower = context.lower()
-        field_context = ""
-        
-        # Find context around field name
-        try:
-            index = context_lower.find(field_lower)
-            if index != -1:
-                start = max(0, index - 100)
-                end = min(len(context), index + len(field_lower) + 100)
-                field_context = context_lower[start:end]
-        except:
-            field_context = ""
-        
-        # Check for type indicators in context
-        if any(indicator in field_context for indicator in ['check one', 'select one', 'choose one']):
-            if '()' in field_context:
-                return 'RadioButton'
-            elif '[]' in field_context:
-                return 'CheckBox'
-        
-        if any(indicator in field_context for indicator in ['select from', 'choose from', 'dropdown']):
-            return 'DropDown'
-        
-        if any(indicator in field_context for indicator in ['explain', 'describe', 'provide details']):
-            return 'TextArea'
-    
-    # Check field name patterns
+    # Check each field type
     for field_type, type_info in FIELD_TYPES.items():
+        # Check patterns
+        for pattern in type_info['patterns']:
+            if re.search(pattern, field_name, re.IGNORECASE):
+                return field_type
+        
+        # Check keywords
         for keyword in type_info['keywords']:
-            if keyword in field_lower:
+            if keyword.lower() in field_lower:
                 return field_type
     
-    # Special cases
-    if re.search(r'\b(ssn|social\s*security)\b', field_lower):
-        return 'TextBox'
-    elif re.search(r'\b(ein|tax\s*id)\b', field_lower):
-        return 'TextBox'
-    elif re.search(r'\$|wage|salary|amount|fee', field_lower):
-        return 'Currency'
-    elif re.search(r'email|e-mail', field_lower):
-        return 'TextBox'
-    elif re.search(r'phone|tel|fax', field_lower):
-        return 'TextBox'
-    elif re.search(r'date|dob|birth', field_lower):
-        return 'Date'
-    elif re.search(r'signature|sign', field_lower):
-        return 'Signature'
-    
-    return default_type
+    # Default to TextBox
+    return 'TextBox'
 
 def is_field_required(field_name: str, context: str) -> bool:
-    """Determine if a field is required based on context"""
+    """Determine if a field is required"""
     field_lower = field_name.lower()
     
-    # Look for required indicators
-    required_indicators = [
-        'required', 'mandatory', 'must complete', 'must provide',
-        '*', '(required)', '[required]'
-    ]
+    # Common required field indicators
+    required_indicators = ['required', 'mandatory', '*', 'must']
+    required_fields = ['name', 'date', 'signature', 'ssn', 'ein', 'address', 'email', 'phone']
     
-    # Check if field name contains required indicators
+    # Check field name
     for indicator in required_indicators:
         if indicator in field_lower:
             return True
     
-    # Check context around field
-    if context:
-        try:
-            index = context.lower().find(field_lower)
-            if index != -1:
-                start = max(0, index - 50)
-                end = min(len(context), index + len(field_lower) + 50)
-                field_context = context[start:end].lower()
-                
-                for indicator in required_indicators:
-                    if indicator in field_context:
-                        return True
-        except:
-            pass
-    
-    # Common required fields
-    required_field_patterns = [
-        'name', 'date', 'signature', 'ssn', 'ein', 'address',
-        'email', 'phone', 'alien number', 'case type'
-    ]
-    
-    for pattern in required_field_patterns:
-        if pattern in field_lower:
+    # Check common required fields
+    for req_field in required_fields:
+        if req_field in field_lower:
             return True
     
     return False
 
-def calculate_field_confidence(field_name: str, context: str) -> float:
-    """Calculate confidence score for extracted field"""
-    score = 0.5  # Base score
-    
-    # Check if field name is well-formed
-    if re.match(r'^[A-Z][a-zA-Z\s]+$', field_name):
-        score += 0.1
-    
-    # Check if field appears multiple times (likely a real field)
-    occurrences = len(re.findall(re.escape(field_name), context, re.IGNORECASE))
-    if occurrences > 1:
-        score += 0.1
-    
-    # Check if field matches known patterns
-    for category, info in MAPPING_PATTERNS.items():
-        for pattern in info['patterns']:
-            if re.search(pattern, field_name.lower()):
-                score += 0.2
-                break
-    
-    # Check field length (too short or too long likely not a field)
-    if 5 <= len(field_name) <= 50:
-        score += 0.1
-    
-    return min(score, 1.0)
-
-def auto_map_field_enhanced(field_name: str, context: str = "") -> Tuple[Optional[str], float]:
-    """Enhanced auto-mapping with confidence scoring"""
+def auto_map_field(field_name: str) -> Tuple[Optional[str], float]:
+    """Auto-map field based on patterns"""
     field_lower = field_name.lower()
-    field_lower = re.sub(r'[^\w\s]', ' ', field_lower)
-    field_lower = re.sub(r'\s+', ' ', field_lower).strip()
+    field_clean = re.sub(r'[^\w\s]', ' ', field_lower).strip()
     
     best_match = None
     best_score = 0
     
-    for category, info in MAPPING_PATTERNS.items():
-        for pattern in info['patterns']:
-            # Calculate match score
-            if re.search(pattern, field_lower):
+    for category, pattern_info in MAPPING_PATTERNS.items():
+        for pattern in pattern_info['patterns']:
+            if re.search(pattern, field_clean):
+                score = 0.8
                 # Exact match gets higher score
-                if pattern == field_lower:
+                if pattern == field_clean:
                     score = 1.0
-                else:
-                    # Partial match
-                    score = 0.8
-                
-                # Boost score if context contains related terms
-                if context and category in context.lower():
-                    score += 0.1
                 
                 if score > best_score:
                     best_score = score
-                    best_match = info['mapping']
+                    best_match = pattern_info['mapping']
     
-    # Return mapping only if confidence is high enough
-    if best_score >= 0.8:
-        return best_match, best_score
-    
-    return None, 0
+    return best_match, best_score
 
-def generate_enhanced_typescript(
-    form_name: str,
-    mapped_fields: Dict,
-    questionnaire_fields: Dict,
-    conditional_fields: Dict,
-    default_fields: Dict,
-    validation_rules: Dict,
-    field_groups: Dict
-) -> str:
-    """Generate enhanced TypeScript with validation and grouping"""
+def auto_process_fields():
+    """Auto process all fields - map or move to questionnaire"""
+    processed = 0
     
-    # Clean form name
+    for field in st.session_state.pdf_fields:
+        field_name = field['name']
+        field_type = field['type']
+        
+        # Skip if already processed
+        if field_name in st.session_state.mapped_fields or field_name in st.session_state.questionnaire_fields:
+            continue
+        
+        # Move checkboxes and radio buttons to questionnaire
+        if field_type in ['CheckBox', 'RadioButton']:
+            st.session_state.questionnaire_fields[field_name] = {
+                'type': 'checkbox' if field_type == 'CheckBox' else 'radio',
+                'required': field.get('required', False),
+                'options': 'Yes\nNo' if field_type == 'CheckBox' else '',
+                'validation': '',
+                'label': field_name,
+                'style': {"col": "12"}
+            }
+            processed += 1
+        else:
+            # Try to auto-map
+            mapping, score = auto_map_field(field_name)
+            if mapping and score >= 0.8:
+                st.session_state.mapped_fields[field_name] = f"{mapping}:{field_type}"
+                processed += 1
+            else:
+                # If can't map, move to questionnaire
+                st.session_state.questionnaire_fields[field_name] = {
+                    'type': get_questionnaire_type(field_type),
+                    'required': field.get('required', False),
+                    'options': '',
+                    'validation': '',
+                    'label': field_name,
+                    'style': {"col": "12"}
+                }
+                processed += 1
+    
+    return processed
+
+def get_questionnaire_type(pdf_type: str) -> str:
+    """Convert PDF field type to questionnaire type"""
+    type_map = {
+        'TextBox': 'text',
+        'CheckBox': 'checkbox',
+        'RadioButton': 'radio',
+        'DropDown': 'select',
+        'Date': 'date',
+        'TextArea': 'textarea',
+        'Currency': 'text',
+        'Signature': 'text'
+    }
+    return type_map.get(pdf_type, 'text')
+
+def organize_fields_by_part():
+    """Organize fields by form parts"""
+    parts = {
+        "Part 1 - Petitioner/Customer Information": [],
+        "Part 2 - Beneficiary Information": [],
+        "Part 3 - Attorney Information": [],
+        "Part 4 - Case Information": [],
+        "Part 5 - Address Information": [],
+        "Part 6 - Contact Information": [],
+        "Part 7 - Additional Information": [],
+        "Questionnaire Fields": [],
+        "Unmapped Fields": []
+    }
+    
+    # Categorize each field
+    for field in st.session_state.pdf_fields:
+        field_name = field['name']
+        field_lower = field_name.lower()
+        
+        # Check if in removed fields
+        if field_name in st.session_state.removed_fields:
+            continue
+        
+        # Check if in questionnaire
+        if field_name in st.session_state.questionnaire_fields:
+            parts["Questionnaire Fields"].append(field)
+        # Check if mapped
+        elif field_name in st.session_state.mapped_fields:
+            mapping = st.session_state.mapped_fields[field_name]
+            if 'customer' in mapping or 'petitioner' in field_lower:
+                parts["Part 1 - Petitioner/Customer Information"].append(field)
+            elif 'beneficiary' in mapping or 'employee' in field_lower:
+                parts["Part 2 - Beneficiary Information"].append(field)
+            elif 'attorney' in mapping or 'lawyer' in field_lower:
+                parts["Part 3 - Attorney Information"].append(field)
+            elif 'case' in mapping or 'petition' in field_lower:
+                parts["Part 4 - Case Information"].append(field)
+            elif 'address' in mapping or any(addr in field_lower for addr in ['street', 'city', 'state', 'zip']):
+                parts["Part 5 - Address Information"].append(field)
+            elif any(contact in field_lower for contact in ['phone', 'email', 'fax']):
+                parts["Part 6 - Contact Information"].append(field)
+            else:
+                parts["Part 7 - Additional Information"].append(field)
+        else:
+            parts["Unmapped Fields"].append(field)
+    
+    return parts
+
+def generate_typescript_output():
+    """Generate TypeScript configuration"""
+    form_name = st.session_state.get('form_name', 'UnknownForm')
     form_name_clean = re.sub(r'[^\w]', '', form_name)
     
-    # Organize fields by category with enhanced structure
+    # Organize fields by category
     categories = {
-        'customer': {},
-        'beneficiary': {},
-        'attorney': {},
-        'case': {},
-        'address': {},
-        'contact': {},
-        'other': {}
+        'customerData': {},
+        'beneficiaryData': {},
+        'attorneyData': {},
+        'caseData': {},
+        'addressData': {},
+        'contactData': {},
+        'otherData': {}
     }
     
     # Process mapped fields
-    for field_name, mapping in mapped_fields.items():
-        # Handle mapping with type format (e.g., "customer.name:TextBox")
+    for field_name, mapping in st.session_state.mapped_fields.items():
+        # Extract mapping and type
         if ':' in mapping:
             mapping_path, field_type = mapping.split(':', 1)
         else:
             mapping_path = mapping
-            field_type = determine_field_type(field_name)
-        
-        field_info = {
-            'mapping': mapping_path,
-            'type': field_type,
-            'validation': validation_rules.get(field_name, ''),
-            'required': any(f['name'] == field_name and f.get('required', False) 
-                          for f in st.session_state.pdf_fields)
-        }
+            field_type = next((f['type'] for f in st.session_state.pdf_fields if f['name'] == field_name), 'TextBox')
         
         # Determine category
-        category = 'other'
+        category = 'otherData'
         for cat in categories.keys():
-            if mapping_path.startswith(f'{cat}.'):
+            if mapping_path.startswith(cat.replace('Data', '')):
                 category = cat
                 break
         
-        categories[category][field_name] = field_info
+        categories[category][field_name] = f"{mapping_path}:{field_type}"
     
-    # Format questionnaire data with enhanced structure
-    formatted_questionnaire = {}
-    for field_name, field_info in questionnaire_fields.items():
+    # Format questionnaire data
+    questionnaire_data = {}
+    for field_name, field_info in st.session_state.questionnaire_fields.items():
         field_key = re.sub(r'[^\w]', '_', field_name)
-        formatted_questionnaire[field_key] = {
-            'type': field_info.get('type', 'TextBox'),
-            'required': field_info.get('required', False),
-            'options': field_info.get('options', '').split('\n') if field_info.get('options') else [],
-            'validation': field_info.get('validation', ''),
-            'label': field_name
+        questionnaire_data[field_key] = f"{field_key}:{field_info['type']}"
+    
+    # Format conditional fields
+    conditional_data = {}
+    for cond_name, cond_info in st.session_state.conditional_fields.items():
+        conditional_data[cond_name] = {
+            "condition": cond_info.get('condition', ''),
+            "conditionTrue": cond_info.get('conditionTrue', ''),
+            "conditionFalse": cond_info.get('conditionFalse', ''),
+            "conditionType": cond_info.get('conditionType', 'TextBox')
         }
     
-    # Format conditional fields with enhanced logic
-    formatted_conditionals = {}
-    for cond_name, cond_info in conditional_fields.items():
-        formatted_conditionals[cond_name] = {
-            'condition': cond_info.get('condition', ''),
-            'conditionTrue': cond_info.get('conditionTrue', ''),
-            'conditionFalse': cond_info.get('conditionFalse', ''),
-            'conditionType': cond_info.get('conditionType', 'TextBox'),
-            'validation': cond_info.get('validation', '')
-        }
-    
-    # Generate TypeScript content
+    # Generate TypeScript
     ts_content = f"""// Auto-generated form configuration for {form_name}
 // Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-interface FormField {{
-    mapping?: string;
-    type: string;
-    validation?: string;
-    required?: boolean;
-    options?: string[];
-    label?: string;
-}}
-
-interface ConditionalField {{
-    condition: string;
-    conditionTrue: string;
-    conditionFalse: string;
-    conditionType: string;
-    validation?: string;
-}}
-
-interface FormConfiguration {{
-    formname: string;
-    customerData: Record<string, FormField> | null;
-    beneficiaryData: Record<string, FormField> | null;
-    attorneyData: Record<string, FormField> | null;
-    caseData: Record<string, FormField> | null;
-    addressData: Record<string, FormField> | null;
-    contactData: Record<string, FormField> | null;
-    otherData: Record<string, FormField> | null;
-    questionnaireData: Record<string, FormField>;
-    defaultData: Record<string, string>;
-    conditionalData: Record<string, ConditionalField>;
-    validationRules: Record<string, string>;
-    fieldGroups: Record<string, string[]>;
-    pdfName: string;
-    metadata: {{
-        version: string;
-        createdAt: string;
-        totalFields: number;
-        mappedFields: number;
-        questionnaireFields: number;
-    }};
-}}
-
-export const {form_name_clean}: FormConfiguration = {{
+export const {form_name_clean} = {{
     formname: "{form_name_clean}",
-    customerData: {json.dumps(categories['customer'] if categories['customer'] else None, indent=8)},
-    beneficiaryData: {json.dumps(categories['beneficiary'] if categories['beneficiary'] else None, indent=8)},
-    attorneyData: {json.dumps(categories['attorney'] if categories['attorney'] else None, indent=8)},
-    caseData: {json.dumps(categories['case'] if categories['case'] else None, indent=8)},
-    addressData: {json.dumps(categories['address'] if categories['address'] else None, indent=8)},
-    contactData: {json.dumps(categories['contact'] if categories['contact'] else None, indent=8)},
-    otherData: {json.dumps(categories['other'] if categories['other'] else None, indent=8)},
-    questionnaireData: {json.dumps(formatted_questionnaire, indent=8)},
-    defaultData: {json.dumps(default_fields, indent=8)},
-    conditionalData: {json.dumps(formatted_conditionals, indent=8)},
-    validationRules: {json.dumps(validation_rules, indent=8)},
-    fieldGroups: {json.dumps(field_groups, indent=8)},
+    customerData: {json.dumps(categories['customerData'] if categories['customerData'] else None, indent=8)},
+    beneficiaryData: {json.dumps(categories['beneficiaryData'] if categories['beneficiaryData'] else None, indent=8)},
+    attorneyData: {json.dumps(categories['attorneyData'] if categories['attorneyData'] else None, indent=8)},
+    caseData: {json.dumps(categories['caseData'] if categories['caseData'] else None, indent=8)},
+    addressData: {json.dumps(categories['addressData'] if categories['addressData'] else None, indent=8)},
+    contactData: {json.dumps(categories['contactData'] if categories['contactData'] else None, indent=8)},
+    otherData: {json.dumps(categories['otherData'] if categories['otherData'] else None, indent=8)},
+    questionnaireData: {json.dumps(questionnaire_data, indent=8)},
+    defaultData: {json.dumps(st.session_state.default_fields, indent=8)},
+    conditionalData: {json.dumps(conditional_data, indent=8)},
     pdfName: "{form_name.replace('_', '-')}",
     metadata: {{
-        version: "1.0.0",
-        createdAt: "{datetime.now().isoformat()}",
         totalFields: {len(st.session_state.pdf_fields)},
-        mappedFields: {len(mapped_fields)},
-        questionnaireFields: {len(questionnaire_fields)}
+        mappedFields: {len(st.session_state.mapped_fields)},
+        questionnaireFields: {len(st.session_state.questionnaire_fields)},
+        removedFields: {len(st.session_state.removed_fields)}
     }}
 }};
 
-// Helper functions for form processing
-export const {form_name_clean}Helpers = {{
-    validateField: (fieldName: string, value: string): boolean => {{
-        const rule = {form_name_clean}.validationRules[fieldName];
-        if (!rule) return true;
-        const regex = new RegExp(rule);
-        return regex.test(value);
-    }},
-    
-    evaluateCondition: (conditionName: string, data: any): string => {{
-        const conditional = {form_name_clean}.conditionalData[conditionName];
-        if (!conditional) return '';
-        
-        try {{
-            const condition = conditional.condition.replace(/([a-zA-Z_][a-zA-Z0-9_.]*)/g, 'data.$1');
-            const result = eval(condition);
-            return result ? conditional.conditionTrue : conditional.conditionFalse;
-        }} catch (e) {{
-            console.error('Error evaluating condition:', e);
-            return conditional.conditionFalse;
-        }}
-    }},
-    
-    getRequiredFields: (): string[] => {{
-        const required: string[] = [];
-        const allData = {{
-            ...{form_name_clean}.customerData,
-            ...{form_name_clean}.beneficiaryData,
-            ...{form_name_clean}.attorneyData,
-            ...{form_name_clean}.caseData,
-            ...{form_name_clean}.addressData,
-            ...{form_name_clean}.contactData,
-            ...{form_name_clean}.otherData,
-            ...{form_name_clean}.questionnaireData
-        }};
-        
-        Object.entries(allData).forEach(([fieldName, fieldInfo]) => {{
-            if (fieldInfo && fieldInfo.required) {{
-                required.push(fieldName);
-            }}
-        }});
-        
-        return required;
-    }}
-}};
-
-export default {form_name_clean};
-"""
+export default {form_name_clean};"""
     
     return ts_content
 
-def export_mapping_configuration(form_name: str) -> str:
-    """Export complete mapping configuration as JSON"""
-    config = {
-        "formName": form_name,
-        "version": "1.0.0",
-        "exportDate": datetime.now().isoformat(),
-        "pdfFields": st.session_state.pdf_fields,
-        "mappedFields": st.session_state.mapped_fields,
-        "questionnaireFields": st.session_state.questionnaire_fields,
-        "questionnaire_controls": st.session_state.questionnaire_controls,  # Add this
-        "conditionalFields": st.session_state.conditional_fields,
-        "defaultFields": st.session_state.default_fields,
-        "validationRules": st.session_state.validation_rules,
-        "fieldGroups": st.session_state.field_groups,
-        "metadata": {
-            "totalFields": len(st.session_state.pdf_fields),
-            "mappedFields": len(st.session_state.mapped_fields),
-            "questionnaireFields": len(st.session_state.questionnaire_fields),
-            "conditionalFields": len(st.session_state.conditional_fields),
-            "unmappedFields": len(st.session_state.pdf_fields) - 
-                            len(st.session_state.mapped_fields) - 
-                            len(st.session_state.questionnaire_fields)
-        }
-    }
-    
-    return json.dumps(config, indent=2)
-
-def import_mapping_configuration(config_json: str):
-    """Import mapping configuration from JSON"""
-    try:
-        config = json.loads(config_json)
-        
-        # Validate configuration
-        required_keys = ['mappedFields', 'questionnaireFields', 'conditionalFields', 'defaultFields']
-        for key in required_keys:
-            if key not in config:
-                raise ValueError(f"Missing required key: {key}")
-        
-        # Import configuration
-        st.session_state.mapped_fields = config.get('mappedFields', {})
-        st.session_state.questionnaire_fields = config.get('questionnaireFields', {})
-        st.session_state.questionnaire_controls = config.get('questionnaire_controls', [])  # Add this
-        st.session_state.conditional_fields = config.get('conditionalFields', {})
-        st.session_state.default_fields = config.get('defaultFields', {})
-        st.session_state.validation_rules = config.get('validationRules', {})
-        st.session_state.field_groups = config.get('fieldGroups', {})
-        
-        return True, "Configuration imported successfully!"
-    
-    except Exception as e:
-        return False, f"Error importing configuration: {str(e)}"
-
-def create_field_group(group_name: str, fields: List[str]):
-    """Create a logical group of fields"""
-    if group_name not in st.session_state.field_groups:
-        st.session_state.field_groups[group_name] = []
-    
-    st.session_state.field_groups[group_name].extend(fields)
-    st.session_state.field_groups[group_name] = list(set(st.session_state.field_groups[group_name]))
-
-def suggest_validation_rule(field_name: str, field_type: str) -> str:
-    """Suggest validation rule based on field name and type"""
-    field_lower = field_name.lower()
-    
-    # Check common patterns
-    for pattern_name, pattern in VALIDATION_PATTERNS.items():
-        if pattern_name in field_lower:
-            return pattern
-    
-    # Type-based suggestions
-    if field_type == 'Date':
-        return r'^\d{1,2}/\d{1,2}/\d{4}$'
-    elif field_type == 'Currency':
-        return r'^\$?[\d,]+(\.\d{2})?$'
-    elif 'number' in field_lower:
-        return r'^\d+$'
-    
-    return ''
-
-def display_mapping_visualization():
-    """Display visual representation of field mappings"""
-    st.subheader("📊 Mapping Visualization")
-    
-    # Create summary metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.metric("Total Fields", len(st.session_state.pdf_fields))
-    
-    with col2:
-        mapped_count = len(st.session_state.mapped_fields)
-        st.metric("Mapped Fields", mapped_count,
-                 f"{(mapped_count/len(st.session_state.pdf_fields)*100):.1f}%" if st.session_state.pdf_fields else "0%")
-    
-    with col3:
-        st.metric("Questionnaire", len(st.session_state.questionnaire_fields))
-    
-    with col4:
-        st.metric("Conditional", len(st.session_state.conditional_fields))
-    
-    with col5:
-        unmapped = len(st.session_state.pdf_fields) - mapped_count - len(st.session_state.questionnaire_fields)
-        st.metric("Unmapped", unmapped)
-    
-    # Field status breakdown
-    if st.session_state.pdf_fields:
-        st.markdown("### Field Status Breakdown")
-        
-        # Categorize fields
-        field_categories = defaultdict(list)
-        for field in st.session_state.pdf_fields:
-            field_name = field['name']
-            if field_name in st.session_state.mapped_fields:
-                mapping = st.session_state.mapped_fields[field_name]
-                # Handle mapping with type format
-                if ':' in mapping:
-                    mapping_path, _ = mapping.split(':', 1)
-                else:
-                    mapping_path = mapping
-                category = mapping_path.split('.')[0]
-                field_categories[category].append(field_name)
-            elif field_name in st.session_state.questionnaire_fields:
-                field_categories['questionnaire'].append(field_name)
-            else:
-                field_categories['unmapped'].append(field_name)
-        
-        # Display categories
-        for category, fields in sorted(field_categories.items()):
-            with st.expander(f"{category.title()} ({len(fields)} fields)", expanded=False):
-                for field in sorted(fields):
-                    if category == 'unmapped':
-                        st.markdown(f'<div class="field-unmapped">❌ {field}</div>', 
-                                  unsafe_allow_html=True)
-                    elif category == 'questionnaire':
-                        st.markdown(f'<div class="field-questionnaire">❓ {field}</div>', 
-                                  unsafe_allow_html=True)
-                    else:
-                        mapping = st.session_state.mapped_fields.get(field, '')
-                        st.markdown(f'<div class="field-mapped">✅ {field} → {mapping}</div>', 
-                                  unsafe_allow_html=True)
-
-# Helper function for field mapping display (moved before it's used)
-def display_field_mapping_row(field):
-    """Display a single field mapping row"""
-    field_name = field['name']
-    field_type = field['type']
-    
-    # Create unique key for this field
-    field_key = hashlib.md5(field_name.encode()).hexdigest()[:8]
-    
-    col1, col2, col3, col4, col5 = st.columns([3, 3, 1, 1, 1])
-    
-    with col1:
-        # Field name and type
-        st.text_input(
-            "Field",
-            value=f"{field_name} ({field_type})",
-            disabled=True,
-            key=f"display_{field_key}"
-        )
-    
-    with col2:
-        # Mapping input
-        current_mapping = st.session_state.mapped_fields.get(field_name, '')
-        
-        # Suggest mapping if none exists
-        if not current_mapping and field_name not in st.session_state.questionnaire_fields:
-            suggested, confidence = auto_map_field_enhanced(
-                field_name,
-                st.session_state.get('extracted_text', '')
-            )
-            placeholder = suggested if suggested else "e.g., customer.field_name"
-        else:
-            placeholder = "e.g., customer.field_name"
-        
-        mapping = st.text_input(
-            "Mapping",
-            value=current_mapping,
-            key=f"map_{field_key}",
-            placeholder=placeholder,
-            disabled=field_name in st.session_state.questionnaire_fields
-        )
-        
-        # Update mapping if changed
-        if mapping != current_mapping and field_name not in st.session_state.questionnaire_fields:
-            if mapping:
-                st.session_state.mapped_fields[field_name] = mapping
-            elif field_name in st.session_state.mapped_fields:
-                del st.session_state.mapped_fields[field_name]
-    
-    with col3:
-        # Quick actions
-        if field_name not in st.session_state.questionnaire_fields:
-            if st.button("❓", key=f"quest_{field_key}",
-                       help="Move to questionnaire", use_container_width=True):
-                st.session_state.questionnaire_fields[field_name] = {
-                    'type': field_type,
-                    'required': field.get('required', False),
-                    'options': '',
-                    'validation': ''
-                }
-                if field_name in st.session_state.mapped_fields:
-                    del st.session_state.mapped_fields[field_name]
-                st.rerun()
-    
-    with col4:
-        # Validation indicator
-        if field_name in st.session_state.validation_rules:
-            st.button("✓", key=f"val_ind_{field_key}",
-                    help=f"Validation: {st.session_state.validation_rules[field_name]}",
-                    use_container_width=True, disabled=True)
-        else:
-            if st.button("＋", key=f"add_val_{field_key}",
-                       help="Add validation", use_container_width=True):
-                suggested = suggest_validation_rule(field_name, field_type)
-                if suggested:
-                    st.session_state.validation_rules[field_name] = suggested
-                    st.rerun()
-    
-    with col5:
-        # Status indicator
-        if field_name in st.session_state.mapped_fields:
-            st.success("✅")
-        elif field_name in st.session_state.questionnaire_fields:
-            st.info("❓")
-        else:
-            st.error("❌")
-
-# Function to convert questionnaire fields to JSON control format
-def generate_questionnaire_json(questionnaire_fields: Dict) -> str:
-    """Generate JSON controls array from questionnaire fields"""
+def generate_questionnaire_json():
+    """Generate JSON controls format for questionnaire"""
     controls = []
     
-    for idx, (field_name, field_info) in enumerate(questionnaire_fields.items()):
+    for field_name, field_info in st.session_state.questionnaire_fields.items():
         control = {
             "name": re.sub(r'[^\w]', '_', field_name),
-            "label": field_name,
-            "type": field_info.get('type', 'text').lower()
+            "label": field_info.get('label', field_name),
+            "type": field_info.get('type', 'text'),
+            "validators": {
+                "required": field_info.get('required', False)
+            },
+            "style": field_info.get('style', {"col": "12"})
         }
         
-        # Map field types to control types
-        type_mapping = {
-            'TextBox': 'text',
-            'CheckBox': 'checkbox',
-            'RadioButton': 'radio',
-            'DropDown': 'select',
-            'Date': 'date',
-            'TextArea': 'textarea',
-            'Currency': 'text',
-            'colorSwitch': 'colorSwitch',
-            'title': 'title'
-        }
-        
-        control['type'] = type_mapping.get(field_info.get('type', 'TextBox'), 'text')
-        
-        # Add validators
-        validators = {}
-        if field_info.get('required', False):
-            validators['required'] = True
+        # Add validation pattern if exists
         if field_info.get('validation'):
-            validators['pattern'] = field_info.get('validation')
-        
-        control['validators'] = validators
-        
-        # Add style
-        control['style'] = {"col": "12"}
+            control['validators']['pattern'] = field_info['validation']
         
         # Add options for select/radio
         if control['type'] in ['select', 'radio'] and field_info.get('options'):
-            options = field_info.get('options', '').split('\n')
+            options = field_info['options'].split('\n')
             if control['type'] == 'radio':
-                # For radio buttons, create separate controls
-                for opt_idx, option in enumerate(options):
+                # For radio, create separate controls
+                for idx, option in enumerate(options):
                     radio_control = control.copy()
-                    radio_control['value'] = str(opt_idx + 1)
+                    radio_control['value'] = str(idx + 1)
                     radio_control['label'] = option
-                    radio_control['id'] = f"{control['name']}_{opt_idx}"
+                    radio_control['id'] = f"{control['name']}_{idx}"
                     controls.append(radio_control)
                 continue
             else:
@@ -1211,1428 +672,510 @@ def generate_questionnaire_json(questionnaire_fields: Dict) -> str:
     
     return json.dumps({"controls": controls}, indent=2)
 
-# Main UI
-st.title("📄 Enhanced PDF Form Automation System")
-st.markdown("---")
+# Main Application
+st.title("📄 PDF Form Automation System")
+st.markdown("Extract fields from PDF forms and generate TypeScript configurations")
 
-# Sidebar for navigation and tools
+# Sidebar
 with st.sidebar:
-    st.header("🧭 Navigation")
+    st.header("🔧 Configuration")
     
-    # Step selector
-    step = st.selectbox(
-        "Current Step:",
-        ["1. Upload & Extract", "2. Field Mapping", "3. Questionnaire Setup", 
-         "4. Validation & Groups", "5. Generate Output", "6. Mapping Overview"],
-        key="navigation_step"
+    # Form name
+    form_name = st.text_input(
+        "Form Name",
+        value=st.session_state.get('form_name', 'UnknownForm'),
+        help="Enter the form name (e.g., I129, I539, H2B)"
     )
+    st.session_state.form_name = form_name
     
     st.markdown("---")
     
-    # Quick actions
-    st.header("⚡ Quick Actions")
-    
-    if st.button("📥 Import Configuration", use_container_width=True):
-        st.session_state.show_import = True
-    
-    if st.session_state.pdf_fields:
-        if st.button("📤 Export Configuration", use_container_width=True):
-            config_json = export_mapping_configuration(
-                st.session_state.get('form_name', 'form')
-            )
-            st.download_button(
-                label="💾 Download Configuration",
-                data=config_json,
-                file_name=f"{st.session_state.get('form_name', 'form')}_config.json",
-                mime="application/json",
-                use_container_width=True
-            )
-    
-    # Auto-save toggle
-    st.session_state.auto_save = st.checkbox(
-        "🔄 Auto-save changes",
-        value=st.session_state.get('auto_save', True)
-    )
-    
-    st.markdown("---")
-    
-    # Statistics
+    # Quick stats
     if st.session_state.pdf_fields:
         st.header("📊 Statistics")
-        st.info(f"""
-        **Total Fields:** {len(st.session_state.pdf_fields)}  
-        **Mapped:** {len(st.session_state.mapped_fields)}  
-        **Questionnaire:** {len(st.session_state.questionnaire_fields)}  
-        **Conditional:** {len(st.session_state.conditional_fields)}  
-        **Groups:** {len(st.session_state.field_groups)}
-        """)
-
-# Import configuration dialog
-if st.session_state.get('show_import', False):
-    with st.form("import_form"):
-        st.subheader("📥 Import Configuration")
-        config_file = st.file_uploader("Choose configuration file", type="json")
+        
+        total_fields = len(st.session_state.pdf_fields)
+        mapped = len(st.session_state.mapped_fields)
+        questionnaire = len(st.session_state.questionnaire_fields)
+        removed = len(st.session_state.removed_fields)
+        unmapped = total_fields - mapped - questionnaire - removed
         
         col1, col2 = st.columns(2)
         with col1:
-            if st.form_submit_button("Import", type="primary"):
-                if config_file:
-                    config_content = config_file.read().decode('utf-8')
-                    success, message = import_mapping_configuration(config_content)
-                    if success:
-                        st.success(message)
-                        st.session_state.show_import = False
-                        st.rerun()
-                    else:
-                        st.error(message)
+            st.metric("Total Fields", total_fields)
+            st.metric("Mapped", mapped)
+        with col2:
+            st.metric("Questionnaire", questionnaire)
+            st.metric("Unmapped", unmapped)
+        
+        if removed > 0:
+            st.metric("Removed", removed)
+    
+    st.markdown("---")
+    
+    # Tools
+    st.header("🛠️ Tools")
+    
+    if st.button("🔄 Reset All", use_container_width=True):
+        for key in ['pdf_fields', 'mapped_fields', 'questionnaire_fields', 
+                   'conditional_fields', 'default_fields', 'removed_fields']:
+            st.session_state[key] = {} if 'fields' in key else []
+        st.rerun()
+    
+    st.toggle("Show Removed Fields", key="show_removed_fields")
+
+# Main content area with tabs
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📤 Upload & Extract",
+    "🗂️ Field Mapping",
+    "❓ Questionnaire",
+    "⚙️ Advanced Settings",
+    "📥 Generate & Download"
+])
+
+# Tab 1: Upload & Extract
+with tab1:
+    st.header("Step 1: Upload PDF and Extract Fields")
+    
+    uploaded_file = st.file_uploader(
+        "Choose a PDF file",
+        type="pdf",
+        help="Upload a PDF form to extract fields"
+    )
+    
+    if uploaded_file is not None:
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.info(f"📄 Uploaded: {uploaded_file.name}")
         
         with col2:
-            if st.form_submit_button("Cancel"):
-                st.session_state.show_import = False
-                st.rerun()
-
-# Step 1: Upload & Extract
-if step == "1. Upload & Extract":
-    st.header("📤 Step 1: Upload PDF & Extract Fields")
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        uploaded_file = st.file_uploader(
-            "Choose a PDF file",
-            type="pdf",
-            help="Upload a fillable PDF form to extract fields"
-        )
-        
-        if uploaded_file is not None:
-            # Form name input
-            default_name = uploaded_file.name.replace('.pdf', '').replace('-', '').replace(' ', '_').upper()
-            form_name = st.text_input(
-                "Form Name (e.g., I129, G28, I90):",
-                value=default_name,
-                help="Enter a clean form name without spaces or special characters"
-            )
-            
-            # Extract button
             if st.button("🔍 Extract Fields", type="primary", use_container_width=True):
                 with st.spinner("Extracting fields from PDF..."):
-                    fields = extract_pdf_fields_enhanced(uploaded_file)
-                    
+                    fields = extract_pdf_fields(uploaded_file)
                     st.session_state.pdf_fields = fields
-                    st.session_state.form_name = form_name
                     
                     if fields:
-                        st.success(f"✅ Successfully extracted {len(fields)} fields!")
+                        st.success(f"✅ Extracted {len(fields)} fields!")
                         
-                        # Auto-map fields
-                        auto_mapped = 0
-                        for field in fields:
-                            field_name = field['name']
-                            mapping, confidence = auto_map_field_enhanced(
-                                field_name, 
-                                st.session_state.get('extracted_text', '')
-                            )
-                            if mapping and confidence >= 0.8:
-                                st.session_state.mapped_fields[field_name] = mapping
-                                auto_mapped += 1
+                        # Auto process fields
+                        processed = auto_process_fields()
+                        if processed > 0:
+                            st.info(f"🤖 Auto-processed {processed} fields")
                         
-                        if auto_mapped > 0:
-                            st.info(f"🤖 Auto-mapped {auto_mapped} fields with high confidence")
+                        st.rerun()
                     else:
-                        st.warning("No fields could be extracted automatically.")
-                        st.info("You can add fields manually in the next step.")
-    
-    with col2:
-        if uploaded_file:
-            st.subheader("📋 File Information")
-            st.write(f"**Filename:** {uploaded_file.name}")
-            st.write(f"**Size:** {uploaded_file.size / 1024:.2f} KB")
-            st.write(f"**Type:** PDF Document")
-            
-            # Preview option
-            if st.checkbox("Show PDF Preview"):
-                try:
-                    base64_pdf = base64.b64encode(uploaded_file.read()).decode('utf-8')
-                    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="500" type="application/pdf"></iframe>'
-                    st.markdown(pdf_display, unsafe_allow_html=True)
-                    uploaded_file.seek(0)  # Reset file pointer
-                except:
-                    st.error("Unable to display PDF preview")
+                        st.warning("⚠️ No fields could be extracted from the PDF")
     
     # Display extracted fields
     if st.session_state.pdf_fields:
-        st.subheader("📝 Extracted Fields")
+        st.subheader("📋 Extracted Fields")
         
-        # Filter options
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            filter_type = st.selectbox(
-                "Filter by Type:",
-                ["All"] + list(FIELD_TYPES.keys())
-            )
-        with col2:
-            filter_status = st.selectbox(
-                "Filter by Status:",
-                ["All", "Mapped", "Questionnaire", "Unmapped"]
-            )
-        with col3:
-            search_term = st.text_input("Search fields:", placeholder="Enter field name...")
+        # Field summary
+        parts = organize_fields_by_part()
         
-        # Filter fields
-        filtered_fields = []
-        for field in st.session_state.pdf_fields:
-            # Type filter
-            if filter_type != "All" and field['type'] != filter_type:
-                continue
-            
-            # Status filter
-            field_name = field['name']
-            if filter_status == "Mapped" and field_name not in st.session_state.mapped_fields:
-                continue
-            elif filter_status == "Questionnaire" and field_name not in st.session_state.questionnaire_fields:
-                continue
-            elif filter_status == "Unmapped" and (
-                field_name in st.session_state.mapped_fields or 
-                field_name in st.session_state.questionnaire_fields
-            ):
-                continue
-            
-            # Search filter
-            if search_term and search_term.lower() not in field_name.lower():
-                continue
-            
-            filtered_fields.append(field)
-        
-        # Display fields
-        if filtered_fields:
-            df = pd.DataFrame(filtered_fields)
-            
-            # Add status column
-            df['status'] = df['name'].apply(lambda x: 
-                'Mapped' if x in st.session_state.mapped_fields 
-                else 'Questionnaire' if x in st.session_state.questionnaire_fields 
-                else 'Unmapped'
-            )
-            
-            # Style the dataframe
-            def style_status(val):
-                if val == 'Mapped':
-                    return 'background-color: #d4edda'
-                elif val == 'Questionnaire':
-                    return 'background-color: #d1ecf1'
-                else:
-                    return 'background-color: #f8d7da'
-            
-            styled_df = df.style.applymap(style_status, subset=['status'])
-            st.dataframe(styled_df, use_container_width=True)
-        else:
-            st.info("No fields match the current filters")
+        for part_name, fields in parts.items():
+            if fields:
+                with st.expander(f"{part_name} ({len(fields)} fields)", expanded=(part_name == "Unmapped Fields")):
+                    for field in fields:
+                        col1, col2, col3 = st.columns([3, 2, 1])
+                        
+                        with col1:
+                            icon = "☑️" if field['type'] == 'CheckBox' else "📝"
+                            st.text(f"{icon} {field['name']}")
+                        
+                        with col2:
+                            st.text(f"Type: {field['type']}")
+                        
+                        with col3:
+                            if st.button("🗑️", key=f"remove_{field['name']}", help="Remove field"):
+                                st.session_state.removed_fields.append(field['name'])
+                                st.rerun()
 
-# Step 2: Field Mapping
-elif step == "2. Field Mapping":
-    st.header("🔗 Step 2: Field Mapping")
+# Tab 2: Field Mapping
+with tab2:
+    st.header("Step 2: Map Fields to Database")
     
     if not st.session_state.pdf_fields:
-        st.warning("⚠️ Please upload a PDF and extract fields first!")
-        if st.button("Go to Upload Step"):
-            st.session_state.navigation_step = "1. Upload & Extract"
-            st.rerun()
+        st.warning("⚠️ Please upload and extract fields first!")
     else:
-        st.subheader(f"Mapping fields for: {st.session_state.get('form_name', 'Unknown Form')}")
-        
-        # Mapping tools
-        col1, col2, col3, col4 = st.columns(4)
+        # Quick actions
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("🤖 Auto-map All", type="primary", use_container_width=True):
-                auto_mapped = 0
+            if st.button("🤖 Auto-Map All", type="primary", use_container_width=True):
+                mapped_count = 0
                 for field in st.session_state.pdf_fields:
                     field_name = field['name']
-                    if field_name not in st.session_state.mapped_fields:
-                        mapping, confidence = auto_map_field_enhanced(
-                            field_name,
-                            st.session_state.get('extracted_text', '')
-                        )
-                        if mapping and confidence >= 0.7:
-                            st.session_state.mapped_fields[field_name] = mapping
-                            auto_mapped += 1
-                st.success(f"✅ Auto-mapped {auto_mapped} additional fields!")
+                    if field_name not in st.session_state.mapped_fields and \
+                       field_name not in st.session_state.questionnaire_fields and \
+                       field_name not in st.session_state.removed_fields:
+                        mapping, score = auto_map_field(field_name)
+                        if mapping and score >= 0.8:
+                            st.session_state.mapped_fields[field_name] = f"{mapping}:{field['type']}"
+                            mapped_count += 1
+                
+                st.success(f"✅ Auto-mapped {mapped_count} fields")
+                st.rerun()
         
         with col2:
-            if st.button("📋 Apply Template", use_container_width=True):
-                st.session_state.show_template_selector = True
+            if st.button("❓ Unmapped to Questionnaire", use_container_width=True):
+                moved = 0
+                for field in st.session_state.pdf_fields:
+                    field_name = field['name']
+                    if field_name not in st.session_state.mapped_fields and \
+                       field_name not in st.session_state.questionnaire_fields and \
+                       field_name not in st.session_state.removed_fields:
+                        st.session_state.questionnaire_fields[field_name] = {
+                            'type': get_questionnaire_type(field['type']),
+                            'required': field.get('required', False),
+                            'options': 'Yes\nNo' if field['type'] == 'CheckBox' else '',
+                            'validation': '',
+                            'label': field_name,
+                            'style': {"col": "12"}
+                        }
+                        moved += 1
+                
+                if moved > 0:
+                    st.success(f"✅ Moved {moved} fields to questionnaire")
+                    st.rerun()
         
         with col3:
-            if st.button("💾 Save Template", use_container_width=True):
-                st.session_state.show_save_template = True
+            if st.button("🗑️ Clear All Mappings", use_container_width=True):
+                st.session_state.mapped_fields = {}
+                st.success("✅ Cleared all mappings")
+                st.rerun()
         
-        with col4:
-            if st.button("🗑️ Clear All", type="secondary", use_container_width=True):
-                if st.session_state.mapped_fields:
-                    st.session_state.mapped_fields = {}
-                    st.success("All mappings cleared!")
+        st.markdown("---")
         
-        # Template dialogs
-        if st.session_state.get('show_template_selector', False):
-            with st.form("template_selector"):
-                st.subheader("📋 Select Mapping Template")
-                template_name = st.selectbox(
-                    "Choose template:",
-                    ["I-129 Standard", "G-28 Standard", "I-90 Standard", "Custom..."]
-                )
+        # Display fields by parts for mapping
+        parts = organize_fields_by_part()
+        
+        # Show unmapped fields first
+        if parts["Unmapped Fields"]:
+            st.subheader(f"🔴 Unmapped Fields ({len(parts['Unmapped Fields'])})")
+            
+            for field in parts["Unmapped Fields"]:
+                if field['name'] not in st.session_state.removed_fields:
+                    col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
+                    
+                    with col1:
+                        st.text_input(
+                            "Field",
+                            value=f"{field['name']} ({field['type']})",
+                            disabled=True,
+                            key=f"display_map_{field['name']}"
+                        )
+                    
+                    with col2:
+                        mapping = st.text_input(
+                            "Mapping",
+                            placeholder="e.g., customer.customer_name",
+                            key=f"mapping_{field['name']}"
+                        )
+                        
+                        if mapping:
+                            st.session_state.mapped_fields[field['name']] = f"{mapping}:{field['type']}"
+                    
+                    with col3:
+                        if st.button("❓", key=f"to_quest_{field['name']}", help="Move to questionnaire"):
+                            st.session_state.questionnaire_fields[field['name']] = {
+                                'type': get_questionnaire_type(field['type']),
+                                'required': field.get('required', False),
+                                'options': '',
+                                'validation': '',
+                                'label': field['name'],
+                                'style': {"col": "12"}
+                            }
+                            st.rerun()
+                    
+                    with col4:
+                        if st.button("🗑️", key=f"remove_map_{field['name']}", help="Remove field"):
+                            st.session_state.removed_fields.append(field['name'])
+                            st.rerun()
+        
+        # Show mapped fields
+        st.subheader("🟢 Mapped Fields")
+        
+        mapped_fields = [f for f in st.session_state.pdf_fields 
+                        if f['name'] in st.session_state.mapped_fields and 
+                        f['name'] not in st.session_state.removed_fields]
+        
+        if mapped_fields:
+            for field in mapped_fields:
+                col1, col2, col3 = st.columns([3, 3, 1])
                 
-                col1, col2 = st.columns(2)
                 with col1:
-                    if st.form_submit_button("Apply", type="primary"):
-                        # Apply template logic here
-                        st.success(f"Applied {template_name} template!")
-                        st.session_state.show_template_selector = False
-                        st.rerun()
+                    st.text_input(
+                        "Field",
+                        value=f"{field['name']} ({field['type']})",
+                        disabled=True,
+                        key=f"mapped_display_{field['name']}"
+                    )
                 
                 with col2:
-                    if st.form_submit_button("Cancel"):
-                        st.session_state.show_template_selector = False
-                        st.rerun()
-        
-        # Manual field addition
-        with st.expander("➕ Add Field Manually", expanded=False):
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                new_field_name = st.text_input("Field Name", placeholder="e.g., Additional_Notes")
-            with col2:
-                new_field_type = st.selectbox(
-                    "Field Type",
-                    list(FIELD_TYPES.keys())
-                )
-            with col3:
-                st.write("")  # Spacer
-                st.write("")  # Spacer
-                if st.button("Add Field", use_container_width=True):
-                    if new_field_name and new_field_name not in [f['name'] for f in st.session_state.pdf_fields]:
-                        st.session_state.pdf_fields.append({
-                            'name': new_field_name,
-                            'type': new_field_type,
-                            'value': '',
-                            'required': False,
-                            'page': 0,
-                            'method': 'manual'
-                        })
-                        st.success(f"Added field: {new_field_name}")
-                        st.rerun()
-        
-        # Batch operations
-        st.subheader("🔧 Batch Operations")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            batch_prefix = st.text_input(
-                "Map all fields starting with:",
-                placeholder="e.g., P5_ for Part 5 fields"
-            )
-        
-        with col2:
-            batch_mapping = st.text_input(
-                "To mapping prefix:",
-                placeholder="e.g., case.employment."
-            )
-        
-        if st.button("Apply Batch Mapping", use_container_width=True):
-            if batch_prefix and batch_mapping:
-                batch_count = 0
-                for field in st.session_state.pdf_fields:
-                    if field['name'].startswith(batch_prefix):
-                        field_suffix = field['name'][len(batch_prefix):].lower()
-                        st.session_state.mapped_fields[field['name']] = batch_mapping + field_suffix
-                        batch_count += 1
+                    st.text_input(
+                        "Mapped to",
+                        value=st.session_state.mapped_fields[field['name']],
+                        disabled=True,
+                        key=f"mapped_to_{field['name']}"
+                    )
                 
-                if batch_count > 0:
-                    st.success(f"Batch mapped {batch_count} fields!")
-                else:
-                    st.warning("No fields matched the prefix")
-        
-        # Field mapping interface
-        st.subheader("📝 Individual Field Mappings")
-        
-        # Group unmapped fields first
-        unmapped_fields = []
-        mapped_fields = []
-        questionnaire_fields = []
-        
-        for field in st.session_state.pdf_fields:
-            field_name = field['name']
-            if field_name in st.session_state.mapped_fields:
-                mapped_fields.append(field)
-            elif field_name in st.session_state.questionnaire_fields:
-                questionnaire_fields.append(field)
-            else:
-                unmapped_fields.append(field)
-        
-        # Display unmapped fields first
-        if unmapped_fields:
-            st.markdown("#### 🔴 Unmapped Fields")
-            for field in unmapped_fields:
-                display_field_mapping_row(field)
-        
-        # Then questionnaire fields
-        if questionnaire_fields:
-            st.markdown("#### 🔵 Questionnaire Fields")
-            for field in questionnaire_fields:
-                display_field_mapping_row(field)
-        
-        # Finally mapped fields
-        if mapped_fields:
-            st.markdown("#### 🟢 Mapped Fields")
-            for field in mapped_fields:
-                display_field_mapping_row(field)
+                with col3:
+                    if st.button("❌", key=f"unmap_{field['name']}", help="Remove mapping"):
+                        del st.session_state.mapped_fields[field['name']]
+                        st.rerun()
+        else:
+            st.info("No fields mapped yet")
 
-# Step 3: Questionnaire Setup
-elif step == "3. Questionnaire Setup":
-    st.header("❓ Step 3: Questionnaire Setup")
-    
-    # Toggle between old and new questionnaire format
-    use_json_format = st.checkbox("Use JSON Control Format (like g28.json)", value=True)
-    
-    if use_json_format:
-        st.info("Using JSON control format for questionnaire. Fields will be structured like the g28.json example.")
-        
-        # Import JSON controls
-        with st.expander("📥 Import JSON Controls", expanded=False):
-            json_file = st.file_uploader("Upload JSON controls file", type="json")
-            if json_file:
-                if st.button("Import Controls"):
-                    try:
-                        controls_data = json.loads(json_file.read().decode('utf-8'))
-                        if 'controls' in controls_data:
-                            st.session_state.questionnaire_controls = controls_data['controls']
-                            # Convert to questionnaire_fields format for compatibility
-                            for control in controls_data['controls']:
-                                field_name = control.get('label', control.get('name'))
-                                st.session_state.questionnaire_fields[field_name] = {
-                                    'type': control.get('type', 'text'),
-                                    'required': control.get('validators', {}).get('required', False),
-                                    'validation': control.get('validators', {}).get('pattern', ''),
-                                    'options': '\n'.join(control.get('options', [])) if control.get('options') else '',
-                                    'value': control.get('value', ''),
-                                    'style': control.get('style', {"col": "12"}),
-                                    'className': control.get('className', ''),
-                                    'id': control.get('id', control.get('name'))
-                                }
-                            st.success(f"Imported {len(controls_data['controls'])} controls!")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"Error importing JSON: {str(e)}")
+# Tab 3: Questionnaire
+with tab3:
+    st.header("Step 3: Configure Questionnaire Fields")
     
     # Add new questionnaire field
-    with st.expander("➕ Add New Questionnaire Field", expanded=True):
+    with st.expander("➕ Add New Questionnaire Field", expanded=False):
         col1, col2, col3 = st.columns([3, 2, 1])
         
         with col1:
-            new_q_name = st.text_input(
-                "Question/Field Name",
-                placeholder="e.g., Have you ever been arrested?"
-            )
+            new_field_name = st.text_input("Field Name/Label", placeholder="e.g., Have you ever been arrested?")
         
         with col2:
-            field_types = ["text", "checkbox", "radio", "select", "date", 
-                          "textarea", "colorSwitch", "title"] if use_json_format else \
-                         ["TextBox", "CheckBox", "RadioButton", "DropDown", "Date", 
-                          "TextArea", "MultipleBox", "Currency"]
-            new_q_type = st.selectbox(
+            new_field_type = st.selectbox(
                 "Field Type",
-                field_types
+                ["text", "checkbox", "radio", "select", "date", "textarea"]
             )
         
         with col3:
-            new_q_required = st.checkbox("Required", value=True)
-            
-            if st.button("Add Question", use_container_width=True):
-                if new_q_name:
-                    st.session_state.questionnaire_fields[new_q_name] = {
-                        'type': new_q_type,
-                        'required': new_q_required,
-                        'options': '',
-                        'validation': '',
-                        'description': '',
-                        'style': {"col": "12"}
-                    }
-                    st.success(f"Added question: {new_q_name}")
-                    st.rerun()
+            new_field_required = st.checkbox("Required", value=True)
+        
+        if st.button("Add Field", type="primary"):
+            if new_field_name:
+                st.session_state.questionnaire_fields[new_field_name] = {
+                    'type': new_field_type,
+                    'required': new_field_required,
+                    'options': '',
+                    'validation': '',
+                    'label': new_field_name,
+                    'style': {"col": "12"}
+                }
+                st.success(f"✅ Added: {new_field_name}")
+                st.rerun()
     
-    # Export questionnaire as JSON
-    if st.session_state.questionnaire_fields and use_json_format:
-        if st.button("📤 Export as JSON Controls", type="primary", use_container_width=True):
-            json_controls = generate_questionnaire_json(st.session_state.questionnaire_fields)
-            st.download_button(
-                label="💾 Download JSON Controls",
-                data=json_controls,
-                file_name=f"{st.session_state.get('form_name', 'form')}_controls.json",
-                mime="application/json",
-                use_container_width=True
-            )
-    
-    # Questionnaire builder
+    # Display questionnaire fields
     if st.session_state.questionnaire_fields:
-        st.subheader("📋 Current Questionnaire Fields")
+        st.subheader(f"📋 Questionnaire Fields ({len(st.session_state.questionnaire_fields)})")
         
-        # Sort options
-        sort_option = st.radio(
-            "Sort by:",
-            ["Order Added", "Alphabetical", "Type", "Required First"],
-            horizontal=True
-        )
-        
-        # Sort fields
-        sorted_fields = list(st.session_state.questionnaire_fields.items())
-        if sort_option == "Alphabetical":
-            sorted_fields.sort(key=lambda x: x[0])
-        elif sort_option == "Type":
-            sorted_fields.sort(key=lambda x: x[1].get('type', ''))
-        elif sort_option == "Required First":
-            sorted_fields.sort(key=lambda x: not x[1].get('required', False))
-        
-        # Display fields
-        for idx, (field_name, field_info) in enumerate(sorted_fields):
-            with st.expander(
-                f"{'🔴' if field_info.get('required') else '⚪'} {field_name} ({field_info.get('type', 'TextBox')})",
-                expanded=False
-            ):
-                col1, col2 = st.columns([3, 1])
+        for field_name, field_info in list(st.session_state.questionnaire_fields.items()):
+            with st.expander(f"{field_name} ({field_info['type']})", expanded=False):
+                col1, col2 = st.columns([4, 1])
                 
                 with col1:
                     # Field properties
-                    field_types = ["text", "checkbox", "radio", "select", "date", 
-                                  "textarea", "colorSwitch", "title"] if use_json_format else \
-                                 ["TextBox", "CheckBox", "RadioButton", "DropDown", 
-                                  "Date", "TextArea", "MultipleBox", "Currency"]
-                    
                     field_info['type'] = st.selectbox(
-                        "Field Type",
-                        field_types,
-                        index=field_types.index(field_info.get('type', field_types[0])) 
-                              if field_info.get('type', field_types[0]) in field_types else 0,
-                        key=f"q_type_{idx}_{field_name}"
+                        "Type",
+                        ["text", "checkbox", "radio", "select", "date", "textarea"],
+                        index=["text", "checkbox", "radio", "select", "date", "textarea"].index(field_info['type']),
+                        key=f"q_type_{field_name}"
                     )
                     
                     field_info['required'] = st.checkbox(
-                        "Required Field",
+                        "Required",
                         value=field_info.get('required', False),
-                        key=f"q_req_{idx}_{field_name}"
+                        key=f"q_req_{field_name}"
                     )
                     
-                    # Type-specific options
-                    if field_info['type'] in ["radio", "select", "checkbox", "RadioButton", "DropDown", "CheckBox"]:
+                    if field_info['type'] in ['radio', 'select']:
                         field_info['options'] = st.text_area(
                             "Options (one per line)",
                             value=field_info.get('options', ''),
                             height=100,
-                            key=f"q_opt_{idx}_{field_name}",
-                            placeholder="Yes\nNo\nNot Applicable"
+                            key=f"q_opt_{field_name}"
                         )
                     
-                    elif field_info['type'] == "MultipleBox":
-                        field_info['sub_fields'] = st.text_area(
-                            "Sub-fields (one per line)",
-                            value=field_info.get('sub_fields', ''),
-                            height=100,
-                            key=f"q_sub_{idx}_{field_name}",
-                            placeholder="First Name\nLast Name\nMiddle Name"
-                        )
-                    
-                    # Style configuration for JSON format
-                    if use_json_format:
-                        col_style1, col_style2 = st.columns(2)
-                        with col_style1:
-                            col_width = st.selectbox(
-                                "Column Width",
-                                ["12", "6", "4", "3", "8", "9"],
-                                index=0,
-                                key=f"q_col_{idx}_{field_name}"
-                            )
-                            field_info['style'] = {"col": col_width}
-                        
-                        with col_style2:
-                            field_info['className'] = st.text_input(
-                                "CSS Class",
-                                value=field_info.get('className', ''),
-                                key=f"q_class_{idx}_{field_name}",
-                                placeholder="pt-15 custom-control-success"
-                            )
-                    
-                    # Validation rule
-                    col_val1, col_val2 = st.columns([3, 1])
-                    with col_val1:
-                        field_info['validation'] = st.text_input(
-                            "Validation Pattern (regex)",
-                            value=field_info.get('validation', ''),
-                            key=f"q_val_{idx}_{field_name}",
-                            placeholder=suggest_validation_rule(field_name, field_info['type'])
-                        )
-                    
-                    with col_val2:
-                        if st.button("Suggest", key=f"q_suggest_{idx}_{field_name}"):
-                            suggested = suggest_validation_rule(field_name, field_info['type'])
-                            if suggested:
-                                field_info['validation'] = suggested
-                                st.rerun()
-                    
-                    # Description/Help text
-                    field_info['description'] = st.text_area(
-                        "Help Text / Description",
-                        value=field_info.get('description', ''),
-                        height=60,
-                        key=f"q_desc_{idx}_{field_name}",
-                        placeholder="Provide additional guidance for this field..."
+                    field_info['validation'] = st.text_input(
+                        "Validation Pattern (regex)",
+                        value=field_info.get('validation', ''),
+                        key=f"q_val_{field_name}",
+                        placeholder="e.g., ^[0-9]{3}-[0-9]{2}-[0-9]{4}$ for SSN"
                     )
                 
                 with col2:
                     st.write("")  # Spacer
-                    
-                    # Actions
-                    if st.button("🗑️ Remove", key=f"q_remove_{idx}_{field_name}", 
-                               use_container_width=True):
+                    if st.button("🗑️ Remove", key=f"q_remove_{field_name}", use_container_width=True):
                         del st.session_state.questionnaire_fields[field_name]
                         st.rerun()
                     
-                    if st.button("📋 Duplicate", key=f"q_dup_{idx}_{field_name}",
-                               use_container_width=True):
-                        new_name = f"{field_name} (Copy)"
-                        st.session_state.questionnaire_fields[new_name] = field_info.copy()
-                        st.rerun()
-                    
-                    # Move to mapping
-                    if st.button("➡️ To Mapping", key=f"q_to_map_{idx}_{field_name}",
-                               use_container_width=True):
+                    if st.button("➡️ To Mapping", key=f"q_to_map_{field_name}", use_container_width=True):
                         del st.session_state.questionnaire_fields[field_name]
-                        # Add to PDF fields if not exists
-                        if not any(f['name'] == field_name for f in st.session_state.pdf_fields):
-                            st.session_state.pdf_fields.append({
-                                'name': field_name,
-                                'type': field_info['type'],
-                                'value': '',
-                                'required': field_info.get('required', False),
-                                'page': 0,
-                                'method': 'questionnaire'
-                            })
                         st.rerun()
-                
-                # Update the field info
-                st.session_state.questionnaire_fields[field_name] = field_info
-    
     else:
-        st.info("No questionnaire fields added yet. Add fields using the form above or move unmapped fields here.")
+        st.info("No questionnaire fields configured yet")
+
+# Tab 4: Advanced Settings
+with tab4:
+    st.header("Step 4: Advanced Configuration")
     
-    # Conditional fields section
-    st.markdown("---")
+    # Conditional Fields
     st.subheader("⚡ Conditional Fields")
     
-    # Add new conditional
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        st.markdown("Define fields that appear based on conditions")
-    with col2:
-        if st.button("➕ Add Conditional", use_container_width=True):
-            cond_id = f"condition_{len(st.session_state.conditional_fields) + 1}"
-            st.session_state.conditional_fields[cond_id] = {
-                "condition": "",
-                "conditionTrue": "",
-                "conditionFalse": "",
-                "conditionType": "TextBox",
-                "description": ""
-            }
-            st.rerun()
+    with st.expander("➕ Add Conditional Field", expanded=False):
+        cond_name = st.text_input("Condition Name", placeholder="e.g., showAddressFields")
+        cond_condition = st.text_input("Condition", placeholder="e.g., mailingAddressDifferent==true")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            cond_true = st.text_input("If True", placeholder="Value or action when true")
+        with col2:
+            cond_false = st.text_input("If False", placeholder="Value or action when false")
+        
+        cond_type = st.selectbox("Result Type", ["TextBox", "CheckBox", "Visibility", "Calculation"])
+        
+        if st.button("Add Conditional"):
+            if cond_name and cond_condition:
+                st.session_state.conditional_fields[cond_name] = {
+                    'condition': cond_condition,
+                    'conditionTrue': cond_true,
+                    'conditionFalse': cond_false,
+                    'conditionType': cond_type
+                }
+                st.success(f"✅ Added conditional: {cond_name}")
+                st.rerun()
     
     # Display conditionals
     if st.session_state.conditional_fields:
-        for cond_id, cond_info in list(st.session_state.conditional_fields.items()):
-            with st.expander(f"⚡ {cond_id}", expanded=True):
-                col1, col2 = st.columns([4, 1])
-                
-                with col1:
-                    # Condition builder
-                    st.markdown("**Condition Builder**")
-                    
-                    col_if1, col_if2, col_if3 = st.columns([2, 1, 2])
-                    with col_if1:
-                        field_select = st.selectbox(
-                            "If field",
-                            [""] + list(st.session_state.mapped_fields.keys()) + 
-                            list(st.session_state.questionnaire_fields.keys()),
-                            key=f"cond_field_{cond_id}"
-                        )
-                    
-                    with col_if2:
-                        operator = st.selectbox(
-                            "is",
-                            ["==", "!=", ">", "<", ">=", "<=", "contains", "starts with"],
-                            key=f"cond_op_{cond_id}"
-                        )
-                    
-                    with col_if3:
-                        value = st.text_input(
-                            "value",
-                            key=f"cond_value_{cond_id}",
-                            placeholder="e.g., Yes, H1B, true"
-                        )
-                    
-                    # Build condition string
-                    if field_select and operator and value:
-                        if operator == "contains":
-                            condition = f"{field_select}.includes('{value}')"
-                        elif operator == "starts with":
-                            condition = f"{field_select}.startsWith('{value}')"
-                        else:
-                            condition = f"{field_select} {operator} '{value}'"
-                        
-                        cond_info['condition'] = condition
-                    
-                    # Display full condition
-                    st.text_input(
-                        "Full Condition",
-                        value=cond_info.get('condition', ''),
-                        key=f"cond_full_{cond_id}",
-                        help="You can also write complex conditions manually"
-                    )
-                    
-                    # Results
-                    col_true, col_false = st.columns(2)
-                    
-                    with col_true:
-                        cond_info['conditionTrue'] = st.text_input(
-                            "✅ If True, show/set",
-                            value=cond_info.get('conditionTrue', ''),
-                            key=f"cond_true_{cond_id}",
-                            placeholder="e.g., Additional H1B Information"
-                        )
-                    
-                    with col_false:
-                        cond_info['conditionFalse'] = st.text_input(
-                            "❌ If False, show/set",
-                            value=cond_info.get('conditionFalse', ''),
-                            key=f"cond_false_{cond_id}",
-                            placeholder="e.g., Not Applicable"
-                        )
-                    
-                    # Result type
-                    cond_info['conditionType'] = st.selectbox(
-                        "Result Type",
-                        ["TextBox", "CheckBox", "Value", "ConditionBox", "Section"],
-                        index=["TextBox", "CheckBox", "Value", "ConditionBox", "Section"].index(
-                            cond_info.get('conditionType', 'TextBox')
-                        ),
-                        key=f"cond_type_{cond_id}"
-                    )
-                    
-                    # Description
-                    cond_info['description'] = st.text_area(
-                        "Description",
-                        value=cond_info.get('description', ''),
-                        height=60,
-                        key=f"cond_desc_{cond_id}",
-                        placeholder="Explain when this condition applies..."
-                    )
-                
-                with col2:
-                    st.write("")  # Spacer
-                    if st.button("🗑️ Remove", key=f"remove_cond_{cond_id}",
-                               use_container_width=True):
-                        del st.session_state.conditional_fields[cond_id]
-                        st.rerun()
-                    
-                    if st.button("📋 Duplicate", key=f"dup_cond_{cond_id}",
-                               use_container_width=True):
-                        new_id = f"condition_{len(st.session_state.conditional_fields) + 1}"
-                        st.session_state.conditional_fields[new_id] = cond_info.copy()
-                        st.rerun()
-                
-                # Update condition
-                st.session_state.conditional_fields[cond_id] = cond_info
-    
-    else:
-        st.info("No conditional fields defined yet. Click 'Add Conditional' to create one.")
-
-# Step 4: Validation & Groups
-elif step == "4. Validation & Groups":
-    st.header("✅ Step 4: Validation Rules & Field Groups")
-    
-    # Field Groups Section
-    st.subheader("📁 Field Groups")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown("Organize related fields into logical groups")
-    with col2:
-        if st.button("➕ Create Group", use_container_width=True):
-            st.session_state.show_create_group = True
-    
-    # Create group dialog
-    if st.session_state.get('show_create_group', False):
-        with st.form("create_group_form"):
-            st.subheader("Create Field Group")
-            
-            group_name = st.text_input(
-                "Group Name",
-                placeholder="e.g., Personal Information, Employment Details"
-            )
-            
-            # Field selector
-            all_fields = [f['name'] for f in st.session_state.pdf_fields]
-            selected_fields = st.multiselect(
-                "Select Fields",
-                all_fields,
-                help="Choose fields to include in this group"
-            )
-            
-            col1, col2 = st.columns(2)
+        for cond_name, cond_info in list(st.session_state.conditional_fields.items()):
+            col1, col2 = st.columns([4, 1])
             with col1:
-                if st.form_submit_button("Create", type="primary"):
-                    if group_name and selected_fields:
-                        create_field_group(group_name, selected_fields)
-                        st.success(f"Created group: {group_name}")
-                        st.session_state.show_create_group = False
-                        st.rerun()
-            
+                st.text(f"**{cond_name}**: {cond_info['condition']}")
+                st.text(f"True: {cond_info['conditionTrue']}, False: {cond_info['conditionFalse']}")
             with col2:
-                if st.form_submit_button("Cancel"):
-                    st.session_state.show_create_group = False
+                if st.button("🗑️", key=f"del_cond_{cond_name}"):
+                    del st.session_state.conditional_fields[cond_name]
                     st.rerun()
     
-    # Display existing groups
-    if st.session_state.field_groups:
-        for group_name, fields in st.session_state.field_groups.items():
-            with st.expander(f"📁 {group_name} ({len(fields)} fields)", expanded=False):
-                col1, col2 = st.columns([4, 1])
-                
-                with col1:
-                    # Display fields in group
-                    st.write("**Fields in this group:**")
-                    for field in fields:
-                        status = "✅" if field in st.session_state.mapped_fields else "❓" if field in st.session_state.questionnaire_fields else "❌"
-                        st.write(f"{status} {field}")
-                    
-                    # Add more fields
-                    available_fields = [f['name'] for f in st.session_state.pdf_fields if f['name'] not in fields]
-                    new_fields = st.multiselect(
-                        "Add more fields",
-                        available_fields,
-                        key=f"group_add_{group_name}"
-                    )
-                    
-                    if new_fields:
-                        st.session_state.field_groups[group_name].extend(new_fields)
-                        st.rerun()
-                
-                with col2:
-                    if st.button("🗑️ Delete Group", key=f"del_group_{group_name}",
-                               use_container_width=True):
-                        del st.session_state.field_groups[group_name]
-                        st.rerun()
-    
-    else:
-        st.info("No field groups created yet. Groups help organize related fields together.")
-    
-    # Validation Rules Section
     st.markdown("---")
-    st.subheader("🔍 Validation Rules")
     
-    # Quick validation templates
-    st.markdown("**Quick Templates:**")
-    col1, col2, col3, col4 = st.columns(4)
+    # Default Values
+    st.subheader("📝 Default Values")
     
+    col1, col2, col3 = st.columns([3, 2, 1])
     with col1:
-        if st.button("📧 Email Fields", use_container_width=True):
-            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-            for field in st.session_state.pdf_fields:
-                if 'email' in field['name'].lower():
-                    st.session_state.validation_rules[field['name']] = email_pattern
-            st.success("Applied email validation!")
-    
+        default_field = st.text_input("Field Name", placeholder="e.g., country")
     with col2:
-        if st.button("📞 Phone Fields", use_container_width=True):
-            phone_pattern = r'^[\d\s\-\(\)\+]+$'
-            for field in st.session_state.pdf_fields:
-                if any(term in field['name'].lower() for term in ['phone', 'tel', 'fax']):
-                    st.session_state.validation_rules[field['name']] = phone_pattern
-            st.success("Applied phone validation!")
-    
+        default_value = st.text_input("Default Value", placeholder="e.g., United States")
     with col3:
-        if st.button("📅 Date Fields", use_container_width=True):
-            date_pattern = r'^\d{1,2}/\d{1,2}/\d{4}$'
-            for field in st.session_state.pdf_fields:
-                if field['type'] == 'Date' or 'date' in field['name'].lower():
-                    st.session_state.validation_rules[field['name']] = date_pattern
-            st.success("Applied date validation!")
+        if st.button("Add Default"):
+            if default_field and default_value:
+                st.session_state.default_fields[default_field] = f"{default_value}:TextBox"
+                st.rerun()
     
-    with col4:
-        if st.button("🔢 Number Fields", use_container_width=True):
-            number_pattern = r'^\d+$'
-            for field in st.session_state.pdf_fields:
-                if 'number' in field['name'].lower() and field['type'] == 'TextBox':
-                    st.session_state.validation_rules[field['name']] = number_pattern
-            st.success("Applied number validation!")
-    
-    # Individual validation rules
-    st.markdown("**Field-Specific Rules:**")
-    
-    # Filter to show only fields that might need validation
-    validatable_fields = [f for f in st.session_state.pdf_fields 
-                         if f['type'] in ['TextBox', 'Date', 'Currency']]
-    
-    if validatable_fields:
-        for field in validatable_fields[:10]:  # Show first 10
-            col1, col2, col3 = st.columns([2, 3, 1])
-            
+    # Display defaults
+    if st.session_state.default_fields:
+        for field, value in list(st.session_state.default_fields.items()):
+            col1, col2 = st.columns([4, 1])
             with col1:
-                st.text_input(
-                    "Field",
-                    value=field['name'],
-                    disabled=True,
-                    key=f"val_field_{field['name']}"
-                )
-            
+                st.text(f"{field} = {value}")
             with col2:
-                current_rule = st.session_state.validation_rules.get(field['name'], '')
-                new_rule = st.text_input(
-                    "Validation Pattern",
-                    value=current_rule,
-                    key=f"val_pattern_{field['name']}",
-                    placeholder=suggest_validation_rule(field['name'], field['type'])
-                )
-                
-                if new_rule != current_rule:
-                    if new_rule:
-                        st.session_state.validation_rules[field['name']] = new_rule
-                    elif field['name'] in st.session_state.validation_rules:
-                        del st.session_state.validation_rules[field['name']]
-            
-            with col3:
-                if st.button("Test", key=f"val_test_{field['name']}",
-                           use_container_width=True):
-                    st.session_state[f"show_test_{field['name']}"] = True
-            
-            # Test validation
-            if st.session_state.get(f"show_test_{field['name']}", False):
-                test_value = st.text_input(
-                    "Test value:",
-                    key=f"val_test_value_{field['name']}",
-                    placeholder="Enter a test value"
-                )
-                
-                if test_value and field['name'] in st.session_state.validation_rules:
-                    try:
-                        import re
-                        pattern = st.session_state.validation_rules[field['name']]
-                        if re.match(pattern, test_value):
-                            st.success("✅ Valid!")
-                        else:
-                            st.error("❌ Invalid!")
-                    except:
-                        st.error("Invalid regex pattern!")
-        
-        if len(validatable_fields) > 10:
-            st.info(f"Showing 10 of {len(validatable_fields)} fields. More fields available.")
-    
-    # Validation summary
-    if st.session_state.validation_rules:
-        with st.expander("📊 Validation Summary", expanded=False):
-            val_df = pd.DataFrame(
-                [(field, rule) for field, rule in st.session_state.validation_rules.items()],
-                columns=["Field", "Validation Pattern"]
-            )
-            st.dataframe(val_df, use_container_width=True)
+                if st.button("🗑️", key=f"del_def_{field}"):
+                    del st.session_state.default_fields[field]
+                    st.rerun()
 
-# Step 5: Generate Output
-elif step == "5. Generate Output":
-    st.header("🚀 Step 5: Generate TypeScript Output")
+# Tab 5: Generate & Download
+with tab5:
+    st.header("Step 5: Generate Configuration and Download")
     
     if not st.session_state.pdf_fields:
-        st.warning("⚠️ Please complete the previous steps first!")
+        st.warning("⚠️ Please upload and process a PDF first!")
     else:
-        form_name = st.session_state.get('form_name', 'Form')
-        
-        # Summary section
+        # Summary
         st.subheader("📊 Configuration Summary")
         
         col1, col2, col3, col4 = st.columns(4)
-        
         with col1:
             st.metric("Total Fields", len(st.session_state.pdf_fields))
-            st.metric("Field Groups", len(st.session_state.field_groups))
-        
         with col2:
-            st.metric("Mapped Fields", len(st.session_state.mapped_fields))
-            st.metric("Validation Rules", len(st.session_state.validation_rules))
-        
+            st.metric("Mapped", len(st.session_state.mapped_fields))
         with col3:
             st.metric("Questionnaire", len(st.session_state.questionnaire_fields))
-            st.metric("Default Values", len(st.session_state.default_fields))
-        
         with col4:
-            st.metric("Conditional", len(st.session_state.conditional_fields))
-            completion = (len(st.session_state.mapped_fields) + 
-                         len(st.session_state.questionnaire_fields)) / len(st.session_state.pdf_fields) * 100
-            st.metric("Completion", f"{completion:.1f}%")
+            st.metric("Removed", len(st.session_state.removed_fields))
         
-        # Default values section
         st.markdown("---")
-        st.subheader("🔧 Default Values")
         
-        col1, col2, col3, col4, col5 = st.columns([3, 3, 2, 1, 1])
-        
-        with col1:
-            default_field = st.selectbox(
-                "Field",
-                [""] + [f['name'] for f in st.session_state.pdf_fields],
-                key="default_field_select"
-            )
-        
-        with col2:
-            default_value = st.text_input(
-                "Default Value",
-                key="default_value_input",
-                placeholder="Enter default value"
-            )
-        
-        with col3:
-            default_type = st.selectbox(
-                "Type",
-                ["TextBox", "CheckBox", "Value"],
-                key="default_type_select"
-            )
-        
-        with col4:
-            st.write("")  # Spacer
-            st.write("")  # Spacer
-            if st.button("Add", use_container_width=True):
-                if default_field and default_value:
-                    st.session_state.default_fields[default_field] = f"{default_value}:{default_type}"
-                    st.success(f"Added default for {default_field}")
-                    st.rerun()
-        
-        with col5:
-            st.write("")  # Spacer
-            st.write("")  # Spacer
-            if st.button("Clear All", use_container_width=True):
-                st.session_state.default_fields = {}
-                st.rerun()
-        
-        # Display current defaults
-        if st.session_state.default_fields:
-            st.markdown("**Current Default Values:**")
-            for field, value in st.session_state.default_fields.items():
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.text(f"• {field} = {value}")
-                with col2:
-                    if st.button("Remove", key=f"del_default_{field}"):
-                        del st.session_state.default_fields[field]
-                        st.rerun()
-        
-        # Generation options
-        st.markdown("---")
-        st.subheader("⚙️ Generation Options")
-        
+        # Generate outputs
         col1, col2 = st.columns(2)
         
         with col1:
-            include_helpers = st.checkbox(
-                "Include helper functions",
-                value=True,
-                help="Add validation and conditional evaluation functions"
-            )
+            st.subheader("📄 TypeScript Configuration")
             
-            include_types = st.checkbox(
-                "Include TypeScript interfaces",
-                value=True,
-                help="Add type definitions for better IDE support"
-            )
-            
-            minify_output = st.checkbox(
-                "Minify output",
-                value=False,
-                help="Remove extra whitespace and comments"
-            )
-        
-        with col2:
-            output_format = st.selectbox(
-                "Output Format",
-                ["TypeScript (.ts)", "JavaScript (.js)", "JSON (.json)"],
-                help="Choose the output file format"
-            )
-            
-            add_comments = st.checkbox(
-                "Add documentation comments",
-                value=True,
-                help="Include JSDoc comments for better documentation"
-            )
-            
-            validate_output = st.checkbox(
-                "Validate output",
-                value=True,
-                help="Check for common issues before generating"
-            )
-        
-        # Generate button
-        st.markdown("---")
-        
-        col1, col2, col3 = st.columns([2, 2, 2])
-        
-        with col2:
-            if st.button("🚀 Generate TypeScript", type="primary", use_container_width=True):
-                
-                # Validation
-                if validate_output:
-                    issues = []
-                    
-                    # Check for unmapped fields
-                    unmapped_count = len(st.session_state.pdf_fields) - \
-                                   len(st.session_state.mapped_fields) - \
-                                   len(st.session_state.questionnaire_fields)
-                    
-                    if unmapped_count > 5:
-                        issues.append(f"⚠️ {unmapped_count} fields are still unmapped")
-                    
-                    # Check for empty questionnaire options
-                    for field_name, field_info in st.session_state.questionnaire_fields.items():
-                        if field_info['type'] in ['RadioButton', 'DropDown', 'radio', 'select'] and not field_info.get('options'):
-                            issues.append(f"⚠️ {field_name} is missing options")
-                    
-                    # Check conditional fields
-                    for cond_id, cond_info in st.session_state.conditional_fields.items():
-                        if not cond_info.get('condition'):
-                            issues.append(f"⚠️ {cond_id} is missing condition")
-                    
-                    if issues:
-                        st.warning("**Validation Issues Found:**")
-                        for issue in issues:
-                            st.write(issue)
-                        
-                        if not st.checkbox("Generate anyway", value=False):
-                            st.stop()
-                
-                # Generate TypeScript
-                with st.spinner("Generating TypeScript..."):
-                    ts_content = generate_enhanced_typescript(
-                        form_name,
-                        st.session_state.mapped_fields,
-                        st.session_state.questionnaire_fields,
-                        st.session_state.conditional_fields,
-                        st.session_state.default_fields,
-                        st.session_state.validation_rules,
-                        st.session_state.field_groups
-                    )
-                    
-                    # Apply output options
-                    if minify_output:
-                        # Basic minification
-                        ts_content = re.sub(r'\n\s*\n', '\n', ts_content)
-                        ts_content = re.sub(r'    ', ' ', ts_content)
-                    
-                    # Convert to JavaScript if needed
-                    if output_format == "JavaScript (.js)":
-                        # Remove TypeScript-specific syntax
-                        ts_content = re.sub(r'interface \w+ {[^}]+}', '', ts_content)
-                        ts_content = re.sub(r': \w+(\[\])?', '', ts_content)
-                        ts_content = ts_content.replace('.ts', '.js')
-                    
-                    elif output_format == "JSON (.json)":
-                        # Extract just the configuration object
-                        match = re.search(r'export const \w+ = ({[\s\S]+});', ts_content)
-                        if match:
-                            ts_content = match.group(1)
-                
-                st.success("✅ TypeScript generated successfully!")
-                
-                # Display output
-                st.subheader("📄 Generated Output")
-                
-                # Code display with syntax highlighting
-                st.code(ts_content, language="typescript" if output_format.startswith("Type") else "javascript")
-                
-                # Download options
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    file_extension = ".ts" if output_format.startswith("Type") else ".js" if output_format.startswith("Java") else ".json"
-                    st.download_button(
-                        label=f"📥 Download {output_format}",
-                        data=ts_content,
-                        file_name=f"{form_name}{file_extension}",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    # Export full configuration
-                    config_json = export_mapping_configuration(form_name)
-                    st.download_button(
-                        label="💾 Download Full Config",
-                        data=config_json,
-                        file_name=f"{form_name}_config.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                
-                with col3:
-                    # Copy to clipboard button (using a workaround)
-                    if st.button("📋 Copy to Clipboard", use_container_width=True):
-                        st.info("Select all text above and copy (Ctrl+C / Cmd+C)")
-
-# Step 6: Mapping Overview
-elif step == "6. Mapping Overview":
-    st.header("🗺️ Complete Mapping Overview")
-    
-    if not st.session_state.pdf_fields:
-        st.warning("⚠️ No form data available. Please upload a PDF first.")
-    else:
-        # Display comprehensive mapping visualization
-        display_mapping_visualization()
-        
-        # Export/Import section
-        st.markdown("---")
-        st.subheader("💾 Export/Import Configuration")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("**Export Options:**")
-            
-            export_format = st.selectbox(
-                "Export Format",
-                ["Complete Configuration (JSON)", "Mappings Only (CSV)", 
-                 "TypeScript File", "Documentation (Markdown)"]
-            )
-            
-            if st.button("Generate Export", type="primary", use_container_width=True):
-                if export_format == "Complete Configuration (JSON)":
-                    export_data = export_mapping_configuration(
-                        st.session_state.get('form_name', 'form')
-                    )
-                    mime_type = "application/json"
-                    file_ext = ".json"
-                
-                elif export_format == "Mappings Only (CSV)":
-                    # Create CSV of mappings
-                    mapping_data = []
-                    for field_name, mapping in st.session_state.mapped_fields.items():
-                        mapping_data.append({
-                            'Field': field_name,
-                            'Mapping': mapping,
-                            'Type': next((f['type'] for f in st.session_state.pdf_fields 
-                                        if f['name'] == field_name), 'Unknown')
-                        })
-                    
-                    df = pd.DataFrame(mapping_data)
-                    export_data = df.to_csv(index=False)
-                    mime_type = "text/csv"
-                    file_ext = ".csv"
-                
-                elif export_format == "TypeScript File":
-                    export_data = generate_enhanced_typescript(
-                        st.session_state.get('form_name', 'form'),
-                        st.session_state.mapped_fields,
-                        st.session_state.questionnaire_fields,
-                        st.session_state.conditional_fields,
-                        st.session_state.default_fields,
-                        st.session_state.validation_rules,
-                        st.session_state.field_groups
-                    )
-                    mime_type = "text/plain"
-                    file_ext = ".ts"
-                
-                else:  # Documentation
-                    # Generate markdown documentation
-                    doc_lines = [
-                        f"# Form Documentation: {st.session_state.get('form_name', 'Form')}",
-                        f"\nGenerated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        "\n## Summary",
-                        f"- Total Fields: {len(st.session_state.pdf_fields)}",
-                        f"- Mapped Fields: {len(st.session_state.mapped_fields)}",
-                        f"- Questionnaire Fields: {len(st.session_state.questionnaire_fields)}",
-                        f"- Conditional Fields: {len(st.session_state.conditional_fields)}",
-                        "\n## Field Mappings",
-                    ]
-                    
-                    for field_name, mapping in sorted(st.session_state.mapped_fields.items()):
-                        doc_lines.append(f"- **{field_name}** → `{mapping}`")
-                    
-                    doc_lines.extend([
-                        "\n## Questionnaire Fields",
-                    ])
-                    
-                    for field_name, field_info in st.session_state.questionnaire_fields.items():
-                        doc_lines.append(f"- **{field_name}** ({field_info['type']})")
-                        if field_info.get('options'):
-                            doc_lines.append(f"  - Options: {field_info['options']}")
-                    
-                    export_data = "\n".join(doc_lines)
-                    mime_type = "text/markdown"
-                    file_ext = ".md"
+            if st.button("Generate TypeScript", type="primary", use_container_width=True):
+                ts_content = generate_typescript_output()
                 
                 st.download_button(
-                    label=f"📥 Download {export_format}",
-                    data=export_data,
-                    file_name=f"{st.session_state.get('form_name', 'form')}{file_ext}",
-                    mime=mime_type,
+                    label="📥 Download TypeScript File",
+                    data=ts_content,
+                    file_name=f"{st.session_state.form_name}.ts",
+                    mime="text/plain",
                     use_container_width=True
                 )
+                
+                with st.expander("Preview TypeScript", expanded=False):
+                    st.code(ts_content, language="typescript")
         
         with col2:
-            st.markdown("**Import Configuration:**")
+            st.subheader("📋 Questionnaire JSON")
             
-            uploaded_config = st.file_uploader(
-                "Choose configuration file",
-                type=["json", "csv"],
-                help="Import a previously exported configuration"
-            )
-            
-            if uploaded_config:
-                if st.button("Import Configuration", type="primary", use_container_width=True):
-                    try:
-                        if uploaded_config.type == "application/json":
-                            config_content = uploaded_config.read().decode('utf-8')
-                            success, message = import_mapping_configuration(config_content)
-                            
-                            if success:
-                                st.success(message)
-                                st.balloons()
-                                st.rerun()
-                            else:
-                                st.error(message)
-                        
-                        elif uploaded_config.type == "text/csv":
-                            # Import CSV mappings
-                            df = pd.read_csv(uploaded_config)
-                            
-                            if 'Field' in df.columns and 'Mapping' in df.columns:
-                                st.session_state.mapped_fields = {}
-                                for _, row in df.iterrows():
-                                    st.session_state.mapped_fields[row['Field']] = row['Mapping']
-                                
-                                st.success(f"Imported {len(df)} field mappings!")
-                                st.rerun()
-                            else:
-                                st.error("CSV must contain 'Field' and 'Mapping' columns")
-                    
-                    except Exception as e:
-                        st.error(f"Import failed: {str(e)}")
-        
-        # Field search and filter
-        st.markdown("---")
-        st.subheader("🔍 Field Search & Analysis")
-        
-        search_term = st.text_input(
-            "Search across all fields:",
-            placeholder="Enter field name, mapping, or type..."
-        )
-        
-        if search_term:
-            results = []
-            
-            # Search in all fields
-            for field in st.session_state.pdf_fields:
-                field_name = field['name']
-                field_type = field['type']
+            if st.button("Generate Questionnaire JSON", type="primary", use_container_width=True):
+                json_content = generate_questionnaire_json()
                 
-                # Check if search term matches
-                if (search_term.lower() in field_name.lower() or 
-                    search_term.lower() in field_type.lower()):
-                    
-                    # Determine status and mapping
-                    if field_name in st.session_state.mapped_fields:
-                        status = "Mapped"
-                        mapping = st.session_state.mapped_fields[field_name]
-                    elif field_name in st.session_state.questionnaire_fields:
-                        status = "Questionnaire"
-                        mapping = "N/A"
-                    else:
-                        status = "Unmapped"
-                        mapping = "N/A"
-                    
-                    results.append({
-                        'Field': field_name,
-                        'Type': field_type,
-                        'Status': status,
-                        'Mapping': mapping,
-                        'Validation': '✓' if field_name in st.session_state.validation_rules else '',
-                        'Group': next((g for g, fields in st.session_state.field_groups.items() 
-                                     if field_name in fields), '')
-                    })
+                st.download_button(
+                    label="📥 Download JSON Controls",
+                    data=json_content,
+                    file_name=f"{st.session_state.form_name}_controls.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON", expanded=False):
+                    st.code(json_content, language="json")
+        
+        st.markdown("---")
+        
+        # Complete configuration export
+        st.subheader("💾 Complete Configuration")
+        
+        if st.button("Export Complete Configuration", type="primary", use_container_width=True):
+            config = {
+                "formName": st.session_state.form_name,
+                "timestamp": datetime.now().isoformat(),
+                "pdfFields": st.session_state.pdf_fields,
+                "mappedFields": st.session_state.mapped_fields,
+                "questionnaireFields": st.session_state.questionnaire_fields,
+                "conditionalFields": st.session_state.conditional_fields,
+                "defaultFields": st.session_state.default_fields,
+                "removedFields": st.session_state.removed_fields,
+                "metadata": {
+                    "totalFields": len(st.session_state.pdf_fields),
+                    "mappedFields": len(st.session_state.mapped_fields),
+                    "questionnaireFields": len(st.session_state.questionnaire_fields),
+                    "removedFields": len(st.session_state.removed_fields)
+                }
+            }
             
-            # Search in mappings
-            for field_name, mapping in st.session_state.mapped_fields.items():
-                if search_term.lower() in mapping.lower():
-                    if not any(r['Field'] == field_name for r in results):
-                        field_type = next((f['type'] for f in st.session_state.pdf_fields 
-                                         if f['name'] == field_name), 'Unknown')
-                        results.append({
-                            'Field': field_name,
-                            'Type': field_type,
-                            'Status': 'Mapped',
-                            'Mapping': mapping,
-                            'Validation': '✓' if field_name in st.session_state.validation_rules else '',
-                            'Group': next((g for g, fields in st.session_state.field_groups.items() 
-                                         if field_name in fields), '')
-                        })
+            config_json = json.dumps(config, indent=2)
             
-            if results:
-                st.write(f"Found {len(results)} results:")
-                results_df = pd.DataFrame(results)
-                st.dataframe(results_df, use_container_width=True)
-            else:
-                st.info("No results found")
+            st.download_button(
+                label="📥 Download Complete Configuration",
+                data=config_json,
+                file_name=f"{st.session_state.form_name}_complete_config.json",
+                mime="application/json",
+                use_container_width=True
+            )
 
 # Footer
 st.markdown("---")
-with st.expander("💡 Help & Documentation", expanded=False):
-    st.markdown("""
-    ### 📚 Enhanced PDF Form Automation System
-    
-    This tool helps you create TypeScript configurations for PDF form automation with advanced features:
-    
-    #### 🚀 Key Features:
-    - **Smart Field Extraction**: Multiple methods to extract fields from PDFs
-    - **Intelligent Auto-Mapping**: Pattern-based field mapping with confidence scoring
-    - **Questionnaire Builder**: Create dynamic forms with validation
-    - **JSON Control Format**: Support for g28.json-style questionnaire controls
-    - **Conditional Logic**: Define fields that appear based on conditions
-    - **Field Groups**: Organize related fields together
-    - **Validation Rules**: Regex-based field validation
-    - **Import/Export**: Save and reuse configurations
-    
-    #### 📋 Workflow:
-    1. **Upload PDF**: Select your form PDF file
-    2. **Extract Fields**: Automatically extract form fields
-    3. **Map Fields**: Connect PDF fields to database paths
-    4. **Setup Questionnaire**: Configure dynamic form fields
-    5. **Add Validation**: Define field validation rules
-    6. **Generate Output**: Create TypeScript/JavaScript files
-    
-    #### 🎯 Best Practices:
-    - Use auto-mapping for common fields
-    - Group related fields together
-    - Add validation for data integrity
-    - Test conditional logic thoroughly
-    - Export configurations for reuse
-    - Use JSON control format for better questionnaire structure
-    
-    #### 🔧 Common Mappings:
-    - Customer: `customer.customer_name`, `customer.customer_tax_id`
-    - Beneficiary: `beneficiary.Beneficiary.beneficiaryFirstName`
-    - Attorney: `attorney.attorneyInfo.lastName`
-    - Address: `address.addressStreet`, `address.addressCity`
-    - Case: `case.caseType`, `case.jobTitle`
-    
-    #### ⌨️ Keyboard Shortcuts:
-    - `Tab`: Navigate between fields
-    - `Enter`: Confirm input
-    - `Escape`: Close dialogs
-    
-    For more help, check the documentation or contact support.
-    """)
-
-# Save state on change
-if st.session_state.get('auto_save', True):
-    # This would typically save to a database or file
-    pass
+st.markdown("""
+<div style='text-align: center; color: #666;'>
+    PDF Form Automation System v1.0 | Built with Streamlit
+</div>
+""", unsafe_allow_html=True)
