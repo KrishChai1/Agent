@@ -284,50 +284,95 @@ class UniversalUSCISMapper:
             if not part_match:
                 part_num = "0"
         
-        # Clean the field name
+        # Clean the field name more aggressively
         clean_name = field_name
         
         # Remove common prefixes and patterns
         patterns_to_remove = [
-            r'form\[\d+\]\.',
+            r'form\d*\[\d+\]\.',
             r'#subform\[\d+\]\.',
+            r'#pageSet\[\d+\]\.',
+            r'Page\d+\[\d+\]\.',
+            r'PDF417BarCode\d*\[\d+\]',
+            r'topmostSubform\[\d+\]\.',
             r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
             r'Pdf417bar\s*Code\d+',
-            r'topmostSubform\.',
-            r'Page\d+\.',
             r'\[\d+\]',
             r'^#',
-            r'\.pdf$'
+            r'\.pdf$',
+            r'^Page\d+\.',
+            r'^form\.',
+            r'^field\.',
         ]
         
         for pattern in patterns_to_remove:
             clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
         
-        # Extract item/field identifier
-        item_patterns = [
-            r'pt\d+_(\d+[a-zA-Z]?)',  # pt3_1a format
-            r'P\d+_(\d+[a-zA-Z]?)',    # P1_3a format
-            r'Part\d+\.(\d+[a-zA-Z]?)', # Part1.3a format
-            r'_(\d+[a-zA-Z]?)$',       # _3a at end
-            r'\.(\d+[a-zA-Z]?)$',      # .3a at end
-        ]
-        
+        # Extract item/field identifier more intelligently
         field_id = item
-        for pattern in item_patterns:
-            match = re.search(pattern, clean_name, re.IGNORECASE)
-            if match:
-                field_id = match.group(1)
-                break
         
-        # If no field ID found, try to extract from the description or use a counter
+        # Try multiple strategies to extract field ID
         if not field_id:
-            # Try to extract numbers from the clean name
+            # Strategy 1: Look for patterns like _3a, .3a, -3a
+            id_patterns = [
+                r'[_\.\-](\d+[a-zA-Z]?)$',  # End of string
+                r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # Middle of string
+                r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',  # Item number
+                r'No[\s_\.\-]*(\d+[a-zA-Z]?)',  # Number
+                r'Line[\s_\.\-]*(\d+[a-zA-Z]?)',  # Line
+                r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',  # Question
+                r'Q[\s_\.\-]*(\d+[a-zA-Z]?)',  # Q
+                r'#(\d+[a-zA-Z]?)',  # Hash number
+            ]
+            
+            for pattern in id_patterns:
+                match = re.search(pattern, clean_name, re.IGNORECASE)
+                if match:
+                    field_id = match.group(1)
+                    break
+        
+        # Strategy 2: If still no ID, look in the middle of the cleaned name
+        if not field_id:
+            # Look for any number in the cleaned name
             numbers = re.findall(r'\d+[a-zA-Z]?', clean_name)
             if numbers:
-                field_id = numbers[-1]  # Use the last number found
+                # Prefer numbers that look like field IDs (1-99 with optional letter)
+                for num in numbers:
+                    if re.match(r'^\d{1,2}[a-zA-Z]?$', num):
+                        field_id = num
+                        break
+                
+                # If no good match, use the last number
+                if not field_id and numbers:
+                    field_id = numbers[-1]
+        
+        # Strategy 3: Extract from the end of the field after removing noise
+        if not field_id:
+            # Get the last meaningful part of the field name
+            parts = re.split(r'[_\.\-]', clean_name)
+            for part_str in reversed(parts):
+                if part_str and not part_str.lower() in ['text', 'checkbox', 'radio', 'field']:
+                    # Check if it contains a number
+                    if re.search(r'\d', part_str):
+                        field_id = part_str
+                        break
+        
+        # Strategy 4: Use incremental counter
+        if not field_id:
+            field_id = str(self.field_counter)
+            self.field_counter += 1
+        
+        # Clean up the field ID
+        field_id = field_id.strip('._- ')
+        
+        # Ensure field ID is reasonable length
+        if len(field_id) > 5:
+            # Try to extract just the numeric part with optional letter
+            match = re.search(r'(\d{1,2}[a-zA-Z]?)', field_id)
+            if match:
+                field_id = match.group(1)
             else:
-                field_id = str(self.field_counter)
-                self.field_counter += 1
+                field_id = field_id[:5]
         
         # Construct the clean name in P1_3a format
         return f"P{part_num}_{field_id}"
@@ -435,113 +480,319 @@ class UniversalUSCISMapper:
         
         return fields
     
+    def _clean_field_name_for_analysis(self, field_name: str) -> str:
+        """Clean field name for better pattern analysis"""
+        # Remove common noise patterns
+        patterns_to_remove = [
+            r'form\d*\[\d+\]\.',
+            r'#subform\[\d+\]\.',
+            r'#pageSet\[\d+\]\.',
+            r'Page\d+\[\d+\]\.',
+            r'PDF417BarCode\d*\[\d+\]',
+            r'\[\d+\]',
+            r'\.pdf$',
+            r'^#',
+        ]
+        
+        clean_name = field_name
+        for pattern in patterns_to_remove:
+            clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
+        
+        return clean_name
+    
+    def _group_fields_by_pattern(self, all_field_data: List[Dict]) -> Dict[int, str]:
+        """Group fields by common patterns to identify parts"""
+        field_groups = {}
+        
+        # Common patterns that indicate field groupings
+        group_patterns = {
+            'petitioner': 'Part 1',
+            'beneficiary': 'Part 3',
+            'employment': 'Part 5',
+            'processing': 'Part 4',
+            'declaration': 'Part 7',
+            'preparer': 'Part 8',
+            'additional': 'Part 9',
+            'attorney': 'Part 0',
+            'representative': 'Part 0',
+            'appearance': 'Part 0',
+        }
+        
+        for field_data in all_field_data:
+            field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
+            
+            for pattern, part in group_patterns.items():
+                if pattern in field_text:
+                    field_groups[field_data['index']] = part
+                    break
+        
+        return field_groups
+    
+    def _detect_page_boundaries(self, all_field_data: List[Dict]) -> Dict[int, str]:
+        """Detect logical part boundaries based on page transitions"""
+        page_boundaries = {}
+        
+        # Analyze field distribution across pages
+        fields_per_page = defaultdict(list)
+        for field_data in all_field_data:
+            fields_per_page[field_data['page']].append(field_data)
+        
+        # Look for patterns in page transitions
+        for page, fields in fields_per_page.items():
+            if len(fields) < 5:  # Small number of fields might indicate end of part
+                continue
+            
+            # Check first few fields of the page for part indicators
+            first_fields = fields[:5]
+            for field in first_fields:
+                clean_name = self._clean_field_name_for_analysis(field['name'])
+                
+                # Look for part indicators
+                part_match = re.search(r'Part[\s_\-]*(\d+)', clean_name, re.IGNORECASE)
+                if part_match:
+                    page_boundaries[page] = f"Part {part_match.group(1)}"
+                    break
+        
+        return page_boundaries
+    
+    def _infer_part_from_context(self, field_data: Dict, all_fields: List[Dict], 
+                                 current_index: int, known_structure: Dict) -> str:
+        """Infer part from field context and surrounding fields"""
+        page = field_data['page']
+        
+        # Look at nearby fields for clues
+        window_size = 10
+        start_idx = max(0, current_index - window_size)
+        end_idx = min(len(all_fields), current_index + window_size + 1)
+        
+        nearby_fields = all_fields[start_idx:end_idx]
+        
+        # Check for part indicators in nearby fields
+        for nearby in nearby_fields:
+            clean_name = self._clean_field_name_for_analysis(nearby['name'])
+            part_match = re.search(r'Part[\s_\-]*(\d+)', clean_name, re.IGNORECASE)
+            if part_match:
+                part = f"Part {part_match.group(1)}"
+                if known_structure and part in known_structure:
+                    return f"{part} - {known_structure[part]}"
+                return part
+        
+        # Default based on page number
+        if page == 1:
+            return "Part 1" if not known_structure else "Part 1 - " + known_structure.get("Part 1", "Information")
+        else:
+            estimated_part = f"Part {page}"
+            if known_structure and estimated_part in known_structure:
+                return f"{estimated_part} - {known_structure[estimated_part]}"
+            return f"Page {page}"
+    
+    def _smooth_part_assignments(self, part_mapping: Dict[int, str], 
+                                all_field_data: List[Dict]) -> Dict[int, str]:
+        """Smooth out part assignments to fix inconsistencies"""
+        # Group consecutive fields and ensure they have consistent parts
+        sorted_fields = sorted(all_field_data, key=lambda x: (x['page'], x['index']))
+        
+        for i in range(1, len(sorted_fields) - 1):
+            current = sorted_fields[i]
+            prev = sorted_fields[i-1]
+            next_field = sorted_fields[i+1]
+            
+            current_idx = current['index']
+            prev_idx = prev['index']
+            next_idx = next_field['index']
+            
+            # If current field has no clear part but neighbors do
+            if current_idx in part_mapping:
+                current_part = part_mapping[current_idx]
+                
+                # If surrounded by same part and on same page, assign same part
+                if (prev_idx in part_mapping and next_idx in part_mapping and 
+                    part_mapping[prev_idx] == part_mapping[next_idx] and
+                    current['page'] == prev['page'] == next_field['page'] and
+                    'Page' in current_part and 'Part' in part_mapping[prev_idx]):
+                    part_mapping[current_idx] = part_mapping[prev_idx]
+        
+        return part_mapping
+    
     def _analyze_form_structure_advanced(self, all_field_data: List[Dict], form_type: str, has_attorney_section: bool) -> Dict[int, str]:
-        """Advanced form structure analysis with better part detection"""
+        """Advanced form structure analysis with improved part detection"""
         part_mapping = {}
         
         # Get known structure for this form type
         known_structure = self.form_part_structures.get(form_type, {})
         
-        # If form has attorney section, check first page fields
+        # Enhanced part detection using multiple strategies
+        
+        # Strategy 1: Look for part indicators in field names (cleaned)
+        part_indicators = {}
+        for field_data in all_field_data:
+            field_name = field_data['name']
+            display_name = field_data.get('display', '')
+            
+            # Clean the field name for better pattern matching
+            clean_field = self._clean_field_name_for_analysis(field_name)
+            
+            # Look for part patterns in cleaned name
+            part_patterns = [
+                (r'Part[\s_\-]*(\d+)', lambda m: f"Part {m.group(1)}"),
+                (r'P(\d+)_', lambda m: f"Part {m.group(1)}"),
+                (r'pt(\d+)_', lambda m: f"Part {m.group(1)}"),
+                (r'Section[\s_\-]*(\d+)', lambda m: f"Part {m.group(1)}"),
+                (r'Part_(\d+)', lambda m: f"Part {m.group(1)}"),
+            ]
+            
+            for pattern, formatter in part_patterns:
+                match = re.search(pattern, clean_field, re.IGNORECASE)
+                if match:
+                    part_num = formatter(match)
+                    if field_data['index'] not in part_indicators:
+                        part_indicators[field_data['index']] = part_num
+                    break
+        
+        # Strategy 2: Analyze field groups by name patterns
+        field_groups = self._group_fields_by_pattern(all_field_data)
+        
+        # Strategy 3: Use page boundaries and field positions
+        page_boundaries = self._detect_page_boundaries(all_field_data)
+        
+        # Strategy 4: Check for attorney fields on first page
         if has_attorney_section:
-            attorney_keywords = ['attorney', 'representative', 'bar', 'licensing', 'accredited', 'g-28', 'g28']
+            attorney_keywords = ['attorney', 'representative', 'bar', 'licensing', 'accredited', 'g-28', 'g28', 'appearance', 'eligibility']
             first_page_fields = [f for f in all_field_data if f['page'] == 1]
             
-            # Check if first page has attorney-related fields
-            has_attorney_fields = any(
-                any(keyword in f['name'].lower() or keyword in f['display'].lower() 
-                    for keyword in attorney_keywords)
-                for f in first_page_fields
-            )
+            # More thorough check for attorney fields
+            attorney_field_count = 0
+            for f in first_page_fields:
+                field_text = f"{f['name']} {f.get('display', '')}".lower()
+                if any(keyword in field_text for keyword in attorney_keywords):
+                    attorney_field_count += 1
             
-            if has_attorney_fields:
-                # Mark all first page fields as Part 0
+            # If significant number of attorney fields on first page
+            if attorney_field_count >= 3 or (attorney_field_count > 0 and len(first_page_fields) < 20):
                 for f in first_page_fields:
                     part_mapping[f['index']] = "Part 0 - To be completed by attorney or BIA-accredited representative"
         
-        # Analyze remaining fields
+        # Strategy 5: Use field sequence and content analysis
         current_part = None
         current_page = 1
+        field_count_in_part = 0
+        last_part_indicator_index = -1
         
         for i, field_data in enumerate(all_field_data):
-            if i in part_mapping:  # Skip already mapped fields
+            if field_data['index'] in part_mapping:  # Skip already mapped fields
                 continue
-                
+            
             field_name = field_data['name']
             page = field_data['page']
             
-            # Look for explicit part indicators
-            part_patterns = [
-                (r'Part\s*(\d+)', lambda m: f"Part {m.group(1)}"),
-                (r'P(\d+)[_\.\-]', lambda m: f"Part {m.group(1)}"),
-                (r'pt(\d+)[_\.\-]', lambda m: f"Part {m.group(1)}"),
-                (r'Section\s*(\d+)', lambda m: f"Part {m.group(1)}"),
-            ]
-            
-            found_part = None
-            for pattern, formatter in part_patterns:
-                match = re.search(pattern, field_name, re.IGNORECASE)
-                if match:
-                    found_part = formatter(match)
-                    # Add description from known structure if available
-                    if known_structure and found_part in known_structure:
-                        found_part = f"{found_part} - {known_structure[found_part]}"
-                    break
-            
-            if found_part:
-                part_mapping[i] = found_part
-                current_part = found_part
+            # Check if we have a part indicator for this field
+            if field_data['index'] in part_indicators:
+                current_part = part_indicators[field_data['index']]
+                last_part_indicator_index = i
+                field_count_in_part = 0
+                
+                # Add description from known structure if available
+                if known_structure and current_part in known_structure:
+                    current_part = f"{current_part} - {known_structure[current_part]}"
+                
+                part_mapping[field_data['index']] = current_part
                 current_page = page
+            
+            # Check field groups
+            elif field_data['index'] in field_groups:
+                group_part = field_groups[field_data['index']]
+                if group_part != current_part:
+                    current_part = group_part
+                    field_count_in_part = 0
+                part_mapping[field_data['index']] = current_part
+            
+            # If we're on the same page and have a current part
             elif current_part and page == current_page:
-                # Same page as current part
-                part_mapping[i] = current_part
-            else:
-                # New page, try to determine part
-                if page > 1 and has_attorney_section:
-                    # Adjust part number considering Part 0
-                    estimated_part = f"Part {page - 1}"
+                # Check if we should continue with current part
+                if field_count_in_part < 50:  # Reasonable field count per part
+                    part_mapping[field_data['index']] = current_part
+                    field_count_in_part += 1
                 else:
-                    estimated_part = f"Part {page}"
-                
-                if known_structure and estimated_part in known_structure:
-                    part_mapping[i] = f"{estimated_part} - {known_structure[estimated_part]}"
-                else:
-                    part_mapping[i] = f"Page {page}"
-                
-                current_part = part_mapping[i]
+                    # Too many fields, might be a new part
+                    current_part = self._infer_part_from_context(field_data, all_field_data, i, known_structure)
+                    part_mapping[field_data['index']] = current_part
+                    field_count_in_part = 0
+            
+            # Page boundary detected
+            elif page != current_page and page in page_boundaries:
+                suggested_part = page_boundaries[page]
+                if suggested_part != current_part:
+                    current_part = suggested_part
+                    field_count_in_part = 0
+                part_mapping[field_data['index']] = current_part
                 current_page = page
+            
+            # Default: try to infer from context
+            else:
+                inferred_part = self._infer_part_from_context(field_data, all_field_data, i, known_structure)
+                part_mapping[field_data['index']] = inferred_part
+                if inferred_part != current_part:
+                    current_part = inferred_part
+                    field_count_in_part = 0
+                current_page = page
+        
+        # Post-process: smooth out any inconsistencies
+        part_mapping = self._smooth_part_assignments(part_mapping, all_field_data)
         
         return part_mapping
     
     def _extract_item_advanced(self, field_name: str, field_display: str = "") -> str:
         """Advanced item extraction with better pattern matching"""
-        # Clean the field name first
-        clean_name = re.sub(r'\[\d+\]', '', field_name)
+        # First clean the field name
+        clean_name = self._clean_field_name_for_analysis(field_name)
         
         # Also check display name
         all_text = f"{clean_name} {field_display}"
         
+        # Comprehensive patterns for item extraction
         patterns = [
+            # Explicit item patterns
             r'Item\s*Number\s*(\d+[a-zA-Z]?\.?)',
             r'Item\s*(\d+[a-zA-Z]?\.?)',
             r'Line\s*(\d+[a-zA-Z]?\.?)',
             r'Question\s*(\d+[a-zA-Z]?\.?)',
-            r'pt\d+[_\.\-](\d+[a-zA-Z]?)',
-            r'P\d+[_\.\-](\d+[a-zA-Z]?)',
-            r'_(\d+[a-zA-Z]?)_',
-            r'_(\d+[a-zA-Z]?)$',
-            r'\.(\d+[a-zA-Z]?)\.',
-            r'\.(\d+[a-zA-Z]?)$',
-            r'#(\d+[a-zA-Z]?)',
+            r'Q\s*(\d+[a-zA-Z]?\.?)',
             r'No\.?\s*(\d+[a-zA-Z]?)',
             r'Number\s*(\d+[a-zA-Z]?)',
+            
+            # Field ID patterns
+            r'[_\.\-](\d+[a-zA-Z]?)$',  # At end
+            r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # In middle
+            r'pt\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
+            r'P\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
+            r'Part\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
+            
+            # Other patterns
+            r'#(\d+[a-zA-Z]?)',
+            r'\b(\d{1,2}[a-zA-Z]?)\b',  # Standalone small numbers with optional letter
         ]
         
+        # Try patterns on clean name first
+        for pattern in patterns:
+            match = re.search(pattern, clean_name, re.IGNORECASE)
+            if match:
+                item = match.group(1)
+                return item.rstrip('.')
+        
+        # If not found, try on full text
         for pattern in patterns:
             match = re.search(pattern, all_text, re.IGNORECASE)
             if match:
                 item = match.group(1)
                 return item.rstrip('.')
+        
+        # Last resort: look for any reasonable field identifier
+        # Extract all alphanumeric segments
+        segments = re.findall(r'[a-zA-Z0-9]+', clean_name)
+        for segment in reversed(segments):  # Start from end
+            # Check if segment looks like a field ID
+            if re.match(r'^\d{1,2}[a-zA-Z]?$', segment):
+                return segment
         
         return ""
     
@@ -595,40 +846,84 @@ class UniversalUSCISMapper:
     
     def _generate_description(self, field_name: str, field_display: str = "") -> str:
         """Generate human-readable description"""
-        # Use display name if available
-        if field_display and field_display != field_name:
+        # Use display name if available and meaningful
+        if field_display and field_display != field_name and not field_display.startswith('form'):
             desc = field_display
         else:
             desc = field_name
         
-        # Clean up common patterns
-        desc = re.sub(r'^form\[\d+\]\.', '', desc, flags=re.IGNORECASE)
-        desc = re.sub(r'^#subform\[\d+\]\.', '', desc)
-        desc = re.sub(r'\[\d+\]', '', desc)
-        desc = re.sub(r'\.pdf$', '', desc, flags=re.IGNORECASE)
-        desc = re.sub(r'Form\d+\s*#page\s*Set\s*Page\d+\s*', '', desc, flags=re.IGNORECASE)
-        desc = re.sub(r'Pdf417bar\s*Code\d+', '', desc, flags=re.IGNORECASE)
-        
-        # Remove technical prefixes
-        prefixes_to_remove = [
-            'topmostSubform.', 'Page', 'Part', 'Section', '#', 'field'
+        # Aggressive cleaning for complex field names
+        cleaning_patterns = [
+            # Form structure patterns
+            r'form\d*\[\d+\]\.',
+            r'#subform\[\d+\]\.',
+            r'#pageSet\[\d+\]\.',
+            r'Page\d+\[\d+\]\.',
+            r'topmostSubform\[\d+\]\.',
+            r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
+            
+            # PDF-specific patterns
+            r'PDF417BarCode\d*\[\d+\]',
+            r'Pdf417bar\s*Code\d+',
+            r'\.pdf$',
+            
+            # Array indices
+            r'\[\d+\]',
+            
+            # Technical prefixes
+            r'^#',
+            r'^form\.',
+            r'^field\.',
+            r'^Page\d+\.',
+            
+            # Part patterns (we'll handle these separately)
+            r'^Part\d+[_\.\-]',
+            r'^P\d+[_\.\-]',
+            r'^pt\d+[_\.\-]',
         ]
-        for prefix in prefixes_to_remove:
-            if desc.startswith(prefix):
-                desc = desc[len(prefix):].lstrip('._-')
         
-        # Split by delimiters
+        for pattern in cleaning_patterns:
+            desc = re.sub(pattern, '', desc, flags=re.IGNORECASE)
+        
+        # Extract meaningful part after cleaning
+        # Look for the last meaningful segment
+        segments = desc.split('.')
+        meaningful_segments = []
+        
+        for segment in segments:
+            # Skip empty or purely numeric segments
+            if segment and not segment.isdigit() and len(segment) > 1:
+                # Skip common technical terms
+                if segment.lower() not in ['form', 'page', 'field', 'subform', 'text', 'checkbox']:
+                    meaningful_segments.append(segment)
+        
+        # Use the most meaningful segment
+        if meaningful_segments:
+            desc = meaningful_segments[-1]  # Usually the last segment is most descriptive
+        
+        # Further cleaning
+        desc = desc.strip('._- ')
+        
+        # If we still have technical junk, try different approach
+        if not desc or desc.lower() in ['field', 'text', 'checkbox', 'radio']:
+            # Try to extract from original field name
+            parts = field_name.split('.')
+            for part in reversed(parts):
+                clean_part = re.sub(r'\[\d+\]', '', part)
+                if clean_part and not clean_part.isdigit() and len(clean_part) > 2:
+                    if clean_part.lower() not in ['form', 'page', 'field', 'subform']:
+                        desc = clean_part
+                        break
+        
+        # Handle underscores and camelCase
         if '_' in desc:
             parts = desc.split('_')
             desc = ' '.join([p for p in parts if p and not p.isdigit()])
-        elif '.' in desc:
-            parts = desc.split('.')
-            desc = ' '.join([p for p in parts if p and not p.isdigit()])
         
-        # Convert camelCase
+        # Convert camelCase to spaces
         desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', desc)
         
-        # Expand abbreviations
+        # Expand common abbreviations
         abbreviations = {
             'Apt': 'Apartment',
             'Ste': 'Suite',
@@ -650,26 +945,50 @@ class UniversalUSCISMapper:
             'Org': 'Organization',
             'Corp': 'Corporation',
             'Inc': 'Incorporated',
-            'LLC': 'Limited Liability Company'
+            'LLC': 'Limited Liability Company',
+            'Addr': 'Address',
+            'Cty': 'City',
+            'Cnty': 'County',
+            'Zip': 'ZIP Code',
+            'Ph': 'Phone',
+            'Sig': 'Signature',
+            'Auth': 'Authorization',
+            'Rep': 'Representative',
+            'Info': 'Information',
+            'Num': 'Number',
+            'Govt': 'Government',
+            'Fed': 'Federal',
+            'Intl': 'International'
         }
         
         for abbr, full in abbreviations.items():
             desc = re.sub(rf'\b{abbr}\b', full, desc, flags=re.IGNORECASE)
         
-        # Clean up and title case
+        # Clean up and format
         desc = ' '.join(desc.split())
         desc = desc.strip('._- ')
         
         # Smart title case (preserve acronyms)
-        words = desc.split()
-        result = []
-        for word in words:
-            if word.isupper() and len(word) > 1:
-                result.append(word)  # Keep acronyms
-            else:
-                result.append(word.capitalize())
+        if desc:
+            words = desc.split()
+            result = []
+            for word in words:
+                if word.isupper() and len(word) > 1:
+                    result.append(word)  # Keep acronyms
+                else:
+                    result.append(word.capitalize())
+            desc = ' '.join(result)
         
-        return ' '.join(result) if result else "Field"
+        # If still empty or generic, provide a default
+        if not desc or desc.lower() in ['field', 'text', '']:
+            # Try to use item number if available
+            item_match = re.search(r'(\d+[a-zA-Z]?)', field_name)
+            if item_match:
+                desc = f"Field {item_match.group(1)}"
+            else:
+                desc = "Field"
+        
+        return desc
     
     def _get_mapping_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
         """Get intelligent mapping suggestions for a field"""
@@ -839,6 +1158,29 @@ class UniversalUSCISMapper:
                 
                 if len(part_fields) > 10:
                     st.write(f"... and {len(part_fields) - 10} more fields")
+        
+        # Show debug info for part detection
+        with st.expander("🔍 Part Detection Debug Info"):
+            st.write("**Sample field names and their detected parts:**")
+            debug_fields = fields[:20]  # Show first 20 fields
+            debug_data = []
+            for field in debug_fields:
+                debug_data.append({
+                    "Raw Field Name": field.raw_name[:50] + "..." if len(field.raw_name) > 50 else field.raw_name,
+                    "Clean Name": field.clean_name,
+                    "Detected Part": field.part,
+                    "Page": field.page
+                })
+            
+            debug_df = pd.DataFrame(debug_data)
+            st.dataframe(debug_df, use_container_width=True, hide_index=True)
+            
+            st.write("**Part detection strategies used:**")
+            st.write("1. ✅ Cleaned field names for pattern matching")
+            st.write("2. ✅ Analyzed field groupings by content")
+            st.write("3. ✅ Detected page boundaries")
+            st.write("4. ✅ Applied contextual inference")
+            st.write("5. ✅ Smoothed part assignments")
         
         # Show mapping statistics
         st.write("**Mapping Statistics:**")
