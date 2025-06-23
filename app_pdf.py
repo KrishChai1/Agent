@@ -335,109 +335,338 @@ class UniversalUSCISMapper:
             st.session_state.conditional_mappings = {}
     
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
-        """Extract all fields from any USCIS PDF form"""
+        """Extract all fields from any USCIS PDF form with accurate part detection"""
         fields = []
-        section_contexts = {}  # Store section descriptions
+        part_mapping = {}  # Store field to part mapping
         
         try:
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            # First pass: extract section headers and descriptions
+            # First pass: analyze PDF structure and identify parts
+            all_widgets = []
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                text = page.get_text()
+                page_text = page.get_text()
                 
-                # Look for section headers
-                section_patterns = [
-                    r'To be completed by (?:an )?attorney or BIA[\s-]*accredited representative',
-                    r'Information About (?:the )?Petitioner',
-                    r'Information About (?:the )?Beneficiary',
-                    r'Information About (?:the )?Applicant',
-                    r'Information About This Petition',
-                    r'Processing Information',
-                    r'Additional Information',
-                    r'Petitioner[\s\']*s Statement',
-                    r'Preparer[\s\']*s Statement',
-                    r'Part\s*(\d+)[\s\-\.]*([A-Za-z\s]+)',
-                    r'Section\s*([A-Z])[\s\-\.]*([A-Za-z\s]+)'
-                ]
-                
-                for pattern in section_patterns:
-                    matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
-                    for match in matches:
-                        section_desc = match.group(0)
-                        # Store context for this page
-                        if page_num not in section_contexts:
-                            section_contexts[page_num] = []
-                        section_contexts[page_num].append(section_desc.lower())
-            
-            # Second pass: extract fields with context
-            field_index = 0
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                page_context = section_contexts.get(page_num, [])
-                
+                # Collect all widgets with their positions
                 for widget in page.widgets():
                     if widget.field_name:
-                        field_index += 1
-                        
-                        # Determine field type
-                        field_type = self._get_field_type(widget)
-                        
-                        # Extract metadata with context
-                        part = self._extract_part_with_context(widget.field_name, page_num, form_type, page_context)
-                        item = self._extract_item(widget.field_name)
-                        description = self._generate_description(widget.field_name, widget.field_display)
-                        
-                        # Create field object
-                        pdf_field = PDFField(
-                            index=field_index,
-                            raw_name=widget.field_name,
-                            field_type=field_type,
-                            value=widget.field_value or '',
-                            page=page_num + 1,
-                            part=part,
-                            item=item,
-                            description=description
-                        )
-                        
-                        # Get mapping suggestions with context
-                        suggestions = self._get_mapping_suggestions_with_context(pdf_field, page_context)
-                        if suggestions:
-                            best_suggestion = suggestions[0]
-                            pdf_field.db_mapping = best_suggestion.db_path
-                            pdf_field.confidence_score = best_suggestion.confidence
-                            pdf_field.mapping_type = best_suggestion.field_type
-                        else:
-                            # Automatically mark unmapped fields as questionnaire
-                            pdf_field.is_questionnaire = True
-                        
-                        fields.append(pdf_field)
+                        rect = widget.rect
+                        all_widgets.append({
+                            'widget': widget,
+                            'page': page_num,
+                            'rect': rect,
+                            'y_pos': rect.y0,  # Top position
+                            'field_name': widget.field_name,
+                            'page_text': page_text
+                        })
+            
+            # Sort widgets by page and vertical position
+            all_widgets.sort(key=lambda x: (x['page'], x['y_pos']))
+            
+            # Second pass: extract fields with proper part assignment
+            field_index = 0
+            current_part = None
+            part_fields_count = {}
+            
+            for widget_info in all_widgets:
+                widget = widget_info['widget']
+                page_num = widget_info['page']
+                page_text = widget_info['page_text']
+                field_index += 1
+                
+                # Determine field type
+                field_type = self._get_field_type(widget)
+                
+                # Extract part from field name first
+                field_part = self._extract_part_from_field_name(widget.field_name)
+                
+                # Check if we need to determine part from context
+                if not field_part or field_part.startswith("Page"):
+                    # Look for part indicators in page text near this field
+                    field_part = self._detect_part_from_context(widget_info, page_text, page_num)
+                
+                # Track fields per part
+                if field_part not in part_fields_count:
+                    part_fields_count[field_part] = 0
+                part_fields_count[field_part] += 1
+                
+                # Store part mapping
+                part_mapping[widget.field_name] = field_part
+                
+                # Extract other metadata
+                item = self._extract_item(widget.field_name)
+                description = self._generate_description(widget.field_name, widget.field_display)
+                
+                # Create field object
+                pdf_field = PDFField(
+                    index=field_index,
+                    raw_name=widget.field_name,
+                    field_type=field_type,
+                    value=widget.field_value or '',
+                    page=page_num + 1,
+                    part=field_part,
+                    item=item,
+                    description=description
+                )
+                
+                # Get mapping suggestions based on part context
+                suggestions = self._get_mapping_suggestions_with_part_context(pdf_field, field_part)
+                if suggestions:
+                    best_suggestion = suggestions[0]
+                    pdf_field.db_mapping = best_suggestion.db_path
+                    pdf_field.confidence_score = best_suggestion.confidence
+                    pdf_field.mapping_type = best_suggestion.field_type
+                else:
+                    # Automatically mark unmapped fields as questionnaire
+                    pdf_field.is_questionnaire = True
+                
+                fields.append(pdf_field)
             
             doc.close()
             
+            # Post-process: ensure Part 0 is properly identified
+            self._post_process_parts(fields, part_fields_count)
+            
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
             return []
         
         return fields
     
-    def _extract_part_with_context(self, field_name: str, page_num: int, form_type: str, page_context: List[str]) -> str:
-        """Extract part/section with context awareness"""
-        # Check page context for attorney section
-        for context in page_context:
-            if any(term in context for term in ['attorney', 'representative', 'bia-accredited', 'g-28']):
-                return "Part 0 - Attorney/Representative"
-            elif 'petitioner' in context and 'information' in context:
-                return "Part 1 - Petitioner Information"
-            elif 'beneficiary' in context and 'information' in context:
-                return "Part 2 - Beneficiary Information"
-            elif 'applicant' in context and 'information' in context:
-                return "Part 1 - Applicant Information"
+    def _extract_part_from_field_name(self, field_name: str) -> str:
+        """Extract part directly from field name patterns"""
+        # Direct part patterns in field names
+        patterns = [
+            (r'Part\s*(\d+)', lambda m: f"Part {m.group(1)}"),
+            (r'Pt\s*(\d+)', lambda m: f"Part {m.group(1)}"),
+            (r'P(\d+)[_\.\-\s]', lambda m: f"Part {m.group(1)}"),
+            (r'Part\.(\d+)', lambda m: f"Part {m.group(1)}"),
+            (r'Section\s*([A-Z])', lambda m: f"Section {m.group(1)}"),
+            (r'\[Part\s*(\d+)\]', lambda m: f"Part {m.group(1)}")
+        ]
         
-        # Fall back to original extraction
-        return self._extract_part(field_name, page_num, form_type)
+        for pattern, formatter in patterns:
+            match = re.search(pattern, field_name, re.IGNORECASE)
+            if match:
+                return formatter(match)
+        
+        return None
+    
+    def _detect_part_from_context(self, widget_info: dict, page_text: str, page_num: int) -> str:
+        """Detect part from page context and field position"""
+        field_name = widget_info['field_name']
+        y_pos = widget_info['y_pos']
+        
+        # First, check if field name contains explicit part information
+        field_lower = field_name.lower()
+        
+        # Common G-28 field patterns (Part 0 - Attorney)
+        g28_patterns = [
+            'g28', 'g-28', 'attorney', 'bar', 'representative', 'law firm',
+            'licensing', 'accredited', 'appearance', 'counsel', 'legal'
+        ]
+        
+        # Check for G-28 / attorney patterns
+        if any(pattern in field_lower for pattern in g28_patterns):
+            return "Part 0 - Attorney/Representative"
+        
+        # Check if this is at the top of the first page (common for attorney sections)
+        if page_num == 0 and y_pos < 250:  # Top portion of first page
+            # Look for attorney-related text near this position
+            attorney_indicators = [
+                'to be completed by', 'attorney', 'representative', 
+                'g-28', 'bia-accredited', 'bar number'
+            ]
+            
+            page_text_lower = page_text.lower()
+            for indicator in attorney_indicators:
+                if indicator in page_text_lower:
+                    # Check if indicator appears before this field (above it on page)
+                    lines = page_text.split('\n')
+                    for i, line in enumerate(lines[:20]):  # Check first 20 lines
+                        if indicator in line.lower():
+                            return "Part 0 - Attorney/Representative"
+        
+        # Look for explicit part numbers in field name
+        part_in_name = self._extract_part_from_field_name(field_name)
+        if part_in_name and not part_in_name.startswith("Page"):
+            return part_in_name
+        
+        # Look for part headers in page text
+        lines = page_text.split('\n')
+        part_pattern = re.compile(r'Part\s+(\d+)(?:\s*[.-]\s*)?([A-Za-z\s]+)?', re.IGNORECASE)
+        
+        current_part = None
+        current_y = 0
+        
+        # Find all part headers with approximate positions
+        part_headers = []
+        for i, line in enumerate(lines):
+            match = part_pattern.search(line)
+            if match:
+                part_num = match.group(1)
+                part_desc = match.group(2) if match.group(2) else ""
+                
+                # Special case for Part 0 or attorney sections
+                if part_num == "0" or any(term in line.lower() for term in ['attorney', 'representative']):
+                    part_headers.append((i, "Part 0 - Attorney/Representative", line))
+                else:
+                    part_headers.append((i, f"Part {part_num}", line))
+        
+        # If we found part headers, use the most recent one
+        if part_headers:
+            # For now, use a simple heuristic - fields belong to the last part mentioned
+            current_part = part_headers[-1][1]
+            
+            # If multiple parts on page, try to determine which one this field belongs to
+            if len(part_headers) > 1 and page_num < 3:  # More sophisticated for early pages
+                # Estimate field position relative to part headers
+                # This is approximate but helps with part assignment
+                field_position = y_pos / 800  # Normalize to 0-1 range (assuming ~800pt page height)
+                
+                for i, (line_idx, part_name, _) in enumerate(part_headers):
+                    header_position = line_idx / max(len(lines), 1)
+                    
+                    # Check if field is likely after this header but before next
+                    if i < len(part_headers) - 1:
+                        next_position = part_headers[i + 1][0] / max(len(lines), 1)
+                        if header_position <= field_position < next_position:
+                            current_part = part_name
+                            break
+                    else:
+                        # Last header - check if field is after it
+                        if header_position <= field_position:
+                            current_part = part_name
+        
+        # Default fallback
+        if current_part:
+            return current_part
+        
+        # Special handling for first page
+        if page_num == 0:
+            return "Part 0 - Attorney/Representative"
+        
+        return f"Page {page_num + 1}"
+    
+    def _post_process_parts(self, fields: List[PDFField], part_counts: dict):
+        """Post-process to ensure correct part assignment"""
+        # Attorney-related keywords and patterns
+        attorney_keywords = [
+            'attorney', 'bar', 'representative', 'law firm', 'g-28', 'g28',
+            'counsel', 'legal', 'licensing', 'accredited', 'appearance',
+            'bar number', 'state bar', 'law firm', 'fein', 'firm name'
+        ]
+        
+        # First, identify all attorney fields
+        attorney_fields = []
+        for field in fields:
+            field_desc_lower = field.description.lower()
+            field_name_lower = field.raw_name.lower()
+            
+            # Check if this is an attorney field
+            is_attorney = any(keyword in field_desc_lower or keyword in field_name_lower 
+                            for keyword in attorney_keywords)
+            
+            if is_attorney:
+                attorney_fields.append(field)
+                # Update part if not already Part 0
+                if not field.part.startswith("Part 0"):
+                    field.part = "Part 0 - Attorney/Representative"
+        
+        # Group fields by page and position to identify sections
+        page_groups = defaultdict(list)
+        for field in fields:
+            page_groups[field.page].append(field)
+        
+        # Check first page for attorney section
+        if 1 in page_groups:  # Page 1 (0-indexed + 1)
+            first_page_fields = page_groups[1]
+            
+            # If we have attorney fields on first page, check nearby fields
+            if attorney_fields:
+                # Find fields that are likely part of attorney section based on proximity
+                for field in first_page_fields:
+                    if field not in attorney_fields and field.page == 1:
+                        # Check if this field is near other attorney fields
+                        # Simple heuristic: fields on same page before Part 1 are likely attorney fields
+                        if not any(part in field.part for part in ['Part 1', 'Part 2', 'Part 3']):
+                            # Check field description for common attorney section fields
+                            common_attorney_fields = [
+                                'name', 'address', 'phone', 'email', 'signature',
+                                'city', 'state', 'zip', 'country', 'suite', 'street'
+                            ]
+                            
+                            if any(common in field.description.lower() for common in common_attorney_fields):
+                                # This might be part of attorney section
+                                if field.part.startswith("Page"):
+                                    field.part = "Part 0 - Attorney/Representative"
+        
+        # Ensure part numbering is consistent
+        # Count actual parts found
+        actual_parts = set()
+        for field in fields:
+            if field.part.startswith("Part") and not field.part.startswith("Part 0"):
+                try:
+                    part_match = re.search(r'Part\s+(\d+)', field.part)
+                    if part_match:
+                        actual_parts.add(int(part_match.group(1)))
+                except:
+                    pass
+        
+        # Log part distribution for debugging
+        if actual_parts:
+            print(f"Parts found: {sorted(actual_parts)}")
+            print(f"Attorney fields: {len(attorney_fields)}")
+            
+        # Update part counts
+        final_counts = defaultdict(int)
+        for field in fields:
+            final_counts[field.part] += 1
+        
+        return final_counts
+    
+    def _get_mapping_suggestions_with_part_context(self, field: PDFField, part: str) -> List[MappingSuggestion]:
+        """Get mapping suggestions based on field part"""
+        suggestions = []
+        
+        # Define part to object mapping
+        part_object_mapping = {
+            "Part 0": "attorney",
+            "Attorney": "attorney", 
+            "Representative": "attorney",
+            "Part 1": "customer",  # Usually petitioner/employer
+            "Part 2": "beneficiary",  # Usually beneficiary
+            "Part 3": "beneficiary",  # Often additional beneficiary info
+            "Petitioner": "customer",
+            "Beneficiary": "beneficiary",
+            "Applicant": "beneficiary"
+        }
+        
+        # Find primary object for this part
+        primary_object = None
+        for key, obj in part_object_mapping.items():
+            if key.lower() in part.lower():
+                primary_object = obj
+                break
+        
+        # Get base suggestions
+        base_suggestions = self._get_mapping_suggestions(field)
+        
+        # Boost suggestions matching the primary object
+        if primary_object:
+            for suggestion in base_suggestions:
+                if suggestion.db_path.startswith(primary_object):
+                    suggestion.confidence = min(suggestion.confidence * 1.5, 1.0)
+                    suggestion.reason += f" (Part context: {part})"
+        
+        # Re-sort by confidence
+        base_suggestions.sort(key=lambda x: x.confidence, reverse=True)
+        
+        return base_suggestions
     
     def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
@@ -1011,7 +1240,7 @@ export const {form_name} = {{
         "mappedFields": {mapped_count},
         "questionnaireFields": {questionnaire_count},
         "unmappedFields": {unmapped_count},
-        "mappingScore": {self._calculate_mapping_score(fields):.1f},
+        "mappingScore": {self.calculate_mapping_score(fields):.1f},
         "generatedBy": "Universal USCIS Form Mapper",
         "formVersion": "Latest",
         "mappingNotes": {{
@@ -1232,7 +1461,7 @@ def render_upload_section(mapper: UniversalUSCISMapper):
                         high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
                         st.metric("High Confidence", high_conf)
                     with col4:
-                        score = mapper._calculate_mapping_score(fields)
+                        score = mapper.calculate_mapping_score(fields)
                         st.metric("Mapping Score", f"{score}%")
                 else:
                     st.error("No fields found in the PDF. Please ensure it's a fillable PDF form.")
@@ -1518,7 +1747,7 @@ def render_export_section(mapper: UniversalUSCISMapper):
     with col3:
         st.metric("Questionnaire", sum(1 for f in fields if f.is_questionnaire))
     with col4:
-        st.metric("Score", f"{mapper._calculate_mapping_score(fields)}%")
+        st.metric("Score", f"{mapper.calculate_mapping_score(fields)}%")
     
     st.markdown("---")
     
