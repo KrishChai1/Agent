@@ -337,14 +337,46 @@ class UniversalUSCISMapper:
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         """Extract all fields from any USCIS PDF form"""
         fields = []
+        section_contexts = {}  # Store section descriptions
         
         try:
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
+            # First pass: extract section headers and descriptions
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                # Look for section headers
+                section_patterns = [
+                    r'To be completed by (?:an )?attorney or BIA[\s-]*accredited representative',
+                    r'Information About (?:the )?Petitioner',
+                    r'Information About (?:the )?Beneficiary',
+                    r'Information About (?:the )?Applicant',
+                    r'Information About This Petition',
+                    r'Processing Information',
+                    r'Additional Information',
+                    r'Petitioner[\s\']*s Statement',
+                    r'Preparer[\s\']*s Statement',
+                    r'Part\s*(\d+)[\s\-\.]*([A-Za-z\s]+)',
+                    r'Section\s*([A-Z])[\s\-\.]*([A-Za-z\s]+)'
+                ]
+                
+                for pattern in section_patterns:
+                    matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
+                    for match in matches:
+                        section_desc = match.group(0)
+                        # Store context for this page
+                        if page_num not in section_contexts:
+                            section_contexts[page_num] = []
+                        section_contexts[page_num].append(section_desc.lower())
+            
+            # Second pass: extract fields with context
             field_index = 0
             for page_num in range(len(doc)):
                 page = doc[page_num]
+                page_context = section_contexts.get(page_num, [])
                 
                 for widget in page.widgets():
                     if widget.field_name:
@@ -353,8 +385,8 @@ class UniversalUSCISMapper:
                         # Determine field type
                         field_type = self._get_field_type(widget)
                         
-                        # Extract metadata
-                        part = self._extract_part(widget.field_name, page_num, form_type)
+                        # Extract metadata with context
+                        part = self._extract_part_with_context(widget.field_name, page_num, form_type, page_context)
                         item = self._extract_item(widget.field_name)
                         description = self._generate_description(widget.field_name, widget.field_display)
                         
@@ -370,13 +402,16 @@ class UniversalUSCISMapper:
                             description=description
                         )
                         
-                        # Get mapping suggestions
-                        suggestions = self._get_mapping_suggestions(pdf_field)
+                        # Get mapping suggestions with context
+                        suggestions = self._get_mapping_suggestions_with_context(pdf_field, page_context)
                         if suggestions:
                             best_suggestion = suggestions[0]
                             pdf_field.db_mapping = best_suggestion.db_path
                             pdf_field.confidence_score = best_suggestion.confidence
                             pdf_field.mapping_type = best_suggestion.field_type
+                        else:
+                            # Automatically mark unmapped fields as questionnaire
+                            pdf_field.is_questionnaire = True
                         
                         fields.append(pdf_field)
             
@@ -387,6 +422,22 @@ class UniversalUSCISMapper:
             return []
         
         return fields
+    
+    def _extract_part_with_context(self, field_name: str, page_num: int, form_type: str, page_context: List[str]) -> str:
+        """Extract part/section with context awareness"""
+        # Check page context for attorney section
+        for context in page_context:
+            if any(term in context for term in ['attorney', 'representative', 'bia-accredited', 'g-28']):
+                return "Part 0 - Attorney/Representative"
+            elif 'petitioner' in context and 'information' in context:
+                return "Part 1 - Petitioner Information"
+            elif 'beneficiary' in context and 'information' in context:
+                return "Part 2 - Beneficiary Information"
+            elif 'applicant' in context and 'information' in context:
+                return "Part 1 - Applicant Information"
+        
+        # Fall back to original extraction
+        return self._extract_part(field_name, page_num, form_type)
     
     def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
@@ -408,6 +459,23 @@ class UniversalUSCISMapper:
     
     def _extract_part(self, field_name: str, page_num: int, form_type: str) -> str:
         """Extract part/section from field name"""
+        # Check if this is Part 0 or attorney section at the beginning
+        if page_num == 0 or 'attorney' in field_name.lower() or 'representative' in field_name.lower():
+            # Check for attorney-related patterns
+            attorney_patterns = [
+                r'attorney',
+                r'representative',
+                r'g-?28',
+                r'appearance',
+                r'bar\s*number',
+                r'law\s*firm',
+                r'bia[\s-]*accredited'
+            ]
+            
+            for pattern in attorney_patterns:
+                if re.search(pattern, field_name, re.IGNORECASE):
+                    return "Part 0 - Attorney/Representative"
+        
         # Common USCIS patterns
         patterns = [
             (r'Part\s*(\d+)', 'Part {}'),
@@ -423,14 +491,19 @@ class UniversalUSCISMapper:
         for pattern, format_str in patterns:
             match = re.search(pattern, field_name, re.IGNORECASE)
             if match:
-                return format_str.format(match.group(1))
+                part_num = match.group(1)
+                # If it's Part 0, label it as attorney section
+                if part_num == '0':
+                    return "Part 0 - Attorney/Representative"
+                return format_str.format(part_num)
         
         # Special sections
         special_sections = {
             'signature': 'Signatures',
             'preparer': 'Preparer Information',
             'interpreter': 'Interpreter Information',
-            'attorney': 'Attorney Information',
+            'attorney': 'Part 0 - Attorney/Representative',
+            'representative': 'Part 0 - Attorney/Representative',
             'supplement': 'Supplement',
             'additional': 'Additional Information',
             'certification': 'Certification'
@@ -441,7 +514,9 @@ class UniversalUSCISMapper:
             if key in field_lower:
                 return section
         
-        # Default by page
+        # Default by page - if page 1, check if it's attorney section
+        if page_num == 0:
+            return "Part 0 - Attorney/Representative"
         return f"Page {page_num + 1}"
     
     def _extract_item(self, field_name: str) -> str:
@@ -657,52 +732,138 @@ class UniversalUSCISMapper:
         
         return paths
     
+    def _get_mapping_suggestions_with_context(self, field: PDFField, page_context: List[str]) -> List[MappingSuggestion]:
+        """Get mapping suggestions with page context awareness"""
+        suggestions = []
+        
+        # Determine primary object based on context
+        primary_object = None
+        if any('attorney' in ctx or 'representative' in ctx for ctx in page_context):
+            primary_object = 'attorney'
+        elif any('petitioner' in ctx for ctx in page_context):
+            primary_object = 'customer'
+        elif any('beneficiary' in ctx for ctx in page_context):
+            primary_object = 'beneficiary'
+        elif any('applicant' in ctx for ctx in page_context):
+            # Applicant could be beneficiary or customer depending on form
+            primary_object = 'beneficiary'
+        
+        # Get base suggestions
+        base_suggestions = self._get_mapping_suggestions(field)
+        
+        # Boost suggestions that match the primary object
+        if primary_object:
+            for suggestion in base_suggestions:
+                if suggestion.db_path.startswith(primary_object):
+                    suggestion.confidence = min(suggestion.confidence * 1.5, 1.0)
+                    suggestion.reason += f" (Context: {primary_object})"
+        
+        # Re-sort by confidence
+        base_suggestions.sort(key=lambda x: x.confidence, reverse=True)
+        
+        return base_suggestions
+    
     def _get_contextual_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions based on field context (part, item, page)"""
         suggestions = []
         
-        # Context-based rules
+        # Enhanced context-based rules
         context_rules = {
+            "Part 0 - Attorney/Representative": {
+                "patterns": ["attorney", "lawyer", "representative", "bar", "firm"],
+                "object": "attorney",
+                "boost": 0.9
+            },
             "Part 1": {
                 "patterns": ["petitioner", "company", "organization", "employer"],
-                "object": "customer"
+                "object": "customer",
+                "boost": 0.8
+            },
+            "Petitioner Information": {
+                "patterns": ["petitioner", "company", "employer"],
+                "object": "customer",
+                "boost": 0.9
             },
             "Part 2": {
                 "patterns": ["beneficiary", "worker", "employee", "alien"],
-                "object": "beneficiary"
+                "object": "beneficiary",
+                "boost": 0.8
+            },
+            "Beneficiary Information": {
+                "patterns": ["beneficiary", "worker"],
+                "object": "beneficiary",
+                "boost": 0.9
             },
             "Part 3": {
                 "patterns": ["beneficiary", "information about"],
-                "object": "beneficiary"
+                "object": "beneficiary",
+                "boost": 0.7
             },
             "Attorney": {
                 "patterns": ["attorney", "lawyer", "representative"],
-                "object": "attorney"
+                "object": "attorney",
+                "boost": 0.95
             },
             "Signature": {
                 "patterns": ["signature", "sign", "date"],
-                "object": "signatory"
+                "object": "signatory",
+                "boost": 0.7
             }
         }
         
         # Check if field's part matches any context
         for context, rule in context_rules.items():
-            if context.lower() in field.part.lower():
+            if context.lower() in field.part.lower() or field.part.lower() in context.lower():
                 # Look for fields in the suggested object
                 obj_name = rule['object']
                 if obj_name in self.db_objects:
-                    # Add suggestions with medium confidence
-                    for pattern in rule['patterns']:
-                        if pattern in field.description.lower():
-                            paths = self._search_in_object(obj_name, self.db_objects[obj_name], [])
-                            for path in paths[:3]:  # Limit suggestions
+                    # Check if field description matches patterns
+                    matches_pattern = any(pattern in field.description.lower() for pattern in rule['patterns'])
+                    
+                    if matches_pattern or rule['boost'] > 0.8:
+                        # Add targeted suggestions
+                        paths = self._search_in_object(obj_name, self.db_objects[obj_name], [])
+                        for path in paths[:5]:  # Limit suggestions
+                            # Match field name patterns
+                            field_name = path.split('.')[-1]
+                            if self._is_field_match(field.description, field_name):
                                 suggestions.append(MappingSuggestion(
                                     db_path=path,
-                                    confidence=0.6,
+                                    confidence=rule['boost'],
                                     reason=f"Context match: {context}"
                                 ))
         
         return suggestions
+    
+    def _is_field_match(self, field_desc: str, db_field: str) -> bool:
+        """Check if field description matches database field"""
+        # Normalize for comparison
+        field_desc_norm = field_desc.lower().replace(' ', '').replace('_', '')
+        db_field_norm = db_field.lower().replace('_', '')
+        
+        # Direct substring match
+        if db_field_norm in field_desc_norm or field_desc_norm in db_field_norm:
+            return True
+        
+        # Check common variations
+        variations = {
+            'firstname': ['first', 'given'],
+            'lastname': ['last', 'family', 'surname'],
+            'middlename': ['middle', 'mi'],
+            'dob': ['birth', 'dateofbirth'],
+            'ssn': ['social', 'security'],
+            'phone': ['telephone', 'phone', 'contact'],
+            'email': ['email', 'mail'],
+            'street': ['address', 'street'],
+            'zip': ['zip', 'postal']
+        }
+        
+        for key, values in variations.items():
+            if key in db_field_norm:
+                if any(v in field_desc_norm for v in values):
+                    return True
+        
+        return False
     
     def _get_similarity_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions based on string similarity"""
@@ -733,7 +894,7 @@ class UniversalUSCISMapper:
     
     def _collect_fields(self, obj_name: str, obj_structure: Any, result: List[Tuple[str, str]], prefix: str = ""):
         """Recursively collect all field paths and names"""
-        current_prefix = f"{obj_name}{prefix}" if prefix else obj_name
+        current_prefix = f"{obj_name}{prefix}" if obj_name else prefix
         
         if isinstance(obj_structure, dict):
             for key, value in obj_structure.items():
@@ -744,7 +905,11 @@ class UniversalUSCISMapper:
                         else:
                             result.append((f"{current_prefix}.{field}", field))
                 else:
-                    self._collect_fields("", value, result, f"{prefix}.{key}" if prefix else f".{key}")
+                    new_prefix = f"{prefix}.{key}" if prefix else key
+                    if obj_name:
+                        self._collect_fields("", value, result, new_prefix)
+                    else:
+                        self._collect_fields("", value, result, f"{current_prefix}.{key}")
     
     def create_mapping(self, field: PDFField, mapping_type: str, mapping_config: Dict[str, Any]) -> None:
         """Create a field mapping"""
@@ -809,7 +974,8 @@ class UniversalUSCISMapper:
                             categories['beneficiaryData'][field.raw_name] = field.mapping_config
                         elif first_field.startswith('attorney'):
                             categories['attorneyData'][field.raw_name] = field.mapping_config
-            elif field.is_questionnaire:
+            elif field.is_questionnaire or (not field.is_mapped and not field.db_mapping):
+                # Include all questionnaire fields (explicit and auto-assigned)
                 categories['questionnaireData'][field.raw_name] = {
                     'name': f"q_{field.index}",
                     'type': field.field_type,
@@ -818,9 +984,15 @@ class UniversalUSCISMapper:
                     'item': field.item
                 }
         
+        # Calculate accurate counts
+        questionnaire_count = len(categories['questionnaireData'])
+        mapped_count = sum(1 for f in fields if f.is_mapped)
+        unmapped_count = sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire and f.db_mapping)
+        
         # Generate TypeScript
         ts_content = f"""// Auto-generated mapping for {form_type}
 // Generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+// Universal USCIS Form Mapper
 
 export const {form_name} = {{
     "formname": "{form_name}",
@@ -836,10 +1008,16 @@ export const {form_name} = {{
     "lcaData": {json.dumps(categories['lcaData'], indent=8) if categories['lcaData'] else 'null'},
     "mappingMetadata": {{
         "totalFields": {len(fields)},
-        "mappedFields": {sum(1 for f in fields if f.is_mapped)},
-        "questionnaireFields": {sum(1 for f in fields if f.is_questionnaire)},
-        "unmappedFields": {sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire)},
-        "mappingScore": {self._calculate_mapping_score(fields):.1f}
+        "mappedFields": {mapped_count},
+        "questionnaireFields": {questionnaire_count},
+        "unmappedFields": {unmapped_count},
+        "mappingScore": {self._calculate_mapping_score(fields):.1f},
+        "generatedBy": "Universal USCIS Form Mapper",
+        "formVersion": "Latest",
+        "mappingNotes": {{
+            "Part 0": "Attorney/Representative Information",
+            "unmappedHandling": "All unmapped fields automatically added to questionnaire"
+        }}
     }}
 }}"""
         
@@ -910,7 +1088,14 @@ export const {form_name} = {{
         
         # Mapped fields get 100%, questionnaire fields get 50%
         score = ((mapped * 100) + (questionnaire * 50)) / total
-        return round(score, 1)
+    def _get_object_index(self, db_path: str) -> int:
+        """Get index of object from db_path"""
+        if db_path:
+            obj_name = db_path.split('.')[0]
+            objects = list(self.db_objects.keys())
+            if obj_name in objects:
+                return objects.index(obj_name)
+        return 0
 
 # Streamlit UI Components
 def render_header():
@@ -1060,15 +1245,24 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     st.header("🗺️ Field Mapping Configuration")
     
+    # Info box about automatic questionnaire assignment
+    st.info("ℹ️ **Note**: All unmapped fields are automatically added to the questionnaire. You can change this by selecting a different mapping type.")
+    
     # Filters
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         parts = list(set(f.part for f in st.session_state.pdf_fields))
-        selected_part = st.selectbox("Filter by Part", ["All"] + sorted(parts))
+        # Sort parts with Part 0 first
+        sorted_parts = []
+        if "Part 0 - Attorney/Representative" in parts:
+            sorted_parts.append("Part 0 - Attorney/Representative")
+        sorted_parts.extend([p for p in sorted(parts) if p != "Part 0 - Attorney/Representative"])
+        
+        selected_part = st.selectbox("Filter by Part", ["All"] + sorted_parts)
     
     with col2:
-        status_filter = st.selectbox("Filter by Status", ["All", "Mapped", "Suggested", "Unmapped"])
+        status_filter = st.selectbox("Filter by Status", ["All", "Mapped", "Suggested", "Questionnaire", "Unmapped"])
     
     with col3:
         field_types = list(set(f.field_type for f in st.session_state.pdf_fields))
@@ -1076,6 +1270,41 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     with col4:
         search_term = st.text_input("Search fields", placeholder="Enter keyword...")
+    
+    # Quick actions
+    st.markdown("### Quick Actions")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("✅ Accept All High Confidence (>80%)", use_container_width=True):
+            count = 0
+            for field in st.session_state.pdf_fields:
+                if not field.is_mapped and field.confidence_score > 0.8 and field.db_mapping:
+                    field.is_mapped = True
+                    mapper.create_mapping(field, "direct", {"path": field.db_mapping})
+                    count += 1
+            if count > 0:
+                st.success(f"Accepted {count} high confidence mappings")
+                st.rerun()
+    
+    with col2:
+        if st.button("📋 All Unmapped to Questionnaire", use_container_width=True):
+            count = 0
+            for field in st.session_state.pdf_fields:
+                if not field.is_mapped and not field.is_questionnaire:
+                    field.is_questionnaire = True
+                    count += 1
+            if count > 0:
+                st.success(f"Added {count} fields to questionnaire")
+                st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset All Mappings", use_container_width=True):
+            for field in st.session_state.pdf_fields:
+                field.is_mapped = False
+                field.is_questionnaire = False
+                field.db_mapping = None
+            st.rerun()
     
     # Filter fields
     filtered_fields = []
@@ -1087,9 +1316,11 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         # Status filter
         if status_filter == "Mapped" and not field.is_mapped:
             continue
-        elif status_filter == "Suggested" and not field.db_mapping:
+        elif status_filter == "Suggested" and field.db_mapping and not field.is_mapped:
             continue
-        elif status_filter == "Unmapped" and (field.is_mapped or field.db_mapping):
+        elif status_filter == "Questionnaire" and not field.is_questionnaire:
+            continue
+        elif status_filter == "Unmapped" and (field.is_mapped or field.is_questionnaire or field.db_mapping):
             continue
         
         # Type filter
@@ -1113,10 +1344,26 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     for field in filtered_fields:
         fields_by_part[field.part].append(field)
     
-    for part, fields in sorted(fields_by_part.items()):
-        with st.expander(f"📑 {part} ({len(fields)} fields)", expanded=True):
-            for field in fields:
-                render_field_mapping_card(field, mapper)
+    # Sort parts with Part 0 first
+    sorted_parts_display = []
+    if "Part 0 - Attorney/Representative" in fields_by_part:
+        sorted_parts_display.append(("Part 0 - Attorney/Representative", fields_by_part["Part 0 - Attorney/Representative"]))
+    
+    for part in sorted(fields_by_part.keys()):
+        if part != "Part 0 - Attorney/Representative":
+            sorted_parts_display.append((part, fields_by_part[part]))
+    
+    for part, fields in sorted_parts_display:
+        # Special styling for Part 0
+        if "Part 0" in part:
+            with st.expander(f"⚖️ {part} ({len(fields)} fields)", expanded=True):
+                st.info("This section contains attorney/representative information fields")
+                for field in fields:
+                    render_field_mapping_card(field, mapper)
+        else:
+            with st.expander(f"📑 {part} ({len(fields)} fields)", expanded=True):
+                for field in fields:
+                    render_field_mapping_card(field, mapper)
 
 def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
     """Render individual field mapping card"""
@@ -1130,70 +1377,126 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
             st.markdown(f"**{field.item}** {field.description}")
             st.caption(f"Field: `{field.raw_name}` | Type: {field.field_type} | Page: {field.page}")
             
-            # Current mapping
+            # Current mapping status
             if field.is_mapped:
                 st.markdown(f'<span class="mapping-badge mapped">✅ Mapped to: {field.db_mapping}</span>', unsafe_allow_html=True)
-            elif field.db_mapping:
+            elif field.db_mapping and field.confidence_score > 0:
                 confidence_class = "high" if field.confidence_score > 0.8 else "medium" if field.confidence_score > 0.6 else "low"
                 st.markdown(f'<span class="mapping-badge questionnaire">💡 Suggested: {field.db_mapping} <span class="confidence-{confidence_class}">({field.confidence_score:.0%})</span></span>', unsafe_allow_html=True)
+            elif field.is_questionnaire:
+                st.markdown('<span class="mapping-badge questionnaire">📋 In Questionnaire (auto-assigned)</span>', unsafe_allow_html=True)
             else:
                 st.markdown('<span class="mapping-badge unmapped">❌ Not mapped</span>', unsafe_allow_html=True)
         
         with col2:
             # Mapping controls
-            if not field.is_mapped:
-                mapping_type = st.selectbox(
-                    "Mapping Type",
-                    ["Direct", "Concatenated", "Conditional", "Default Value", "Questionnaire", "Skip"],
-                    key=f"type_{field.index}"
+            mapping_options = ["Keep Current", "Direct", "Concatenated", "Conditional", "Default Value", "Questionnaire", "Skip"]
+            
+            # Default selection based on current state
+            if field.is_mapped:
+                default_option = "Keep Current"
+            elif field.is_questionnaire:
+                default_option = "Questionnaire"
+            elif field.db_mapping:
+                default_option = "Direct"
+            else:
+                default_option = "Questionnaire"
+            
+            mapping_type = st.selectbox(
+                "Mapping Type",
+                mapping_options,
+                index=mapping_options.index(default_option),
+                key=f"type_{field.index}"
+            )
+            
+            if mapping_type == "Direct":
+                # Show suggested mapping if available
+                if field.db_mapping and not field.is_mapped:
+                    st.info(f"Suggested: {field.db_mapping}")
+                
+                # Database path selector
+                default_obj_index = 0
+                if field.db_mapping and not field.is_mapped:
+                    default_obj_index = mapper._get_object_index(field.db_mapping)
+                
+                obj_name = st.selectbox(
+                    "Object",
+                    list(mapper.db_objects.keys()),
+                    key=f"obj_{field.index}",
+                    index=default_obj_index
                 )
                 
-                if mapping_type == "Direct":
-                    # Database path selector
-                    obj_name = st.selectbox(
-                        "Object",
-                        list(mapper.db_objects.keys()),
-                        key=f"obj_{field.index}"
-                    )
-                    
-                    # Build path selector dynamically
-                    if obj_name:
-                        paths = []
-                        mapper._collect_fields(obj_name, mapper.db_objects[obj_name], [(p, p.split('.')[-1]) for p in paths])
-                        if paths:
-                            selected_path = st.selectbox(
-                                "Field",
-                                [p[0] for p in paths],
-                                key=f"path_{field.index}"
-                            )
-                
-                elif mapping_type == "Default Value":
-                    default_val = st.text_input(
-                        "Default Value",
-                        key=f"default_{field.index}"
-                    )
-                
-                elif mapping_type == "Concatenated":
-                    st.write("Select fields to concatenate:")
-                    # Add UI for selecting multiple fields
-                
-                elif mapping_type == "Conditional":
-                    st.write("Define condition:")
-                    # Add UI for conditional mapping
+                # Build path selector dynamically
+                if obj_name:
+                    paths = []
+                    mapper._collect_fields(obj_name, mapper.db_objects[obj_name], paths)
+                    if paths:
+                        # Get current selection or default
+                        current_selection = 0
+                        if field.db_mapping and field.db_mapping.startswith(obj_name):
+                            for i, (path, _) in enumerate(paths):
+                                if path == field.db_mapping:
+                                    current_selection = i
+                                    break
+                        
+                        selected_path = st.selectbox(
+                            "Field",
+                            [p[0] for p in paths],
+                            index=current_selection,
+                            format_func=lambda x: x.split('.')[-1] + " (" + x + ")",
+                            key=f"path_{field.index}"
+                        )
+            
+            elif mapping_type == "Default Value":
+                default_val = st.text_input(
+                    "Default Value",
+                    key=f"default_{field.index}"
+                )
+            
+            elif mapping_type == "Concatenated":
+                st.write("Select fields to concatenate:")
+                num_fields = st.number_input("Number of fields", min_value=2, max_value=5, value=2, key=f"concat_num_{field.index}")
+                concat_fields = []
+                for i in range(int(num_fields)):
+                    obj = st.selectbox(f"Object {i+1}", list(mapper.db_objects.keys()), key=f"concat_obj_{field.index}_{i}")
+                    # Add field selector
+            
+            elif mapping_type == "Conditional":
+                st.write("Define condition:")
+                condition = st.text_area("Condition", key=f"condition_{field.index}", height=60)
+                true_value = st.text_input("If True", key=f"true_{field.index}")
+                false_value = st.text_input("If False", key=f"false_{field.index}")
         
         with col3:
             # Action buttons
-            if not field.is_mapped:
-                if field.db_mapping and st.button("✅", key=f"accept_{field.index}", help="Accept suggestion"):
-                    field.is_mapped = True
-                    mapper.create_mapping(field, "direct", {"path": field.db_mapping})
-                    st.rerun()
-                
+            if mapping_type != "Keep Current":
                 if st.button("💾", key=f"save_{field.index}", help="Save mapping"):
-                    # Save custom mapping
+                    if mapping_type == "Direct" and 'selected_path' in locals():
+                        mapper.create_mapping(field, "direct", {"path": selected_path})
+                    elif mapping_type == "Default Value" and 'default_val' in locals():
+                        mapper.create_mapping(field, "default", {"value": default_val})
+                    elif mapping_type == "Questionnaire":
+                        mapper.create_mapping(field, "questionnaire", {})
+                    elif mapping_type == "Skip":
+                        field.is_mapped = False
+                        field.is_questionnaire = False
                     st.rerun()
+            
+            if field.db_mapping and not field.is_mapped and st.button("✅", key=f"accept_{field.index}", help="Accept suggestion"):
+                field.is_mapped = True
+                mapper.create_mapping(field, "direct", {"path": field.db_mapping})
+                st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
+
+def _get_object_index(db_path: str, db_objects: dict) -> int:
+    """Get index of object from db_path"""
+    if db_path:
+        obj_name = db_path.split('.')[0]
+        objects = list(db_objects.keys())
+        if obj_name in objects:
+            return objects.index(obj_name)
+    return 0
 
 def render_export_section(mapper: UniversalUSCISMapper):
     """Render export section"""
@@ -1306,6 +1609,15 @@ def render_export_section(mapper: UniversalUSCISMapper):
         if st.button("👥 Export for Review", use_container_width=True):
             st.info("Review export generation in progress...")
 
+def _get_object_index(db_path: str, db_objects: dict) -> int:
+    """Get index of object from db_path"""
+    if db_path:
+        obj_name = db_path.split('.')[0]
+        objects = list(db_objects.keys())
+        if obj_name in objects:
+            return objects.index(obj_name)
+    return 0
+
 def main():
     """Main application entry point"""
     st.set_page_config(
@@ -1331,9 +1643,9 @@ def main():
             # Progress metrics
             total = len(fields)
             mapped = sum(1 for f in fields if f.is_mapped)
-            suggested = sum(1 for f in fields if f.db_mapping and not f.is_mapped)
-            questionnaire = sum(1 for f in fields if f.is_questionnaire)
-            unmapped = total - mapped - questionnaire
+            suggested = sum(1 for f in fields if f.db_mapping and not f.is_mapped and not f.is_questionnaire)
+            questionnaire = sum(1 for f in fields if f.is_questionnaire or (not f.is_mapped and not f.db_mapping))
+            truly_unmapped = sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire and not f.db_mapping)
             
             # Display metrics
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
@@ -1348,13 +1660,37 @@ def main():
             st.progress(suggested / total if total > 0 else 0)
             st.caption(f"Suggested: {suggested} ({suggested/total*100:.1f}%)")
             
+            st.progress(questionnaire / total if total > 0 else 0)
+            st.caption(f"Questionnaire: {questionnaire} ({questionnaire/total*100:.1f}%)")
+            
             # Distribution
             st.write("**Field Distribution**")
             distribution_df = pd.DataFrame({
                 'Status': ['Mapped', 'Suggested', 'Questionnaire', 'Unmapped'],
-                'Count': [mapped, suggested, questionnaire, unmapped - suggested]
+                'Count': [mapped, suggested, questionnaire, truly_unmapped]
             })
             st.bar_chart(distribution_df.set_index('Status'))
+            
+            # Part breakdown
+            st.write("**Fields by Part**")
+            parts_count = defaultdict(int)
+            for field in fields:
+                parts_count[field.part] += 1
+            
+            # Sort with Part 0 first
+            sorted_parts = []
+            if "Part 0 - Attorney/Representative" in parts_count:
+                sorted_parts.append(("Part 0 - Attorney/Representative", parts_count["Part 0 - Attorney/Representative"]))
+            
+            for part, count in sorted(parts_count.items()):
+                if part != "Part 0 - Attorney/Representative":
+                    sorted_parts.append((part, count))
+            
+            for part, count in sorted_parts:
+                if "Part 0" in part:
+                    st.write(f"⚖️ {part}: **{count}**")
+                else:
+                    st.write(f"- {part}: {count}")
             
             # Field types
             st.write("**Field Types**")
@@ -1371,6 +1707,14 @@ def main():
         st.markdown("### 📚 Resources")
         st.markdown("[USCIS Forms](https://www.uscis.gov/forms/all-forms)")
         st.markdown("[Form Instructions](https://www.uscis.gov/forms)")
+        
+        # Add note about Part 0
+        st.markdown("---")
+        st.markdown("### ℹ️ Mapping Tips")
+        st.markdown("- **Part 0**: Attorney/Representative info")
+        st.markdown("- **Part 1**: Usually Petitioner/Applicant")
+        st.markdown("- **Part 2+**: Usually Beneficiary info")
+        st.markdown("- **Unmapped**: Auto-added to questionnaire")
     
     # Main content tabs
     tabs = st.tabs(["📤 Upload & Extract", "🗺️ Field Mapping", "📥 Export", "⚙️ Settings"])
