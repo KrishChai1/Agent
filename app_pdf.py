@@ -2413,7 +2413,8 @@ def main():
             st.json(DB_OBJECTS)
 
 if __name__ == "__main__":
-    main()atus_filter = st.selectbox("Filter by Status", ["All", "Mapped", "Suggested", "Questionnaire", "Unmapped", "Custom"])
+     with col2:
+        status_filter = st.selectbox("Filter by Status", ["All", "Mapped", "Suggested", "Questionnaire", "Unmapped", "Custom"])
     
     with col3:
         field_types = list(set(f.field_type for f in st.session_state.pdf_fields))
