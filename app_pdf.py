@@ -342,73 +342,69 @@ class UniversalUSCISMapper:
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            # First, let's understand the form structure by looking at all field names
-            all_field_names = []
+            # First pass: collect all field names to understand structure
+            all_field_data = []
             field_index = 0
             
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 for widget in page.widgets():
                     if widget.field_name:
-                        all_field_names.append(widget.field_name)
+                        all_field_data.append({
+                            'name': widget.field_name,
+                            'page': page_num + 1,
+                            'widget': widget,
+                            'index': field_index
+                        })
                         field_index += 1
-                        
-                        # Extract field information
-                        field_type = self._get_field_type(widget)
-                        
-                        # Extract part directly from field name
-                        part = self._extract_part_from_field_name_improved(widget.field_name, page_num)
-                        
-                        # Extract other metadata
-                        item = self._extract_item(widget.field_name)
-                        description = self._generate_description(widget.field_name, widget.field_display)
-                        
-                        # Create field object
-                        pdf_field = PDFField(
-                            index=field_index,
-                            raw_name=widget.field_name,
-                            field_type=field_type,
-                            value=widget.field_value or '',
-                            page=page_num + 1,
-                            part=part,
-                            item=item,
-                            description=description
-                        )
-                        
-                        # Get mapping suggestions
-                        suggestions = self._get_mapping_suggestions(pdf_field)
-                        if suggestions:
-                            best_suggestion = suggestions[0]
-                            pdf_field.db_mapping = best_suggestion.db_path
-                            pdf_field.confidence_score = best_suggestion.confidence
-                            pdf_field.mapping_type = best_suggestion.field_type
-                        else:
-                            # Automatically mark unmapped fields as questionnaire
-                            pdf_field.is_questionnaire = True
-                        
-                        fields.append(pdf_field)
+            
+            # Analyze field names to understand part structure
+            part_mapping = self._analyze_form_structure(all_field_data)
+            
+            # Second pass: create field objects with correct parts
+            for field_data in all_field_data:
+                widget = field_data['widget']
+                page_num = field_data['page'] - 1
+                
+                # Extract field information
+                field_type = self._get_field_type(widget)
+                
+                # Get part from our analysis
+                part = part_mapping.get(field_data['index'], f"Unknown (Page {field_data['page']})")
+                
+                # Extract other metadata
+                item = self._extract_item(widget.field_name)
+                description = self._generate_description(widget.field_name, widget.field_display)
+                
+                # Create field object
+                pdf_field = PDFField(
+                    index=field_data['index'],
+                    raw_name=widget.field_name,
+                    field_type=field_type,
+                    value=widget.field_value or '',
+                    page=field_data['page'],
+                    part=part,
+                    item=item,
+                    description=description
+                )
+                
+                # Get mapping suggestions
+                suggestions = self._get_mapping_suggestions(pdf_field)
+                if suggestions:
+                    best_suggestion = suggestions[0]
+                    pdf_field.db_mapping = best_suggestion.db_path
+                    pdf_field.confidence_score = best_suggestion.confidence
+                    pdf_field.mapping_type = best_suggestion.field_type
+                else:
+                    # Automatically mark unmapped fields as questionnaire
+                    pdf_field.is_questionnaire = True
+                
+                fields.append(pdf_field)
             
             doc.close()
             
-            # Debug: Print field name patterns to understand structure
-            st.write("### Debug Information")
-            st.write(f"**Form**: {form_type}")
-            st.write(f"**Total fields**: {len(fields)}")
-            
-            # Show sample field names
-            with st.expander("Sample field names (first 20)"):
-                for i, name in enumerate(all_field_names[:20]):
-                    st.text(f"{i+1}: {name}")
-            
-            # Print part distribution
-            part_counts = {}
-            for field in fields:
-                part_counts[field.part] = part_counts.get(field.part, 0) + 1
-            
-            st.write("**Part distribution:**")
-            df_parts = pd.DataFrame(list(part_counts.items()), columns=['Part', 'Count'])
-            df_parts = df_parts.sort_values('Part')
-            st.dataframe(df_parts)
+            # Display extraction summary
+            self._display_extraction_summary(fields, form_type)
             
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
@@ -418,71 +414,179 @@ class UniversalUSCISMapper:
         
         return fields
     
-    def _extract_part_from_field_name_improved(self, field_name: str, page_num: int) -> str:
-        """Extract part from field name with improved pattern matching"""
+    def _analyze_form_structure(self, all_field_data: List[Dict]) -> Dict[int, str]:
+        """Analyze form structure to determine parts accurately"""
+        part_mapping = {}
         
-        # Clean up the field name first
-        clean_name = field_name
-        
-        # Remove form array indices
-        clean_name = re.sub(r'\[\d+\]', '', clean_name)
-        
-        # Look for explicit part indicators
+        # Common patterns for USCIS forms
         part_patterns = [
-            # Standard Part patterns
+            # Direct part references
             (r'Part\s*(\d+)', lambda m: f"Part {m.group(1)}"),
             (r'Part(\d+)', lambda m: f"Part {m.group(1)}"),
-            (r'Pt\s*(\d+)', lambda m: f"Part {m.group(1)}"),
+            (r'P(\d+)_', lambda m: f"Part {m.group(1)}"),
             (r'Pt(\d+)', lambda m: f"Part {m.group(1)}"),
-            (r'P(\d+)[_\.\-]', lambda m: f"Part {m.group(1)}"),
+            (r'Part_(\d+)', lambda m: f"Part {m.group(1)}"),
             
-            # Subform patterns that might indicate parts
-            (r'#subform\[(\d+)\]', lambda m: f"Part {int(m.group(1)) + 1}" if int(m.group(1)) > 0 else "Part 1"),
-            
-            # Special patterns for attorney section (usually at beginning)
-            (r'(attorney|g28|g-28|representative|preparer)', lambda m: "Part 0 - Attorney/Representative"),
-            
-            # Section patterns
+            # Section patterns that might be parts
             (r'Section\s*([A-Z])', lambda m: f"Section {m.group(1)}"),
-            (r'Section\s*(\d+)', lambda m: f"Section {m.group(1)}"),
+            (r'Sec(\d+)', lambda m: f"Section {m.group(1)}"),
+            
+            # Page-based patterns
+            (r'Page(\d+)', lambda m: None),  # Ignore page references
+            (r'#subform\[(\d+)\]', lambda m: None),  # Handle separately
         ]
         
-        for pattern, formatter in part_patterns:
-            match = re.search(pattern, clean_name, re.IGNORECASE)
-            if match:
-                part = formatter(match)
-                # Special handling for Part 0
-                if part == "Part 0":
-                    return "Part 0 - Attorney/Representative"
-                return part
-        
-        # Check if this is the first page and contains attorney-related fields
-        if page_num == 0:
-            attorney_keywords = [
-                'attorney', 'lawyer', 'representative', 'bar', 'law',
-                'firm', 'fein', 'bia', 'accredited', 'g-28', 'g28',
-                'appearance', 'counsel', 'legal'
-            ]
+        # First, identify fields that explicitly have part numbers
+        explicit_parts = {}
+        for i, field_data in enumerate(all_field_data):
+            field_name = field_data['name']
             
-            field_lower = field_name.lower()
-            if any(keyword in field_lower for keyword in attorney_keywords):
-                return "Part 0 - Attorney/Representative"
+            for pattern, formatter in part_patterns:
+                match = re.search(pattern, field_name, re.IGNORECASE)
+                if match and formatter:
+                    part = formatter(match)
+                    explicit_parts[i] = part
+                    break
         
-        # If no part found, check page-based heuristics
-        # Many forms have attorney section on page 1
-        if page_num == 0 and not any(p in clean_name.lower() for p in ['part1', 'part 1', 'pt1']):
-            # Check if this looks like an attorney field
-            common_attorney_fields = [
-                'name', 'address', 'city', 'state', 'zip', 'phone',
-                'email', 'signature', 'bar', 'law', 'firm'
-            ]
-            if any(field in field_name.lower() for field in common_attorney_fields):
-                # But make sure it's not explicitly Part 1
-                if not re.search(r'(part|pt)\s*1', field_name, re.IGNORECASE):
-                    return "Part 0 - Attorney/Representative"
+        # Check for G-28 or attorney section (usually Part 0 or at the beginning)
+        attorney_keywords = [
+            'attorney', 'lawyer', 'representative', 'bar', 'law',
+            'firm', 'fein', 'bia', 'accredited', 'g-28', 'g28',
+            'appearance', 'counsel', 'legal', 'eligibility statement',
+            'notice of entry', 'appearance as attorney'
+        ]
         
-        # Default to page number if no part found
-        return f"Page {page_num + 1}"
+        # Identify attorney/representative fields
+        for i, field_data in enumerate(all_field_data):
+            field_name = field_data['name'].lower()
+            if any(keyword in field_name for keyword in attorney_keywords):
+                # Check if it's not already assigned to another part
+                if i not in explicit_parts:
+                    # Check if this is on the first few pages
+                    if field_data['page'] <= 2:
+                        part_mapping[i] = "Part 0 - Attorney/Representative"
+        
+        # Now handle fields with explicit parts
+        for i, part in explicit_parts.items():
+            part_mapping[i] = part
+        
+        # Handle fields without explicit parts
+        current_part = None
+        for i, field_data in enumerate(all_field_data):
+            if i in part_mapping:
+                current_part = part_mapping[i]
+            elif current_part:
+                # Assign to current part if not already assigned
+                part_mapping[i] = current_part
+            else:
+                # Default assignment based on page
+                if field_data['page'] == 1:
+                    # First page often has attorney info
+                    field_lower = field_data['name'].lower()
+                    if any(kw in field_lower for kw in attorney_keywords):
+                        part_mapping[i] = "Part 0 - Attorney/Representative"
+                    else:
+                        part_mapping[i] = "Part 1"
+                else:
+                    part_mapping[i] = f"Unknown (Page {field_data['page']})"
+        
+        return part_mapping
+    
+    def _display_extraction_summary(self, fields: List[PDFField], form_type: str):
+        """Display detailed extraction summary organized by parts"""
+        st.write("### 📊 Extraction Summary")
+        st.write(f"**Form**: {form_type}")
+        st.write(f"**Total fields extracted**: {len(fields)}")
+        
+        # Group fields by part
+        fields_by_part = defaultdict(list)
+        for field in fields:
+            fields_by_part[field.part].append(field)
+        
+        # Sort parts properly
+        sorted_parts = []
+        
+        # Part 0 first if exists
+        for part in fields_by_part.keys():
+            if "Part 0" in part:
+                sorted_parts.append(part)
+                break
+        
+        # Then numbered parts
+        numbered_parts = []
+        other_parts = []
+        
+        for part in fields_by_part.keys():
+            if part not in sorted_parts:
+                if re.match(r'^Part \d+$', part):
+                    numbered_parts.append(part)
+                else:
+                    other_parts.append(part)
+        
+        # Sort numbered parts numerically
+        numbered_parts.sort(key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0)
+        
+        # Combine all
+        sorted_parts.extend(numbered_parts)
+        sorted_parts.extend(sorted(other_parts))
+        
+        # Display part-by-part breakdown
+        st.write("**Part-by-Part Field Breakdown:**")
+        
+        for part in sorted_parts:
+            part_fields = fields_by_part[part]
+            
+            # Count field types
+            type_counts = defaultdict(int)
+            for field in part_fields:
+                type_counts[field.field_type] += 1
+            
+            # Create summary string
+            type_summary = ", ".join([f"{count} {ftype}{'s' if count > 1 else ''}" 
+                                     for ftype, count in sorted(type_counts.items())])
+            
+            # Display with appropriate icon
+            if "Part 0" in part:
+                icon = "⚖️"
+            elif "Part" in part:
+                icon = "📑"
+            else:
+                icon = "📄"
+            
+            st.write(f"{icon} **{part}**: {len(part_fields)} fields ({type_summary})")
+            
+            # Show sample fields in expander
+            with st.expander(f"View fields in {part}"):
+                sample_fields = part_fields[:10]  # Show first 10 fields
+                for field in sample_fields:
+                    field_info = f"• {field.description}"
+                    if field.item:
+                        field_info += f" (Item {field.item})"
+                    field_info += f" - Type: {field.field_type}"
+                    st.write(field_info)
+                
+                if len(part_fields) > 10:
+                    st.write(f"... and {len(part_fields) - 10} more fields")
+        
+        # Show mapping statistics
+        st.write("**Mapping Statistics:**")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            mapped = sum(1 for f in fields if f.db_mapping)
+            st.metric("Auto-mapped", f"{mapped} ({mapped/len(fields)*100:.1f}%)")
+        
+        with col2:
+            high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
+            st.metric("High confidence", f"{high_conf} ({high_conf/len(fields)*100:.1f}%)")
+        
+        with col3:
+            questionnaire = sum(1 for f in fields if f.is_questionnaire)
+            st.metric("Questionnaire", f"{questionnaire} ({questionnaire/len(fields)*100:.1f}%)")
+        
+        with col4:
+            score = self.calculate_mapping_score(fields)
+            st.metric("Overall Score", f"{score}%")
     
     def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
@@ -504,20 +608,28 @@ class UniversalUSCISMapper:
     
     def _extract_item(self, field_name: str) -> str:
         """Extract item number from field name"""
+        # Clean the field name first
+        clean_name = re.sub(r'\[\d+\]', '', field_name)
+        
         patterns = [
-            r'Item\s*(\d+[a-zA-Z]?)',
-            r'Line\s*(\d+[a-zA-Z]?)',
-            r'Question\s*(\d+[a-zA-Z]?)',
-            r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',
+            r'Item\s*(\d+[a-zA-Z]?\.?)',
+            r'Line\s*(\d+[a-zA-Z]?\.?)',
+            r'Question\s*(\d+[a-zA-Z]?\.?)',
+            r'_(\d+[a-zA-Z]?)_',
+            r'_(\d+[a-zA-Z]?)$',
+            r'\.(\d+[a-zA-Z]?)\.',
+            r'\.(\d+[a-zA-Z]?)$',
             r'#(\d+[a-zA-Z]?)',
             r'No\.?\s*(\d+[a-zA-Z]?)',
             r'Number\s*(\d+[a-zA-Z]?)',
         ]
         
         for pattern in patterns:
-            match = re.search(pattern, field_name, re.IGNORECASE)
+            match = re.search(pattern, clean_name, re.IGNORECASE)
             if match:
-                return match.group(1)
+                item = match.group(1)
+                # Remove trailing period if present
+                return item.rstrip('.')
         
         return ""
     
@@ -662,27 +774,27 @@ class UniversalUSCISMapper:
         
         # Map pattern keys to database field names
         pattern_to_db_mapping = {
-            "lastName": ["lastName", "beneficiaryLastName", "signatory_last_name"],
-            "firstName": ["firstName", "beneficiaryFirstName", "signatory_first_name"],
-            "middleName": ["middleName", "beneficiaryMiddleName", "signatory_middle_name"],
-            "dateOfBirth": ["dateOfBirth", "beneficiaryDateOfBirth"],
-            "alienNumber": ["alienNumber", "gcAlienNumber"],
-            "ssn": ["ssn", "beneficiarySsn"],
-            "phone": ["phone", "workPhone", "mobilePhone", "beneficiaryCellNumber", "signatory_work_phone"],
+            "lastName": ["lastName", "beneficiaryLastName", "signatory_last_name", "dependentLastName"],
+            "firstName": ["firstName", "beneficiaryFirstName", "signatory_first_name", "dependentFirstName"],
+            "middleName": ["middleName", "beneficiaryMiddleName", "signatory_middle_name", "dependentMiddleName"],
+            "dateOfBirth": ["dateOfBirth", "beneficiaryDateOfBirth", "dependentDateOfBirth"],
+            "alienNumber": ["alienNumber", "gcAlienNumber", "dependentAlienNumber"],
+            "ssn": ["ssn", "beneficiarySsn", "dependentSocialSecurityNumber"],
+            "phone": ["phone", "workPhone", "mobilePhone", "beneficiaryCellNumber", "signatory_work_phone", "beneficiaryHomeNumber", "beneficiaryWorkNumber"],
             "email": ["email", "emailAddress", "beneficiaryPrimaryEmailAddress", "signatory_email_id"],
             "street": ["addressStreet", "address_street"],
             "city": ["addressCity", "address_city"],
             "state": ["addressState", "address_state"],
             "zip": ["addressZip", "address_zip"],
-            "country": ["addressCountry", "address_country", "beneficiaryCountryOfBirth"],
+            "country": ["addressCountry", "address_country", "beneficiaryCountryOfBirth", "dependentCountryOfBirth"],
             "companyName": ["customer_name", "lawFirmName", "employerName"],
             "jobTitle": ["jobTitle", "positionJobTitle", "signatory_job_title"],
             "barNumber": ["stateBarNumber"],
             "signature": ["signature", "signatory_digital_signature"],
-            "visaType": ["visaStatus", "caseType"],
+            "visaType": ["visaStatus", "caseType", "beneficiaryVisaType", "dependentCurrentVisaStatus"],
             "passportNumber": ["passportNumber"],
             "i94Number": ["i94Number"],
-            "receiptNumber": ["h1bReceiptNumber", "gcReceiptNumber"]
+            "receiptNumber": ["h1bReceiptNumber", "gcReceiptNumber", "uscisOnlineAccountNumber"]
         }
         
         target_fields = pattern_to_db_mapping.get(pattern_key, [pattern_key])
@@ -722,44 +834,46 @@ class UniversalUSCISMapper:
         # Enhanced context-based rules
         context_rules = {
             "Part 0 - Attorney/Representative": {
-                "patterns": ["attorney", "lawyer", "representative", "bar", "firm"],
-                "object": "attorney",
-                "boost": 0.9
-            },
-            "Part 1": {
-                "patterns": ["petitioner", "company", "organization", "employer"],
-                "object": "customer",
-                "boost": 0.8
-            },
-            "Petitioner Information": {
-                "patterns": ["petitioner", "company", "employer"],
-                "object": "customer",
-                "boost": 0.9
-            },
-            "Part 2": {
-                "patterns": ["beneficiary", "worker", "employee", "alien"],
-                "object": "beneficiary",
-                "boost": 0.8
-            },
-            "Beneficiary Information": {
-                "patterns": ["beneficiary", "worker"],
-                "object": "beneficiary",
-                "boost": 0.9
-            },
-            "Part 3": {
-                "patterns": ["beneficiary", "information about"],
-                "object": "beneficiary",
-                "boost": 0.7
-            },
-            "Attorney": {
-                "patterns": ["attorney", "lawyer", "representative"],
+                "patterns": ["attorney", "lawyer", "representative", "bar", "firm", "law", "eligibility", "appearance"],
                 "object": "attorney",
                 "boost": 0.95
             },
+            "Part 1": {
+                "patterns": ["petitioner", "company", "organization", "employer", "business"],
+                "object": "customer",
+                "boost": 0.85
+            },
+            "Part 2": {
+                "patterns": ["beneficiary", "worker", "employee", "alien", "applicant"],
+                "object": "beneficiary",
+                "boost": 0.85
+            },
+            "Part 3": {
+                "patterns": ["beneficiary", "information", "personal", "biographical"],
+                "object": "beneficiary",
+                "boost": 0.8
+            },
+            "Part 4": {
+                "patterns": ["dependent", "family", "spouse", "child"],
+                "object": "beneficiary",
+                "sub_object": "BdDetails",
+                "boost": 0.85
+            },
+            "Part 5": {
+                "patterns": ["employment", "job", "position", "lca"],
+                "object": "lca",
+                "boost": 0.8
+            },
+            "Part 6": {
+                "patterns": ["education", "degree", "university", "qualification"],
+                "object": "beneficiary",
+                "sub_object": "EducationDetails",
+                "boost": 0.85
+            },
             "Signature": {
-                "patterns": ["signature", "sign", "date"],
+                "patterns": ["signature", "sign", "date", "certify"],
                 "object": "signatory",
-                "boost": 0.7
+                "boost": 0.75
             }
         }
         
@@ -774,7 +888,15 @@ class UniversalUSCISMapper:
                     
                     if matches_pattern or rule['boost'] > 0.8:
                         # Add targeted suggestions
-                        paths = self._search_in_object(obj_name, self.db_objects[obj_name], [])
+                        if 'sub_object' in rule:
+                            # Look in specific sub-object
+                            if rule['sub_object'] in self.db_objects[obj_name]:
+                                paths = self._search_in_object(obj_name, {rule['sub_object']: self.db_objects[obj_name][rule['sub_object']]}, [])
+                            else:
+                                paths = self._search_in_object(obj_name, self.db_objects[obj_name], [])
+                        else:
+                            paths = self._search_in_object(obj_name, self.db_objects[obj_name], [])
+                        
                         for path in paths[:5]:  # Limit suggestions
                             # Match field name patterns
                             field_name = path.split('.')[-1]
@@ -804,10 +926,11 @@ class UniversalUSCISMapper:
             'middlename': ['middle', 'mi'],
             'dob': ['birth', 'dateofbirth'],
             'ssn': ['social', 'security'],
-            'phone': ['telephone', 'phone', 'contact'],
+            'phone': ['telephone', 'phone', 'contact', 'mobile', 'cell'],
             'email': ['email', 'mail'],
             'street': ['address', 'street'],
-            'zip': ['zip', 'postal']
+            'zip': ['zip', 'postal'],
+            'alien': ['alien', 'registration', 'uscis']
         }
         
         for key, values in variations.items():
@@ -933,7 +1056,8 @@ class UniversalUSCISMapper:
                     'type': field.field_type,
                     'description': field.description,
                     'part': field.part,
-                    'item': field.item
+                    'item': field.item,
+                    'page': field.page
                 }
         
         # Calculate accurate counts
@@ -1098,6 +1222,13 @@ def render_header():
         .confidence-high { color: #28a745; }
         .confidence-medium { color: #ffc107; }
         .confidence-low { color: #dc3545; }
+        .part-header {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -1164,7 +1295,7 @@ def render_upload_section(mapper: UniversalUSCISMapper):
     # Extract button
     if uploaded_file and form_type:
         if st.button("🔍 Extract & Analyze Fields", type="primary", use_container_width=True):
-            with st.spinner("Extracting PDF fields and analyzing patterns..."):
+            with st.spinner("Extracting PDF fields and analyzing form structure..."):
                 # Extract fields
                 fields = mapper.extract_pdf_fields(uploaded_file, form_type)
                 
@@ -1172,22 +1303,7 @@ def render_upload_section(mapper: UniversalUSCISMapper):
                     st.session_state.pdf_fields = fields
                     st.session_state.field_mappings = {f.raw_name: f for f in fields}
                     
-                    # Show extraction summary
-                    st.success(f"✅ Successfully extracted {len(fields)} fields")
-                    
-                    # Display metrics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Fields", len(fields))
-                    with col2:
-                        mapped = sum(1 for f in fields if f.db_mapping)
-                        st.metric("Auto-Mapped", mapped)
-                    with col3:
-                        high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
-                        st.metric("High Confidence", high_conf)
-                    with col4:
-                        score = mapper.calculate_mapping_score(fields)
-                        st.metric("Mapping Score", f"{score}%")
+                    # Success message is now part of the extraction summary
                 else:
                     st.error("No fields found in the PDF. Please ensure it's a fillable PDF form.")
 
@@ -1207,11 +1323,25 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     with col1:
         parts = list(set(f.part for f in st.session_state.pdf_fields))
-        # Sort parts with Part 0 first
+        # Sort parts properly
         sorted_parts = []
-        if "Part 0 - Attorney/Representative" in parts:
-            sorted_parts.append("Part 0 - Attorney/Representative")
-        sorted_parts.extend([p for p in sorted(parts) if p != "Part 0 - Attorney/Representative"])
+        # Part 0 first if exists
+        for part in parts:
+            if "Part 0" in part:
+                sorted_parts.append(part)
+                break
+        # Then numbered parts
+        numbered_parts = []
+        other_parts = []
+        for part in parts:
+            if part not in sorted_parts:
+                if re.match(r'^Part \d+$', part):
+                    numbered_parts.append(part)
+                else:
+                    other_parts.append(part)
+        numbered_parts.sort(key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0)
+        sorted_parts.extend(numbered_parts)
+        sorted_parts.extend(sorted(other_parts))
         
         selected_part = st.selectbox("Filter by Part", ["All"] + sorted_parts)
     
@@ -1298,24 +1428,45 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     for field in filtered_fields:
         fields_by_part[field.part].append(field)
     
-    # Sort parts with Part 0 first
+    # Sort parts properly
     sorted_parts_display = []
-    if "Part 0 - Attorney/Representative" in fields_by_part:
-        sorted_parts_display.append(("Part 0 - Attorney/Representative", fields_by_part["Part 0 - Attorney/Representative"]))
-    
-    for part in sorted(fields_by_part.keys()):
-        if part != "Part 0 - Attorney/Representative":
+    # Part 0 first if exists
+    for part in fields_by_part.keys():
+        if "Part 0" in part:
             sorted_parts_display.append((part, fields_by_part[part]))
+            break
+    
+    # Then numbered parts
+    numbered_parts = []
+    other_parts = []
+    for part in fields_by_part.keys():
+        if not any("Part 0" in p[0] for p in sorted_parts_display if p[0] == part):
+            if re.match(r'^Part \d+$', part):
+                numbered_parts.append((part, fields_by_part[part]))
+            else:
+                other_parts.append((part, fields_by_part[part]))
+    
+    numbered_parts.sort(key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 0)
+    sorted_parts_display.extend(numbered_parts)
+    sorted_parts_display.extend(sorted(other_parts))
     
     for part, fields in sorted_parts_display:
+        # Count field types in this part
+        type_counts = defaultdict(int)
+        for field in fields:
+            type_counts[field.field_type] += 1
+        
+        type_summary = ", ".join([f"{count} {ftype}{'s' if count > 1 else ''}" 
+                                 for ftype, count in sorted(type_counts.items())])
+        
         # Special styling for Part 0
         if "Part 0" in part:
-            with st.expander(f"⚖️ {part} ({len(fields)} fields)", expanded=True):
+            with st.expander(f"⚖️ {part} ({len(fields)} fields: {type_summary})", expanded=True):
                 st.info("This section contains attorney/representative information fields")
                 for field in fields:
                     render_field_mapping_card(field, mapper)
         else:
-            with st.expander(f"📑 {part} ({len(fields)} fields)", expanded=True):
+            with st.expander(f"📑 {part} ({len(fields)} fields: {type_summary})", expanded=False):
                 for field in fields:
                     render_field_mapping_card(field, mapper)
 
@@ -1328,7 +1479,10 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
         
         with col1:
             # Field info
-            st.markdown(f"**{field.item}** {field.description}")
+            field_label = f"**{field.description}**"
+            if field.item:
+                field_label += f" (Item {field.item})"
+            st.markdown(field_label)
             st.caption(f"Field: `{field.raw_name}` | Type: {field.field_type} | Page: {field.page}")
             
             # Current mapping status
@@ -1360,7 +1514,8 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 "Mapping Type",
                 mapping_options,
                 index=mapping_options.index(default_option),
-                key=f"type_{field.index}"
+                key=f"type_{field.index}",
+                label_visibility="collapsed"
             )
             
             if mapping_type == "Direct":
@@ -1529,6 +1684,7 @@ def render_export_section(mapper: UniversalUSCISMapper):
                     'Type': field.field_type,
                     'Part': field.part,
                     'Item': field.item,
+                    'Page': field.page,
                     'Mapping': field.db_mapping or 'Unmapped',
                     'Status': 'Mapped' if field.is_mapped else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
                     'Confidence': f"{field.confidence_score:.0%}" if field.confidence_score > 0 else ''
@@ -1615,12 +1771,23 @@ def main():
             
             # Sort with Part 0 first
             sorted_parts = []
-            if "Part 0 - Attorney/Representative" in parts_count:
-                sorted_parts.append(("Part 0 - Attorney/Representative", parts_count["Part 0 - Attorney/Representative"]))
+            for part in parts_count.keys():
+                if "Part 0" in part:
+                    sorted_parts.append((part, parts_count[part]))
+                    break
             
-            for part, count in sorted(parts_count.items()):
-                if part != "Part 0 - Attorney/Representative":
-                    sorted_parts.append((part, count))
+            numbered_parts = []
+            other_parts = []
+            for part, count in parts_count.items():
+                if not any("Part 0" in p[0] for p in sorted_parts if p[0] == part):
+                    if re.match(r'^Part \d+$', part):
+                        numbered_parts.append((part, count))
+                    else:
+                        other_parts.append((part, count))
+            
+            numbered_parts.sort(key=lambda x: int(re.search(r'\d+', x[0]).group()) if re.search(r'\d+', x[0]) else 0)
+            sorted_parts.extend(numbered_parts)
+            sorted_parts.extend(sorted(other_parts))
             
             for part, count in sorted_parts:
                 if "Part 0" in part:
