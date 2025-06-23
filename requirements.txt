@@ -10,3 +10,4 @@ fillpdf
 pdfrw
 PyMuPDF
 pyyaml
+mammoth
