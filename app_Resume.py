@@ -158,6 +158,14 @@ class ResumeParser:
             text = ""
             for paragraph in doc.paragraphs:
                 text += paragraph.text + "\n"
+            
+            # Extract text from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        text += cell.text + " "
+                    text += "\n"
+            
             return text
         except Exception as e:
             st.error(f"Error reading DOCX: {str(e)}")
@@ -182,11 +190,12 @@ class ResumeParser:
         if emails:
             self.parsed_data["ResumeParserData"]["Email"] = emails[0]
 
-        # Phone extraction
+        # Phone extraction with enhanced patterns
         phone_patterns = [
             r'\+?1?[-.\s]?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})',
             r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',
-            r'\(\d{3}\)\s?\d{3}[-.]?\d{4}'
+            r'\(\d{3}\)\s?\d{3}[-.]?\d{4}',
+            r'\+\d{1,3}[-.\s]?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}'
         ]
         
         for pattern in phone_patterns:
@@ -196,7 +205,7 @@ class ResumeParser:
                     phone = ''.join(phones[0])
                 else:
                     phone = phones[0]
-                self.parsed_data["ResumeParserData"]["Phone"] = phone
+                self.parsed_data["ResumeParserData"]["Phone"] = phone.strip()
                 break
 
         # LinkedIn URL extraction
@@ -205,56 +214,146 @@ class ResumeParser:
         if linkedin_urls:
             self.parsed_data["ResumeParserData"]["LinkedInProfileUrl"] = linkedin_urls[0]
 
-        # Name extraction (basic - first occurrence of capitalized words)
+        # Enhanced name extraction
+        self._extract_name(text)
+        
+        # Address extraction
+        self._extract_address(text)
+
+    def _extract_name(self, text):
+        """Extract name from resume text"""
         lines = text.split('\n')
-        for line in lines[:5]:  # Check first 5 lines
+        
+        # Look for name in first few lines
+        for line in lines[:10]:
             line = line.strip()
-            if line and not any(char.isdigit() for char in line):
-                words = line.split()
-                if len(words) >= 2 and all(word.istitle() for word in words[:3]):
-                    names = words[:3]
-                    self.parsed_data["ResumeParserData"]["FirstName"] = names[0]
-                    if len(names) > 2:
-                        self.parsed_data["ResumeParserData"]["Middlename"] = names[1]
-                        self.parsed_data["ResumeParserData"]["LastName"] = names[2]
-                    else:
-                        self.parsed_data["ResumeParserData"]["LastName"] = names[1]
-                    break
+            if not line or len(line) < 3:
+                continue
+                
+            # Skip lines with numbers, emails, or common resume words
+            skip_words = ['resume', 'cv', 'curriculum', 'vitae', 'phone', 'email', 'address', 'contact', 'summary', 'objective']
+            if (any(char.isdigit() for char in line) or 
+                '@' in line or 
+                any(word.lower() in line.lower() for word in skip_words)):
+                continue
+            
+            # Look for capitalized words that could be names
+            words = re.findall(r'\b[A-Z][a-z]+\b', line)
+            if len(words) >= 2 and len(words) <= 4 and len(' '.join(words)) < 50:
+                if len(words) == 2:
+                    self.parsed_data["ResumeParserData"]["FirstName"] = words[0]
+                    self.parsed_data["ResumeParserData"]["LastName"] = words[1]
+                elif len(words) == 3:
+                    self.parsed_data["ResumeParserData"]["FirstName"] = words[0]
+                    self.parsed_data["ResumeParserData"]["Middlename"] = words[1]
+                    self.parsed_data["ResumeParserData"]["LastName"] = words[2]
+                elif len(words) == 4:
+                    self.parsed_data["ResumeParserData"]["FirstName"] = words[0]
+                    self.parsed_data["ResumeParserData"]["Middlename"] = ' '.join(words[1:3])
+                    self.parsed_data["ResumeParserData"]["LastName"] = words[3]
+                break
+
+    def _extract_address(self, text):
+        """Extract address information"""
+        # US states
+        us_states = [
+            'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS',
+            'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
+            'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'
+        ]
+        
+        # Zip code pattern
+        zip_pattern = r'\b\d{5}(?:-\d{4})?\b'
+        zip_codes = re.findall(zip_pattern, text)
+        if zip_codes:
+            self.parsed_data["ResumeParserData"]["ZipCode"] = zip_codes[0]
+        
+        # State extraction
+        for state in us_states:
+            if f' {state} ' in text or f' {state},' in text or f'{state} ' in text:
+                self.parsed_data["ResumeParserData"]["State"] = state
+                break
+
+        # City extraction (basic)
+        city_pattern = r'([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*[A-Z]{2}'
+        cities = re.findall(city_pattern, text)
+        if cities:
+            self.parsed_data["ResumeParserData"]["City"] = cities[0]
 
     def extract_skills(self, text):
-        """Extract skills from text"""
-        # Enhanced skill keywords
+        """Extract skills from text with comprehensive database"""
+        # Enhanced skill keywords matching original examples
         skill_keywords = [
-            'Python', 'Java', 'JavaScript', 'C++', 'C#', 'SQL', 'HTML', 'CSS', 'React', 'Angular',
-            'Node.js', 'AWS', 'Azure', 'Docker', 'Kubernetes', 'Git', 'Machine Learning', 'AI',
-            'Data Science', 'Tableau', 'Power BI', 'Excel', 'SSIS', 'SSRS', 'ETL', 'Snowflake',
-            'Informatica', 'Teradata', 'Oracle', 'MongoDB', 'PostgreSQL', 'MySQL', 'Agile', 'Scrum',
-            'Django', 'Flask', 'Spring Boot', 'Laravel', 'Vue.js', 'TypeScript', 'PHP', 'Ruby',
-            'Go', 'Rust', 'Swift', 'Kotlin', 'TensorFlow', 'PyTorch', 'Pandas', 'NumPy',
-            'Jenkins', 'GitLab', 'Jira', 'Confluence', 'Slack', 'Teams', 'SharePoint'
+            # Programming Languages
+            'Python', 'Java', 'JavaScript', 'TypeScript', 'C++', 'C#', 'C', 'Go', 'Rust', 'Kotlin',
+            'Swift', 'PHP', 'Ruby', 'Scala', 'R', 'MATLAB', 'Perl', 'VB.Net', 'ASP.Net', 'T-SQL', 'PL/SQL',
+            
+            # Databases
+            'SQL', 'MySQL', 'PostgreSQL', 'Oracle', 'SQL Server', 'MongoDB', 'SQLite', 'Redis', 'Cassandra',
+            'DynamoDB', 'Neo4j', 'Teradata', 'Snowflake', 'BigQuery', 'MS Access', 'DB2', 'Oracle11g', 'Oracle 10g',
+            
+            # Cloud & DevOps
+            'AWS', 'Azure', 'GCP', 'Google Cloud', 'Docker', 'Kubernetes', 'Jenkins', 'Git', 'GitLab', 'GitHub',
+            'CI/CD', 'DevOps', 'Terraform', 'Ansible', 'Chef', 'Puppet', 'Vagrant',
+            
+            # Data & Analytics
+            'ETL', 'SSIS', 'SSRS', 'SSAS', 'Data Science', 'Machine Learning', 'AI', 'Tableau', 'Power BI',
+            'Excel', 'Informatica', 'Databricks', 'Apache Spark', 'Hadoop', 'Kafka', 'Airflow',
+            'Pandas', 'NumPy', 'Matplotlib', 'Seaborn', 'TensorFlow', 'PyTorch', 'Scikit-learn',
+            
+            # Web Technologies
+            'HTML', 'CSS', 'React', 'Angular', 'Vue.js', 'Node.js', 'Express', 'Django', 'Flask',
+            'Spring', 'Spring Boot', 'Laravel', 'Bootstrap', 'jQuery', 'REST API', 'GraphQL', 'SOAP',
+            
+            # Tools & Utilities
+            'Visual Studio', 'VS Code', 'Eclipse', 'IntelliJ', 'Postman', 'Jira', 'Confluence', 'Slack',
+            'Teams', 'SharePoint', 'Agile', 'Scrum', 'Kanban', 'Waterfall',
+            
+            # Microsoft Technologies
+            'SSMS', 'Analysis Manager', 'Query Analyzer', 'Business Intelligence Development studio',
+            'DTS', 'SQL Profiler', 'Visual Studio 2019', 'Visual Studio 2015', 'Visual Studio 2012',
+            'Visual Studio 2008', 'Visual Studio 2010', 'Windows Server', 'IIS',
+            
+            # Reporting & BI
+            'Crystal Reports', 'Business Objects', 'OBIEE', 'QlikView', 'Looker', 'Spotfire',
+            
+            # Project Management
+            'Microsoft Project', 'Asana', 'Trello', 'Monday.com', 'Basecamp'
         ]
         
         found_skills = []
         text_upper = text.upper()
         
+        # Check for skills with word boundaries to avoid partial matches
         for skill in skill_keywords:
-            if skill.upper() in text_upper:
-                # Simple experience estimation based on text context
+            # Use word boundaries and case insensitive matching
+            pattern = r'\b' + re.escape(skill.upper()) + r'\b'
+            if re.search(pattern, text_upper):
+                # Estimate experience based on context
                 experience_months = self._estimate_experience(skill, text)
                 found_skills.append({
                     "Skill": skill,
                     "ExperienceInMonths": str(experience_months)
                 })
         
-        self.parsed_data["ResumeParserData"]["SkillsKeywords"]["OperationalSkills"]["SkillSet"] = found_skills
-        self.parsed_data["ResumeParserData"]["Skills"] = ", ".join([skill["Skill"] for skill in found_skills])
+        # Remove duplicates while preserving order
+        unique_skills = []
+        seen_skills = set()
+        for skill in found_skills:
+            if skill["Skill"] not in seen_skills:
+                seen_skills.add(skill["Skill"])
+                unique_skills.append(skill)
+        
+        self.parsed_data["ResumeParserData"]["SkillsKeywords"]["OperationalSkills"]["SkillSet"] = unique_skills
+        self.parsed_data["ResumeParserData"]["Skills"] = ", ".join([skill["Skill"] for skill in unique_skills])
 
     def _estimate_experience(self, skill, text):
         """Estimate experience for a skill based on context"""
         # Look for years of experience in the text
         exp_patterns = [
             r'(\d+)\+?\s*years?\s*of\s*experience',
-            r'(\d+)\+?\s*years?\s*experience'
+            r'(\d+)\+?\s*years?\s*experience',
+            r'experience\s*:?\s*(\d+)\+?\s*years?'
         ]
         
         total_years = 0
@@ -268,7 +367,7 @@ class ResumeParser:
         if total_years > 0:
             return int(total_years * 12 * 0.7)
         else:
-            return 18  # Default 18 months
+            return 24  # Default 2 years
 
     def extract_experience(self, text):
         """Extract work experience from text"""
@@ -276,7 +375,8 @@ class ResumeParser:
         exp_patterns = [
             r'(\d+)\+?\s*years?\s*of\s*experience',
             r'(\d+)\+?\s*years?\s*experience',
-            r'experience\s*:?\s*(\d+)\+?\s*years?'
+            r'experience\s*:?\s*(\d+)\+?\s*years?',
+            r'(\d+)\+?\s*years?\s*in'
         ]
         
         years_exp = 0
@@ -287,86 +387,175 @@ class ResumeParser:
                 break
         
         if years_exp > 0:
-            self.parsed_data["ResumeParserData"]["WorkedPeriod"] = f"{years_exp} Years"
+            months = years_exp * 12
+            if years_exp > 1:
+                self.parsed_data["ResumeParserData"]["WorkedPeriod"] = f"{years_exp} Years and {months % 12} Months" if months % 12 > 0 else f"{years_exp} Years"
+            else:
+                self.parsed_data["ResumeParserData"]["WorkedPeriod"] = f"{years_exp} Year"
+            
+            # Set experience description
             if years_exp >= 10:
-                self.parsed_data["ResumeParserData"]["Experience"] = f"Senior professional with {years_exp}+ years of extensive experience in the industry"
+                self.parsed_data["ResumeParserData"]["Experience"] = f"Results-driven professional with {years_exp}+ years of extensive experience"
             elif years_exp >= 5:
-                self.parsed_data["ResumeParserData"]["Experience"] = f"Mid-level professional with {years_exp} years of solid experience"
+                self.parsed_data["ResumeParserData"]["Experience"] = f"Experienced professional with {years_exp} years of solid experience"
             else:
                 self.parsed_data["ResumeParserData"]["Experience"] = f"Professional with {years_exp} years of experience"
 
-        # Extract company names and roles (enhanced pattern matching)
-        companies = []
+        # Extract work history
+        work_history = self._extract_work_history(text)
+        self.parsed_data["ResumeParserData"]["SegrigatedExperience"]["WorkHistory"] = work_history
+        
+        # Set current employer
+        if work_history:
+            self.parsed_data["ResumeParserData"]["CurrentEmployer"] = work_history[0].get("Employer", "")
+            self.parsed_data["ResumeParserData"]["JobProfile"] = work_history[0].get("JobProfile", "")
+
+    def _extract_work_history(self, text):
+        """Extract detailed work history"""
+        work_history = []
+        
+        # Company patterns
         company_patterns = [
             r'(?:Client|Company|Employer):\s*([A-Z][A-Za-z\s&.,-]+)',
-            r'(?:at|@)\s+([A-Z][A-Za-z\s&.,-]+(?:Inc|LLC|Corp|Company|Ltd|Limited|Group|Technologies|Systems|Solutions))',
-            r'([A-Z][A-Za-z\s&.,-]+(?:Inc|LLC|Corp|Company|Ltd|Limited|Group|Technologies|Systems|Solutions))'
+            r'([A-Z][A-Za-z\s&.,-]+(?:Inc|LLC|Corp|Company|Ltd|Limited|Group|Technologies|Systems|Solutions|Consulting|Services))',
+            r'at\s+([A-Z][A-Za-z\s&.,-]+)',
+            r'([A-Z][A-Za-z\s&.,-]+)\s*[-,]\s*([A-Z][a-z]+,?\s*[A-Z]{2})'  # Company - Location pattern
         ]
         
+        companies = []
         for pattern in company_patterns:
             matches = re.findall(pattern, text)
-            companies.extend([match.strip() for match in matches if len(match.strip()) > 2])
+            if isinstance(matches[0], tuple) if matches else False:
+                companies.extend([match[0].strip() for match in matches if len(match[0].strip()) > 2])
+            else:
+                companies.extend([match.strip() for match in matches if len(match.strip()) > 2])
         
-        if companies:
-            # Remove duplicates while preserving order
-            unique_companies = []
-            seen = set()
-            for company in companies:
-                if company not in seen:
-                    seen.add(company)
-                    unique_companies.append(company)
-            
-            self.parsed_data["ResumeParserData"]["CurrentEmployer"] = unique_companies[0]
-            
-            # Extract job titles
-            job_patterns = [
-                r'(?:Position|Role|Title):\s*([A-Z][A-Za-z\s]+)',
-                r'([A-Z][A-Za-z\s]+(?:Engineer|Developer|Analyst|Manager|Consultant|Architect|Lead|Director|Specialist))'
-            ]
-            
-            job_titles = []
-            for pattern in job_patterns:
-                matches = re.findall(pattern, text)
-                job_titles.extend([match.strip() for match in matches])
-            
-            if job_titles:
-                self.parsed_data["ResumeParserData"]["JobProfile"] = job_titles[0]
+        # Job title patterns
+        job_patterns = [
+            r'(?:Position|Role|Title|Job Profile):\s*([A-Z][A-Za-z\s]+)',
+            r'^([A-Z][A-Za-z\s]+(?:Engineer|Developer|Analyst|Manager|Consultant|Architect|Lead|Director|Specialist))$',
+            r'([A-Z][A-Za-z\s]+(?:Engineer|Developer|Analyst|Manager|Consultant|Architect|Lead|Director|Specialist))\s*[-,]'
+        ]
+        
+        job_titles = []
+        for pattern in job_patterns:
+            matches = re.findall(pattern, text, re.MULTILINE)
+            job_titles.extend([match.strip() for match in matches])
+        
+        # Date patterns for job periods
+        date_patterns = [
+            r'(\w+\s*\d{2,4})\s*(?:to|[-–])\s*(\w+\s*\d{2,4}|Present|Current)',
+            r'(\d{1,2}/\d{2,4})\s*(?:to|[-–])\s*(\d{1,2}/\d{2,4}|Present|Current)',
+            r'(\w{3}\d{2})\s*(?:to|[-–])\s*(\w{3}\d{2}|Present|Current)'
+        ]
+        
+        dates = []
+        for pattern in date_patterns:
+            matches = re.findall(pattern, text)
+            dates.extend(matches)
+        
+        # Remove duplicates while preserving order
+        unique_companies = []
+        seen = set()
+        for company in companies:
+            if company not in seen and len(company) > 3:
+                seen.add(company)
+                unique_companies.append(company)
+        
+        # Create work history entries matching the original format
+        for i, company in enumerate(unique_companies[:5]):
+            work_entry = {
+                "Employer": company,
+                "JobProfile": job_titles[i] if i < len(job_titles) else "Not specified",
+                "JobLocation": "Not specified",
+                "JobPeriod": f"{dates[i][0]} to {dates[i][1]}" if i < len(dates) else "Not specified",
+                "StartDate": self._convert_date_format(dates[i][0]) if i < len(dates) else "Not specified",
+                "EndDate": self._convert_date_format(dates[i][1]) if i < len(dates) else "Not specified",
+                "JobDescription": "Not specified"
+            }
+            work_history.append(work_entry)
+        
+        return work_history
+
+    def _convert_date_format(self, date_str):
+        """Convert date string to standard format"""
+        if not date_str or date_str.lower() in ['present', 'current']:
+            return datetime.now().strftime("%d/%m/%Y")
+        
+        # Try to parse common date formats and convert to dd/mm/yyyy
+        try:
+            # Handle various date formats
+            if '/' in date_str:
+                parts = date_str.split('/')
+                if len(parts) == 2:
+                    month, year = parts
+                    return f"1/{month}/{year}"
+            elif len(date_str) == 5 and date_str[3:].isdigit():  # Like "Jan24"
+                month_map = {
+                    'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+                    'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+                    'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12'
+                }
+                month_str = date_str[:3]
+                year_str = "20" + date_str[3:]
+                if month_str in month_map:
+                    return f"1/{month_map[month_str]}/{year_str}"
+        except:
+            pass
+        
+        return date_str
 
     def extract_education(self, text):
         """Extract education information"""
-        education_keywords = [
-            'Bachelor', 'Master', 'PhD', 'MBA', 'B.Tech', 'M.Tech', 'B.S.', 'M.S.',
-            'University', 'College', 'Institute', 'Degree', 'Diploma'
+        education_patterns = [
+            r'(?i)(?:bachelor|b\.?s\.?|b\.?a\.?|b\.?tech|b\.?e\.?)\s*(?:of|in)?\s*([a-zA-Z\s]+)',
+            r'(?i)(?:master|m\.?s\.?|m\.?a\.?|m\.?tech|m\.?e\.?|mba)\s*(?:of|in)?\s*([a-zA-Z\s]+)',
+            r'(?i)(?:phd|ph\.?d\.?|doctorate)\s*(?:of|in)?\s*([a-zA-Z\s]+)',
+            r'(?i)(?:diploma|certificate)\s*(?:of|in)?\s*([a-zA-Z\s]+)'
         ]
         
-        education_text = ""
-        lines = text.split('\n')
+        education_info = []
+        for pattern in education_patterns:
+            matches = re.findall(pattern, text)
+            education_info.extend([match.strip() for match in matches if len(match.strip()) > 2])
         
-        for i, line in enumerate(lines):
-            if any(keyword.lower() in line.lower() for keyword in education_keywords):
-                # Include this line and potentially next few lines
-                education_text += line + " "
-                for j in range(i+1, min(i+3, len(lines))):
-                    if lines[j].strip() and not any(skip_word in lines[j].lower() for skip_word in ['experience', 'skills', 'work']):
-                        education_text += lines[j] + " "
-                    else:
-                        break
-                break
+        # University patterns
+        university_patterns = [
+            r'([A-Z][A-Za-z\s]+(?:University|College|Institute|School))',
+            r'(?:University|College|Institute|School)\s+of\s+([A-Za-z\s]+)',
+            r'([A-Z]{2,4}),\s*([A-Z]{2}),\s*(USA|India|UK|Canada)'  # Location pattern
+        ]
+        
+        universities = []
+        for pattern in university_patterns:
+            matches = re.findall(pattern, text)
+            if matches:
+                if isinstance(matches[0], tuple):
+                    universities.extend([match[0].strip() for match in matches if len(match[0].strip()) > 3])
+                else:
+                    universities.extend([match.strip() for match in matches if len(match.strip()) > 3])
+        
+        # Combine education info
+        education_text = ""
+        if education_info:
+            education_text += ", ".join(education_info[:3])
+        if universities:
+            if education_text:
+                education_text += " from "
+            education_text += ", ".join(universities[:2])
         
         self.parsed_data["ResumeParserData"]["Qualification"] = education_text.strip()
 
     def categorize_resume(self, text):
-        """Categorize the resume based on content"""
+        """Categorize resume based on content"""
         text_lower = text.lower()
         
-        # Enhanced categorization
         categories = {
-            "Software/IT": ["software", "developer", "engineer", "programming", "coding", "java", "python", "javascript"],
-            "Data/Analytics": ["data", "analyst", "analytics", "science", "machine learning", "sql", "tableau", "power bi"],
-            "DevOps/Cloud": ["devops", "cloud", "aws", "azure", "docker", "kubernetes", "jenkins"],
+            "Software/IT": ["software", "developer", "engineer", "programming", "coding", "java", "python", "javascript", "technical"],
+            "Data/Analytics": ["data", "analyst", "analytics", "science", "machine learning", "sql", "tableau", "power bi", "etl"],
             "Management": ["manager", "director", "lead", "supervisor", "management", "leadership"],
-            "Business": ["business", "marketing", "sales", "consultant", "strategy"],
-            "Design": ["design", "ui", "ux", "creative", "graphic"]
+            "Consulting": ["consultant", "consulting", "advisory", "strategy"],
+            "Finance": ["finance", "accounting", "financial", "banking", "investment"]
         }
         
         # Score each category
@@ -375,13 +564,13 @@ class ResumeParser:
             score = sum(text_lower.count(keyword) for keyword in keywords)
             category_scores[category] = score
         
-        # Get the category with highest score
+        # Get best category
         if category_scores:
             best_category = max(category_scores, key=category_scores.get)
             if category_scores[best_category] > 0:
                 self.parsed_data["ResumeParserData"]["Category"] = best_category
                 
-                # Set subcategory based on specific roles found
+                # Set subcategory
                 if best_category == "Software/IT":
                     if "senior" in text_lower or "lead" in text_lower:
                         self.parsed_data["ResumeParserData"]["SubCategory"] = "Senior Software Engineer"
@@ -390,7 +579,7 @@ class ResumeParser:
                     else:
                         self.parsed_data["ResumeParserData"]["SubCategory"] = "Software Engineer"
                 else:
-                    self.parsed_data["ResumeParserData"]["SubCategory"] = best_category.replace("/", " ") + " Professional"
+                    self.parsed_data["ResumeParserData"]["SubCategory"] = best_category + " Professional"
 
     def parse_resume(self, file_content, filename):
         """Main parsing function"""
@@ -402,7 +591,7 @@ class ResumeParser:
         self.parsed_data["ResumeParserData"]["ParsingDate"] = datetime.now().strftime("%m/%d/%Y %I:%M:%S %p")
         self.parsed_data["ResumeParserData"]["DetailResume"] = file_content
         
-        # Extract information
+        # Extract all information
         self.extract_personal_info(file_content)
         self.extract_skills(file_content)
         self.extract_experience(file_content)
@@ -431,24 +620,6 @@ def apply_custom_css():
         text-align: center;
         margin-bottom: 2rem;
         box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .track-talents-header::before {
-        content: '';
-        position: absolute;
-        top: -50%;
-        left: -50%;
-        width: 200%;
-        height: 200%;
-        background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-        animation: pulse 4s ease-in-out infinite;
-    }
-    
-    @keyframes pulse {
-        0%, 100% { transform: scale(1); opacity: 0.5; }
-        50% { transform: scale(1.1); opacity: 0.8; }
     }
     
     .track-talents-logo {
@@ -457,24 +628,12 @@ def apply_custom_css():
         color: white;
         margin-bottom: 0.5rem;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-        position: relative;
-        z-index: 1;
     }
     
     .track-talents-tagline {
         font-size: 1.3rem;
         color: rgba(255,255,255,0.95);
         font-weight: 300;
-        position: relative;
-        z-index: 1;
-    }
-    
-    .track-talents-subtitle {
-        font-size: 1rem;
-        color: rgba(255,255,255,0.8);
-        margin-top: 0.5rem;
-        position: relative;
-        z-index: 1;
     }
     
     /* Upload Section */
@@ -486,26 +645,12 @@ def apply_custom_css():
         text-align: center;
         margin: 2rem 0;
         transition: all 0.3s ease;
-        position: relative;
     }
     
     .upload-section:hover {
         border-color: #764ba2;
         transform: translateY(-5px);
         box-shadow: 0 15px 35px rgba(102, 126, 234, 0.2);
-    }
-    
-    .upload-icon {
-        font-size: 4rem;
-        color: #667eea;
-        margin-bottom: 1rem;
-        animation: bounce 2s infinite;
-    }
-    
-    @keyframes bounce {
-        0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
-        40% { transform: translateY(-10px); }
-        60% { transform: translateY(-5px); }
     }
     
     /* Metrics Cards */
@@ -522,29 +667,6 @@ def apply_custom_css():
     .metric-card:hover {
         transform: translateY(-3px);
         box-shadow: 0 12px 35px rgba(0,0,0,0.15);
-    }
-    
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 600;
-        color: #667eea;
-        margin-bottom: 0.5rem;
-    }
-    
-    .metric-label {
-        font-size: 0.9rem;
-        color: #666;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    
-    /* Progress Bar */
-    .progress-container {
-        background: white;
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-        margin: 2rem 0;
     }
     
     /* Success Message */
@@ -566,33 +688,6 @@ def apply_custom_css():
         border-radius: 20px;
         margin: 2rem 0;
         border: 2px solid rgba(102, 126, 234, 0.2);
-    }
-    
-    /* Tabs Styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        background-color: rgba(102, 126, 234, 0.1);
-        border-radius: 10px;
-        color: #667eea;
-        font-weight: 500;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #667eea;
-        color: white;
-    }
-    
-    /* Sidebar Styling */
-    .css-1d391kg {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
-    }
-    
-    .sidebar .sidebar-content {
-        color: white;
     }
     
     /* Button Styling */
@@ -622,83 +717,7 @@ def apply_custom_css():
         margin-top: 3rem;
         color: #666;
     }
-    
-    /* Animated Background Elements */
-    .bg-animation {
-        position: fixed;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        z-index: -1;
-        opacity: 0.05;
-    }
-    
-    .floating-circle {
-        position: absolute;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        animation: float 6s ease-in-out infinite;
-    }
-    
-    @keyframes float {
-        0%, 100% { transform: translateY(0px) rotate(0deg); }
-        50% { transform: translateY(-20px) rotate(180deg); }
-    }
-    
-    /* Data Table Styling */
-    .dataframe {
-        border-radius: 10px;
-        overflow: hidden;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
-    
-    /* JSON Viewer Styling */
-    .stJson {
-        background: #f8f9fa;
-        border-radius: 15px;
-        padding: 1rem;
-        border: 2px solid rgba(102, 126, 234, 0.1);
-    }
-    
-    /* File Uploader */
-    .uploadedFile {
-        background: white;
-        border-radius: 15px;
-        padding: 1rem;
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-    }
-    
-    /* Custom Scrollbar */
-    ::-webkit-scrollbar {
-        width: 8px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: #f1f1f1;
-        border-radius: 10px;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 10px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
-    }
     </style>
-    """, unsafe_allow_html=True)
-
-def create_animated_background():
-    """Create animated background elements"""
-    st.markdown("""
-    <div class="bg-animation">
-        <div class="floating-circle" style="width: 100px; height: 100px; top: 10%; left: 10%; animation-delay: 0s;"></div>
-        <div class="floating-circle" style="width: 150px; height: 150px; top: 70%; left: 80%; animation-delay: 2s;"></div>
-        <div class="floating-circle" style="width: 80px; height: 80px; top: 30%; left: 70%; animation-delay: 4s;"></div>
-        <div class="floating-circle" style="width: 120px; height: 120px; top: 80%; left: 20%; animation-delay: 1s;"></div>
-    </div>
     """, unsafe_allow_html=True)
 
 def create_track_talents_header():
@@ -707,155 +726,54 @@ def create_track_talents_header():
     <div class="track-talents-header">
         <div class="track-talents-logo">🎯 TrackTalents</div>
         <div class="track-talents-tagline">AI-Powered Resume Parser & Talent Analytics</div>
-        <div class="track-talents-subtitle">Transform Resumes into Actionable Insights • Built for HR Excellence</div>
     </div>
     """, unsafe_allow_html=True)
-
-def create_feature_showcase():
-    """Create feature showcase section"""
-    st.markdown("### 🚀 **Why Choose TrackTalents?**")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">⚡</div>
-            <div class="metric-label">Lightning Fast</div>
-            <p style="margin-top: 0.5rem; color: #666; font-size: 0.85rem;">Process resumes in seconds with our advanced AI algorithms</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">🎯</div>
-            <div class="metric-label">99% Accuracy</div>
-            <p style="margin-top: 0.5rem; color: #666; font-size: 0.85rem;">Industry-leading accuracy in data extraction and parsing</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">📊</div>
-            <div class="metric-label">Smart Analytics</div>
-            <p style="margin-top: 0.5rem; color: #666; font-size: 0.85rem;">Advanced insights and talent analytics at your fingertips</p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-value">🔒</div>
-            <div class="metric-label">Secure & Private</div>
-            <p style="margin-top: 0.5rem; color: #666; font-size: 0.85rem;">Enterprise-grade security with zero data retention</p>
-        </div>
-        """, unsafe_allow_html=True)
 
 def main():
     # Page configuration
     st.set_page_config(
         page_title="TrackTalents Resume Parser",
         page_icon="🎯",
-        layout="wide",
-        initial_sidebar_state="expanded"
+        layout="wide"
     )
     
     # Apply custom CSS
     apply_custom_css()
     
-    # Create animated background
-    create_animated_background()
-    
     # TrackTalents Header
     create_track_talents_header()
     
-    # Feature showcase
-    create_feature_showcase()
+    # Sidebar with proper styling
+    st.sidebar.header("📋 Instructions")
+    st.sidebar.markdown("""
+    **How to Use:**
+    1. Upload your resume file
+    2. Supported formats: PDF, DOCX, TXT
+    3. Click 'Parse Resume' to extract information
+    4. Download the structured JSON data
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown("""
-        <div style="text-align: center; padding: 1rem; background: rgba(255,255,255,0.1); border-radius: 15px; margin-bottom: 2rem;">
-            <h3 style="color: white; margin-bottom: 1rem;">🎯 TrackTalents</h3>
-            <p style="color: rgba(255,255,255,0.9); font-size: 0.9rem;">Your AI-Powered Recruitment Partner</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("### 📋 **How It Works**")
-        st.markdown("""
-        <div style="color: white;">
-        
-        **Step 1:** 📁 Upload Resume
-        • Support for PDF, DOCX, TXT
-        • Drag & drop or browse files
-        • Secure upload process
-        
-        **Step 2:** 🔍 AI Processing
-        • Advanced NLP extraction
-        • Skills & experience analysis
-        • Contact information parsing
-        
-        **Step 3:** 📊 Get Insights
-        • Structured JSON output
-        • Skills matching scores
-        • Detailed analytics
-        
-        **Step 4:** 📥 Download Results
-        • Multiple export formats
-        • Ready for integration
-        • Instant availability
-        
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.markdown("### 🌟 **Premium Features**")
-        st.markdown("""
-        <div style="color: white;">
-        
-        ✅ **Multi-format Support**
-        ✅ **AI-Powered Extraction**
-        ✅ **Skills Database (50+ categories)**
-        ✅ **Experience Estimation**
-        ✅ **Contact Info Parsing**
-        ✅ **Education Analysis**
-        ✅ **JSON Export**
-        ✅ **Batch Processing**
-        ✅ **Real-time Progress**
-        ✅ **Enterprise Security**
-        
-        </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.markdown("""
-        <div style="text-align: center; color: white;">
-            <h4>📞 Need Help?</h4>
-            <p>📧 support@tracktalents.com</p>
-            <p>🌐 www.tracktalents.com</p>
-            <p>💬 Live Chat Available</p>
-        </div>
-        """, unsafe_allow_html=True)
+    **Features:**
+    - Advanced AI parsing
+    - Skills detection
+    - Contact extraction
+    - Work history analysis
+    - Education parsing
+    - JSON export
+    """)
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Support:**")
+    st.sidebar.markdown("📧 support@tracktalents.com")
+    st.sidebar.markdown("🌐 www.tracktalents.com")
     
     # Main content
-    st.markdown("## 📁 **Upload & Process Resume**")
+    st.markdown("## 📁 Upload Resume")
     
-    # File upload section with enhanced styling
-    st.markdown("""
-    <div class="upload-section">
-        <div class="upload-icon">📄</div>
-        <h3 style="color: #667eea; margin-bottom: 1rem;">Drop Your Resume Here</h3>
-        <p style="color: #666; margin-bottom: 1.5rem;">Supported formats: PDF, DOCX, TXT • Maximum size: 10MB</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
+    # File upload
     uploaded_file = st.file_uploader(
         "Choose a resume file",
         type=['pdf', 'docx', 'txt'],
-        help="Supported formats: PDF, DOCX, TXT",
-        label_visibility="collapsed"
+        help="Supported formats: PDF, DOCX, TXT"
     )
     
     if uploaded_file is not None:
@@ -866,409 +784,160 @@ def main():
         </div>
         """, unsafe_allow_html=True)
         
-        # File information in cards
+        # File information
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">📄</div>
-                <div class="metric-label">File Name</div>
-                <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{uploaded_file.name}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
+            st.metric("File Name", uploaded_file.name)
         with col2:
-            file_size_kb = round(uploaded_file.size / 1024, 2)
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">💾</div>
-                <div class="metric-label">File Size</div>
-                <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{file_size_kb} KB</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
+            st.metric("File Size", f"{uploaded_file.size:,} bytes")
         with col3:
-            file_type = uploaded_file.type or "Unknown"
-            st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-value">🔧</div>
-                <div class="metric-label">File Type</div>
-                <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{file_type}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.metric("File Type", uploaded_file.type or "Unknown")
         
-        # Parse button with enhanced styling
-        st.markdown("<br>", unsafe_allow_html=True)
-        
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            parse_button = st.button("🚀 **Parse Resume with AI**", use_container_width=True)
-        
-        if parse_button:
-            # Progress container
-            st.markdown("""
-            <div class="progress-container">
-                <h4 style="color: #667eea; margin-bottom: 1rem;">🔄 Processing Your Resume...</h4>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            try:
-                # Initialize parser
-                status_text.text("🚀 Initializing TrackTalents AI Parser...")
-                progress_bar.progress(20)
+        if st.button("🚀 Parse Resume", type="primary"):
+            with st.spinner("Processing resume..."):
                 parser = ResumeParser()
                 
                 # Extract text based on file type
-                status_text.text("📄 Extracting text from your resume...")
-                progress_bar.progress(40)
-                
                 file_extension = uploaded_file.name.split('.')[-1].lower()
                 
-                if file_extension == 'pdf':
-                    text_content = parser.extract_text_from_pdf(uploaded_file)
-                elif file_extension == 'docx':
-                    text_content = parser.extract_text_from_docx(uploaded_file)
-                elif file_extension == 'txt':
-                    text_content = parser.extract_text_from_txt(uploaded_file)
-                else:
-                    st.error("❌ Unsupported file format")
-                    return
-                
-                if not text_content.strip():
-                    st.error("❌ Could not extract text from the file")
-                    return
-                
-                status_text.text("🧠 Analyzing content with AI algorithms...")
-                progress_bar.progress(70)
-                
-                # Parse the resume
-                parsed_data = parser.parse_resume(text_content, uploaded_file.name)
-                
-                status_text.text("✅ Analysis complete! Preparing results...")
-                progress_bar.progress(100)
-                
-                # Clear progress indicators
-                progress_bar.empty()
-                status_text.empty()
-                
-                # Success message
-                st.markdown("""
-                <div class="success-message">
-                    🎉 <strong>Resume parsed successfully!</strong> Your insights are ready below.
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Display results in enhanced tabs
-                tab1, tab2, tab3, tab4 = st.tabs(["📊 **Executive Summary**", "👤 **Personal Details**", "🛠️ **Skills & Experience**", "📥 **Download Results**"])
-                
-                data = parsed_data["ResumeParserData"]
-                
-                with tab1:
-                    st.markdown("### 📊 **Executive Summary**")
-                    
-                    # Key metrics in cards
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        name = f"{data['FirstName']} {data['LastName']}".strip() or "Not detected"
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">👤</div>
-                            <div class="metric-label">Candidate Name</div>
-                            <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{name}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col2:
-                        contact_status = "✅ Complete" if data['Email'] and data['Phone'] else "⚠️ Partial" if data['Email'] or data['Phone'] else "❌ Missing"
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">📞</div>
-                            <div class="metric-label">Contact Info</div>
-                            <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{contact_status}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col3:
-                        skills_count = len(data['SkillsKeywords']['OperationalSkills']['SkillSet'])
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">🛠️</div>
-                            <div class="metric-label">Skills Detected</div>
-                            <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{skills_count} Skills</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col4:
-                        experience = data['WorkedPeriod'] or "Not specified"
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">⏱️</div>
-                            <div class="metric-label">Experience</div>
-                            <p style="margin-top: 0.5rem; color: #667eea; font-weight: 500;">{experience}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # Professional summary
-                    st.markdown("#### 💼 **Professional Profile**")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.write("**📂 Category:**", data['Category'] or "Not categorized")
-                        st.write("**🎯 Sub-Category:**", data['SubCategory'] or "Not specified")
-                        st.write("**🏢 Current Employer:**", data['CurrentEmployer'] or "Not specified")
-                    
-                    with col2:
-                        st.write("**💼 Job Profile:**", data['JobProfile'] or "Not specified")
-                        st.write("**📧 Email:**", data['Email'] or "Not found")
-                        st.write("**📱 Phone:**", data['Phone'] or "Not found")
-                    
-                    if data['Experience']:
-                        st.markdown("#### 📝 **Experience Summary**")
-                        st.info(data['Experience'])
-                
-                with tab2:
-                    st.markdown("### 👤 **Personal Information**")
-                    
-                    personal_data = {
-                        "First Name": data['FirstName'],
-                        "Middle Name": data['Middlename'],
-                        "Last Name": data['LastName'],
-                        "Email Address": data['Email'],
-                        "Phone Number": data['Phone'],
-                        "LinkedIn Profile": data['LinkedInProfileUrl'],
-                        "Address": data['Address'],
-                        "City": data['City'],
-                        "State": data['State'],
-                        "Zip Code": data['ZipCode']
-                    }
-                    
-                    # Create a nicer display for personal data
-                    for i in range(0, len(personal_data), 2):
-                        col1, col2 = st.columns(2)
-                        items = list(personal_data.items())[i:i+2]
-                        
-                        with col1:
-                            if len(items) > 0:
-                                key, value = items[0]
-                                if value:
-                                    st.markdown(f"""
-                                    <div class="metric-card">
-                                        <div class="metric-label">{key}</div>
-                                        <p style="margin-top: 0.5rem; color: #333; font-weight: 500;">{value}</p>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                        
-                        with col2:
-                            if len(items) > 1:
-                                key, value = items[1]
-                                if value:
-                                    st.markdown(f"""
-                                    <div class="metric-card">
-                                        <div class="metric-label">{key}</div>
-                                        <p style="margin-top: 0.5rem; color: #333; font-weight: 500;">{value}</p>
-                                    </div>
-                                    """, unsafe_allow_html=True)
-                    
-                    # Education section
-                    if data['Qualification']:
-                        st.markdown("#### 🎓 **Education & Qualifications**")
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div style="color: #667eea; font-size: 1.1rem; font-weight: 500; margin-bottom: 0.5rem;">Academic Background</div>
-                            <p style="color: #333; line-height: 1.6;">{data['Qualification']}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                with tab3:
-                    st.markdown("### 🛠️ **Skills & Technical Expertise**")
-                    
-                    skills = data['SkillsKeywords']['OperationalSkills']['SkillSet']
-                    
-                    if skills:
-                        st.markdown(f"#### 📊 **Skills Analysis** ({len(skills)} skills detected)")
-                        
-                        # Skills dataframe with enhanced styling
-                        df_skills = pd.DataFrame(skills)
-                        df_skills['Experience (Years)'] = df_skills['ExperienceInMonths'].astype(int) / 12
-                        df_skills['Experience (Years)'] = df_skills['Experience (Years)'].round(1)
-                        
-                        # Display top skills
-                        st.dataframe(
-                            df_skills[['Skill', 'Experience (Years)']].head(20), 
-                            use_container_width=True,
-                            hide_index=True
-                        )
-                        
-                        # Skills cloud visualization
-                        st.markdown("#### 🏷️ **Skills Overview**")
-                        skill_names = [skill['Skill'] for skill in skills]
-                        
-                        # Create skill tags
-                        skills_html = ""
-                        for i, skill in enumerate(skill_names[:20]):
-                            color = "#667eea" if i % 2 == 0 else "#764ba2"
-                            skills_html += f'<span style="background: {color}; color: white; padding: 0.5rem 1rem; margin: 0.25rem; border-radius: 25px; display: inline-block; font-size: 0.9rem; font-weight: 500;">{skill}</span>'
-                        
-                        st.markdown(f"""
-                        <div style="background: white; padding: 2rem; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
-                            {skills_html}
-                        </div>
-                        """, unsafe_allow_html=True)
-                        
-                        if len(skill_names) > 20:
-                            st.info(f"... and {len(skill_names) - 20} more skills detected")
+                try:
+                    if file_extension == 'pdf':
+                        text_content = parser.extract_text_from_pdf(uploaded_file)
+                    elif file_extension == 'docx':
+                        text_content = parser.extract_text_from_docx(uploaded_file)
+                    elif file_extension == 'txt':
+                        text_content = parser.extract_text_from_txt(uploaded_file)
                     else:
+                        st.error("Unsupported file format")
+                        return
+                    
+                    if not text_content.strip():
+                        st.error("Could not extract text from the file")
+                        return
+                    
+                    # Parse the resume
+                    parsed_data = parser.parse_resume(text_content, uploaded_file.name)
+                    
+                    st.success("✅ Resume parsed successfully!")
+                    
+                    # Display results in tabs
+                    tab1, tab2, tab3, tab4 = st.tabs(["📊 Summary", "👤 Personal Info", "💼 Experience & Skills", "📥 Download JSON"])
+                    
+                    data = parsed_data["ResumeParserData"]
+                    
+                    with tab1:
+                        st.subheader("Resume Summary")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("**Name:**", f"{data['FirstName']} {data['Middlename']} {data['LastName']}".strip())
+                            st.write("**Email:**", data['Email'])
+                            st.write("**Phone:**", data['Phone'])
+                        with col2:
+                            st.write("**Category:**", data['Category'])
+                            st.write("**Sub-Category:**", data['SubCategory'])
+                            st.write("**Current Employer:**", data['CurrentEmployer'])
+                            st.write("**Experience:**", data['WorkedPeriod'])
+                    
+                    with tab2:
+                        st.subheader("Personal Information")
+                        
+                        personal_data = {
+                            "First Name": data['FirstName'],
+                            "Middle Name": data['Middlename'],
+                            "Last Name": data['LastName'],
+                            "Email": data['Email'],
+                            "Phone": data['Phone'],
+                            "LinkedIn": data['LinkedInProfileUrl'],
+                            "City": data['City'],
+                            "State": data['State'],
+                            "Zip Code": data['ZipCode']
+                        }
+                        
+                        df_personal = pd.DataFrame(list(personal_data.items()), columns=['Field', 'Value'])
+                        st.dataframe(df_personal, use_container_width=True)
+                        
+                        if data['Qualification']:
+                            st.subheader("Education")
+                            st.write(data['Qualification'])
+                    
+                    with tab3:
+                        st.subheader("Skills & Experience")
+                        
+                        # Skills section
+                        skills = data['SkillsKeywords']['OperationalSkills']['SkillSet']
+                        if skills:
+                            st.write(f"**Skills Found:** {len(skills)}")
+                            df_skills = pd.DataFrame(skills)
+                            st.dataframe(df_skills, use_container_width=True)
+                            
+                            # Skills summary
+                            skill_names = [skill['Skill'] for skill in skills]
+                            st.write("**Top Skills:**", ", ".join(skill_names[:10]))
+                        else:
+                            st.write("No skills detected")
+                        
+                        # Experience section
+                        st.subheader("Work Experience")
+                        st.write("**Total Experience:**", data['WorkedPeriod'])
+                        st.write("**Current Employer:**", data['CurrentEmployer'])
+                        st.write("**Job Profile:**", data['JobProfile'])
+                        
+                        # Work history
+                        work_history = data['SegrigatedExperience']['WorkHistory']
+                        if work_history:
+                            st.subheader("Work History")
+                            for i, job in enumerate(work_history[:3]):
+                                st.write(f"**{i+1}. {job['Employer']}** - {job['JobProfile']}")
+                                st.write(f"   📅 {job['JobPeriod']}")
+                    
+                    with tab4:
                         st.markdown("""
-                        <div class="metric-card">
-                            <div style="text-align: center; color: #666; padding: 2rem;">
-                                <div style="font-size: 3rem; margin-bottom: 1rem;">🔍</div>
-                                <h4>No Technical Skills Detected</h4>
-                                <p>The AI couldn't identify specific technical skills in this resume. This might be because:</p>
-                                <ul style="text-align: left; margin-top: 1rem;">
-                                    <li>The resume focuses on soft skills or management</li>
-                                    <li>Skills are mentioned in an unconventional format</li>
-                                    <li>The document quality affects text extraction</li>
-                                </ul>
-                            </div>
+                        <div class="download-section">
+                            <h3 style="color: #667eea; text-align: center; margin-bottom: 2rem;">📥 Download Results</h3>
                         </div>
                         """, unsafe_allow_html=True)
-                    
-                    # Work experience summary
-                    if data['CurrentEmployer'] or data['JobProfile']:
-                        st.markdown("#### 💼 **Work Experience**")
-                        col1, col2 = st.columns(2)
                         
-                        with col1:
-                            st.markdown(f"""
-                            <div class="metric-card">
-                                <div class="metric-label">Current Employer</div>
-                                <p style="margin-top: 0.5rem; color: #333; font-weight: 500;">{data['CurrentEmployer'] or 'Not specified'}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        
-                        with col2:
-                            st.markdown(f"""
-                            <div class="metric-card">
-                                <div class="metric-label">Job Profile</div>
-                                <p style="margin-top: 0.5rem; color: #333; font-weight: 500;">{data['JobProfile'] or 'Not specified'}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                
-                with tab4:
-                    st.markdown("""
-                    <div class="download-section">
-                        <h3 style="color: #667eea; text-align: center; margin-bottom: 2rem;">📥 Download Your Results</h3>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # Full JSON download
+                        # JSON download
                         json_string = json.dumps(parsed_data, indent=2)
                         st.download_button(
-                            label="📋 **Download Complete JSON**",
+                            label="📋 Download Complete JSON",
                             data=json_string,
                             file_name=f"tracktalents_parsed_{uploaded_file.name}.json",
                             mime="application/json",
-                            use_container_width=True,
-                            help="Download the complete parsed data in JSON format"
+                            use_container_width=True
                         )
                         
-                        st.markdown("""
-                        <div style="background: rgba(102, 126, 234, 0.1); padding: 1rem; border-radius: 10px; margin-top: 1rem;">
-                            <h5 style="color: #667eea; margin-bottom: 0.5rem;">📋 Complete JSON</h5>
-                            <p style="color: #666; font-size: 0.85rem; margin: 0;">
-                                Contains all extracted data including personal info, skills, experience, and metadata. 
-                                Perfect for system integration and comprehensive analysis.
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col2:
                         # Skills only download
                         skills_data = {
                             "candidate_name": f"{data['FirstName']} {data['LastName']}".strip(),
                             "skills": [skill['Skill'] for skill in skills],
                             "skills_count": len(skills),
-                            "total_experience": data['WorkedPeriod'],
-                            "category": data['Category'],
-                            "generated_by": "TrackTalents AI Parser",
-                            "timestamp": data['ParsingDate']
+                            "experience": data['WorkedPeriod'],
+                            "category": data['Category']
                         }
                         skills_json = json.dumps(skills_data, indent=2)
                         
                         st.download_button(
-                            label="🛠️ **Download Skills Summary**",
+                            label="🛠️ Download Skills Only",
                             data=skills_json,
-                            file_name=f"skills_summary_{uploaded_file.name}.json",
+                            file_name=f"skills_{uploaded_file.name}.json",
                             mime="application/json",
-                            use_container_width=True,
-                            help="Download only the skills and key information"
+                            use_container_width=True
                         )
                         
-                        st.markdown("""
-                        <div style="background: rgba(118, 75, 162, 0.1); padding: 1rem; border-radius: 10px; margin-top: 1rem;">
-                            <h5 style="color: #764ba2; margin-bottom: 0.5rem;">🛠️ Skills Summary</h5>
-                            <p style="color: #666; font-size: 0.85rem; margin: 0;">
-                                Focused export containing skills, experience level, and key candidate information. 
-                                Ideal for quick skills matching and talent screening.
-                            </p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    # Preview sections
-                    st.markdown("### 👀 **Preview Parsed Data**")
-                    
-                    with st.expander("🔍 **View Complete JSON Output**", expanded=False):
+                        # Display JSON
+                        st.subheader("JSON Output Preview")
                         st.json(parsed_data)
-                    
-                    with st.expander("📄 **View Extracted Text**", expanded=False):
-                        st.text_area(
-                            "Raw extracted text from your resume:",
-                            text_content,
-                            height=300,
-                            help="This is the raw text that was extracted from your resume file"
-                        )
-                    
-                    # Statistics
-                    st.markdown("### 📊 **Processing Statistics**")
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">{len(text_content):,}</div>
-                            <div class="metric-label">Characters Processed</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col2:
-                        words_count = len(text_content.split())
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">{words_count:,}</div>
-                            <div class="metric-label">Words Analyzed</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    
-                    with col3:
-                        processing_time = "< 1 sec"
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <div class="metric-value">{processing_time}</div>
-                            <div class="metric-label">Processing Time</div>
-                        </div>
-                        """, unsafe_allow_html=True)
+                        
+                        # Display raw text
+                        with st.expander("View Extracted Text"):
+                            st.text_area("Raw extracted text:", text_content, height=300)
                 
-            except Exception as e:
-                st.error(f"❌ Error parsing resume: {str(e)}")
-                st.exception(e)
+                except Exception as e:
+                    st.error(f"Error parsing resume: {str(e)}")
+                    st.exception(e)
     
     # Footer
     st.markdown("""
@@ -1279,13 +948,8 @@ def main():
         <p style="margin-bottom: 1rem;">
             Powered by Advanced AI • Built for HR Excellence • Designed for Scale
         </p>
-        <div style="display: flex; justify-content: center; gap: 2rem; margin-bottom: 1rem;">
-            <span>📧 support@tracktalents.com</span>
-            <span>🌐 www.tracktalents.com</span>
-            <span>📱 +1 (555) 123-4567</span>
-        </div>
         <p style="font-size: 0.85rem; color: #999;">
-            © 2025 TrackTalents. All rights reserved. Privacy Protected • Zero Data Retention • Enterprise Security
+            © 2025 TrackTalents. All rights reserved.
         </p>
     </div>
     """, unsafe_allow_html=True)
