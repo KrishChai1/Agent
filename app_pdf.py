@@ -461,9 +461,13 @@ class UniversalUSCISMapper:
                     pdf_field.db_mapping = best_suggestion.db_path
                     pdf_field.confidence_score = best_suggestion.confidence
                     pdf_field.mapping_type = best_suggestion.field_type
+                    pdf_field.is_mapped = False  # Not mapped yet, just suggested
+                    pdf_field.is_questionnaire = False
                 else:
-                    # Automatically mark unmapped fields as questionnaire
+                    # No mapping found - mark as questionnaire by default
                     pdf_field.is_questionnaire = True
+                    pdf_field.is_mapped = False
+                    pdf_field.db_mapping = None
                 
                 fields.append(pdf_field)
             
@@ -994,6 +998,14 @@ class UniversalUSCISMapper:
         """Get intelligent mapping suggestions for a field"""
         suggestions = []
         
+        # Clean field name and description for better matching
+        field_name_lower = field.raw_name.lower()
+        desc_lower = field.description.lower()
+        clean_name_lower = field.clean_name.lower()
+        
+        # Combine all text for comprehensive matching
+        all_text = f"{field_name_lower} {desc_lower} {clean_name_lower}"
+        
         # Form-specific mapping rules
         if form_type == "G-28":
             suggestions.extend(self._get_g28_suggestions(field))
@@ -1002,44 +1014,153 @@ class UniversalUSCISMapper:
         elif form_type == "I-90":
             suggestions.extend(self._get_i90_suggestions(field))
         
-        # Generic pattern matching
-        field_name_lower = field.raw_name.lower()
-        desc_lower = field.description.lower()
+        # Enhanced generic pattern matching
         
-        # Common patterns based on part
-        if "part 0" in field.part.lower() or ("attorney" in field.part.lower() and "part 1" not in field.part.lower()):
-            # Attorney section mappings
-            if any(p in field_name_lower for p in ['lastname', 'last_name', 'familyname']):
+        # Attorney/Representative mappings (Part 0 or attorney sections)
+        if "part 0" in field.part.lower() or "attorney" in field.part.lower() or "representative" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
-            elif any(p in field_name_lower for p in ['firstname', 'first_name', 'givenname']):
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
-            elif "bar" in field_name_lower and "number" in field_name_lower:
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
+            elif "bar" in all_text and any(p in all_text for p in ['number', 'no', '#']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
-            elif "firm" in field_name_lower and "name" in field_name_lower:
+            elif any(p in all_text for p in ['firm', 'office']) and "name" in all_text:
                 suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
-        else:
-            # Regular field mappings
-            if any(p in field_name_lower for p in ['lastname', 'last_name', 'familyname']):
-                if 'beneficiary' in field.part.lower() or 'part 3' in field.part.lower():
-                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.9, "Beneficiary last name"))
-                elif 'petitioner' in field.part.lower() or 'part 1' in field.part.lower():
-                    suggestions.append(MappingSuggestion("customer.signatory_last_name", 0.8, "Signatory last name"))
-            
-            elif any(p in field_name_lower for p in ['firstname', 'first_name', 'givenname']):
-                if 'beneficiary' in field.part.lower() or 'part 3' in field.part.lower():
-                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.9, "Beneficiary first name"))
-                elif 'petitioner' in field.part.lower() or 'part 1' in field.part.lower():
-                    suggestions.append(MappingSuggestion("customer.signatory_first_name", 0.8, "Signatory first name"))
-            
-            elif "alien" in field_name_lower and "number" in field_name_lower:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.9, "Alien number"))
-            
-            elif "ssn" in field_name_lower or ("social" in field_name_lower and "security" in field_name_lower):
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.9, "SSN"))
+            elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
+            elif any(p in all_text for p in ['phone', 'telephone', 'tel']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.85, "Attorney mobile phone"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.85, "Attorney work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
+            elif "fax" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
+            elif "licensing" in all_text and "authority" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
+            elif "uscis" in all_text and "account" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
+        
+        # Petitioner/Customer mappings (usually Part 1)
+        elif "part 1" in field.part.lower() or "petitioner" in field.part.lower():
+            if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
+            elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
+                suggestions.append(MappingSuggestion("customer.signatory_last_name", 0.85, "Signatory last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
+                suggestions.append(MappingSuggestion("customer.signatory_first_name", 0.85, "Signatory first name"))
+            elif "title" in all_text and "job" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory_job_title", 0.85, "Signatory job title"))
+            elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
+            elif "naics" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_naics_code", 0.9, "NAICS code"))
+            elif "employees" in all_text:
+                if "h1b" in all_text or "h-1b" in all_text:
+                    suggestions.append(MappingSuggestion("customer.customer_total_h1b_employees", 0.85, "H1B employees"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.customer_total_employees", 0.85, "Total employees"))
+            elif "established" in all_text or "year" in all_text and "business" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("customer.signatory_mobile_phone", 0.8, "Signatory mobile"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.signatory_work_phone", 0.8, "Signatory work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory_email_id", 0.85, "Signatory email"))
+        
+        # Beneficiary mappings (usually Part 3)
+        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Beneficiary last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Beneficiary first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Beneficiary middle name"))
+            elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien number"))
+            elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
+            elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
+            elif "gender" in all_text or "sex" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
+            elif "country" in all_text and "birth" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
+            elif "marital" in all_text and "status" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
+            elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
+            elif "i-94" in all_text or "i94" in all_text:
+                if any(p in all_text for p in ['number', 'no', '#']):
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
+                elif "arrival" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
+                elif "home" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
+        
+        # Address mappings (check field context)
+        if any(p in all_text for p in ['street', 'address', 'calle']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                if "firm" in all_text:
+                    suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_street", 0.85, "Company street"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                if "foreign" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Foreign address street"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressStreet", 0.85, "Work address street"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressStreet", 0.85, "Home address street"))
+        
+        elif any(p in all_text for p in ['city', 'ciudad']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressCity", 0.85, "Attorney city"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_city", 0.85, "Company city"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressCity", 0.85, "City"))
+        
+        elif any(p in all_text for p in ['state', 'province', 'estado']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressState", 0.85, "Attorney state"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_state", 0.85, "Company state"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressState", 0.85, "State"))
+        
+        elif any(p in all_text for p in ['zip', 'postal', 'codigo']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressZip", 0.85, "Attorney ZIP"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_zip", 0.85, "Company ZIP"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressZip", 0.85, "ZIP code"))
+        
+        # Case/Petition specific mappings
+        elif any(p in all_text for p in ['petition', 'classification', 'category']):
+            if "h1b" in all_text or "h-1b" in all_text:
+                suggestions.append(MappingSuggestion("case.h1BPetitionType", 0.85, "H1B petition type"))
+            else:
+                suggestions.append(MappingSuggestion("case.caseType", 0.85, "Case type"))
         
         # Sort by confidence and return top suggestions
         suggestions.sort(key=lambda x: x.confidence, reverse=True)
-        return suggestions[:1]  # Return only top suggestion
+        return suggestions[:3]  # Return top 3 suggestions for better coverage
     
     def _get_g28_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions specific to G-28 form"""
@@ -1206,19 +1327,27 @@ class UniversalUSCISMapper:
         """Create a field mapping"""
         field.mapping_type = mapping_type
         field.mapping_config = mapping_config
-        field.is_mapped = True
         
         if mapping_type == "direct":
             field.db_mapping = mapping_config.get("path")
+            field.is_mapped = True
+            field.is_questionnaire = False
         elif mapping_type == "concatenated":
             field.db_mapping = json.dumps(mapping_config)
+            field.is_mapped = True
+            field.is_questionnaire = False
         elif mapping_type == "conditional":
             field.db_mapping = json.dumps(mapping_config)
+            field.is_mapped = True
+            field.is_questionnaire = False
         elif mapping_type == "default":
             field.db_mapping = f"Default: {mapping_config.get('value')}"
+            field.is_mapped = True
+            field.is_questionnaire = False
         elif mapping_type == "questionnaire":
             field.is_questionnaire = True
             field.is_mapped = False
+            # Don't clear db_mapping for questionnaire fields, keep suggestions
     
     def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
         """Generate TypeScript mapping file in the correct format"""
@@ -1567,6 +1696,9 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     st.header("🗺️ Field Mapping Configuration")
     
+    # Debug info
+    st.write(f"Total fields in session: {len(st.session_state.pdf_fields)}")
+    
     # Info box
     st.info("ℹ️ **Note**: All unmapped fields are automatically added to the questionnaire. You can change this by selecting a different mapping type.")
     
@@ -1627,7 +1759,8 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
             for field in st.session_state.pdf_fields:
                 field.is_mapped = False
                 field.is_questionnaire = False
-                field.db_mapping = None
+                field.mapping_type = "direct"
+                field.mapping_config = None
             st.rerun()
     
     # Filter fields
@@ -1637,14 +1770,15 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         if selected_part != "All" and field.part != selected_part:
             continue
         
-        if status_filter == "Mapped" and not field.is_mapped:
-            continue
-        elif status_filter == "Suggested" and (not field.db_mapping or field.is_mapped):
-            continue
-        elif status_filter == "Questionnaire" and not field.is_questionnaire:
-            continue
-        elif status_filter == "Unmapped" and (field.is_mapped or field.is_questionnaire or field.db_mapping):
-            continue
+        if status_filter != "All":
+            if status_filter == "Mapped" and not field.is_mapped:
+                continue
+            elif status_filter == "Suggested" and (not field.db_mapping or field.is_mapped or field.is_questionnaire):
+                continue
+            elif status_filter == "Questionnaire" and not field.is_questionnaire:
+                continue
+            elif status_filter == "Unmapped" and (field.is_mapped or field.is_questionnaire or field.db_mapping):
+                continue
         
         if type_filter != "All" and field.field_type != type_filter:
             continue
@@ -1673,6 +1807,24 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         return (1, part)
     
     sorted_parts_display = sorted(fields_by_part.keys(), key=natural_sort_key)
+    
+    # If no parts found, show debug info
+    if not sorted_parts_display:
+        st.warning("No fields to display with current filters.")
+        st.write("Debug: Available parts:", sorted_parts)
+        st.write("Debug: Field statuses:")
+        status_counts = {"Mapped": 0, "Suggested": 0, "Questionnaire": 0, "Unmapped": 0}
+        for field in st.session_state.pdf_fields:
+            if field.is_mapped:
+                status_counts["Mapped"] += 1
+            elif field.is_questionnaire:
+                status_counts["Questionnaire"] += 1
+            elif field.db_mapping:
+                status_counts["Suggested"] += 1
+            else:
+                status_counts["Unmapped"] += 1
+        st.write(status_counts)
+        return
     
     for part in sorted_parts_display:
         fields = fields_by_part[part]
@@ -1715,9 +1867,9 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
             st.caption(f"Field: `{field.raw_name}` | Clean: `{field.clean_name}` | Type: {field.field_type} | Page: {field.page}")
             
             # Current mapping status
-            if field.is_mapped:
+            if field.is_mapped and field.db_mapping:
                 st.markdown(f'<span class="mapping-badge mapped">✅ Mapped to: {field.db_mapping}</span>', unsafe_allow_html=True)
-            elif field.db_mapping and field.confidence_score > 0:
+            elif field.db_mapping and field.confidence_score > 0 and not field.is_questionnaire:
                 confidence_class = "high" if field.confidence_score > 0.8 else "medium" if field.confidence_score > 0.6 else "low"
                 st.markdown(f'<span class="mapping-badge questionnaire">💡 Suggested: {field.db_mapping} <span class="confidence-{confidence_class}">({field.confidence_score:.0%})</span></span>', unsafe_allow_html=True)
             elif field.is_questionnaire:
@@ -1727,17 +1879,17 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
         
         with col2:
             # Mapping controls
-            mapping_options = ["Keep Current", "Direct", "Default Value", "Questionnaire", "Skip"]
+            mapping_options = ["Keep Current", "Direct Mapping", "Default Value", "Add to Questionnaire", "Skip Field"]
             
-            # Default selection
+            # Default selection based on current status
             if field.is_mapped:
                 default_option = "Keep Current"
             elif field.is_questionnaire:
-                default_option = "Questionnaire"
-            elif field.db_mapping:
-                default_option = "Direct"
+                default_option = "Keep Current"
+            elif field.db_mapping and not field.is_questionnaire:
+                default_option = "Direct Mapping"
             else:
-                default_option = "Questionnaire"
+                default_option = "Add to Questionnaire"
             
             mapping_type = st.selectbox(
                 "Mapping Type",
@@ -1747,46 +1899,169 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 label_visibility="collapsed"
             )
             
-            if mapping_type == "Direct":
-                # Show suggested mapping
-                if field.db_mapping and not field.is_mapped:
-                    st.info(f"Suggested: {field.db_mapping}")
+            # Show appropriate controls based on selection
+            custom_path = None  # Initialize variable
+            use_dropdown = False  # Initialize variable
+            
+            if mapping_type == "Direct Mapping":
+                # Build list of all available database paths
+                db_paths = []
+                for obj, structure in mapper.db_objects.items():
+                    for sub_obj, fields in structure.items():
+                        if isinstance(fields, list):
+                            for field_name in fields:
+                                if sub_obj:
+                                    db_paths.append(f"{obj}.{sub_obj}.{field_name}")
+                                else:
+                                    db_paths.append(f"{obj}.{field_name}")
+                        elif isinstance(fields, dict):
+                            # Handle nested structures
+                            for nested_key, nested_fields in fields.items():
+                                if isinstance(nested_fields, list):
+                                    for field_name in nested_fields:
+                                        if sub_obj:
+                                            db_paths.append(f"{obj}.{sub_obj}.{nested_key}.{field_name}")
+                                        else:
+                                            db_paths.append(f"{obj}.{nested_key}.{field_name}")
                 
-                # Manual mapping option
-                custom_path = st.text_input(
-                    "Database path",
-                    value=field.db_mapping or "",
-                    key=f"path_{field.index}",
-                    placeholder="e.g., customer.customer_name"
-                )
+                # Show suggested mappings if available
+                if field.db_mapping and not field.is_mapped:
+                    st.info(f"💡 Suggested: {field.db_mapping}")
+                    
+                    # Quick accept button for suggestion
+                    if st.button(f"Use suggestion", key=f"use_sugg_{field.index}"):
+                        field.is_mapped = True
+                        field.is_questionnaire = False
+                        mapper.create_mapping(field, "direct", {"path": field.db_mapping})
+                        st.rerun()
+                
+                # Database path selection
+                use_dropdown = st.checkbox("Use dropdown", key=f"dropdown_{field.index}", value=False)
+                
+                if use_dropdown:
+                    # Filter paths based on field context
+                    filtered_paths = []
+                    
+                    # Prioritize paths based on part and field name
+                    if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                        filtered_paths = [p for p in db_paths if p.startswith("attorney")]
+                    elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                        filtered_paths = [p for p in db_paths if p.startswith("beneficiary")]
+                    elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                        filtered_paths = [p for p in db_paths if p.startswith("customer")]
+                    else:
+                        filtered_paths = db_paths
+                    
+                    # Further filter by field description keywords
+                    desc_lower = field.description.lower()
+                    if any(k in desc_lower for k in ['name', 'nombre']):
+                        name_paths = [p for p in filtered_paths if any(n in p.lower() for n in ['name', 'nombre'])]
+                        if name_paths:
+                            filtered_paths = name_paths
+                    elif any(k in desc_lower for k in ['address', 'street', 'city', 'state', 'zip']):
+                        addr_paths = [p for p in filtered_paths if 'address' in p.lower()]
+                        if addr_paths:
+                            filtered_paths = addr_paths
+                    
+                    custom_path = st.selectbox(
+                        "Select database path",
+                        [""] + sorted(filtered_paths),
+                        key=f"path_select_{field.index}",
+                        help="Select the database field to map to"
+                    )
+                else:
+                    # Text input with autocomplete suggestions
+                    custom_path = st.text_input(
+                        "Database path",
+                        value=field.db_mapping if field.db_mapping and not field.db_mapping.startswith("Default:") else "",
+                        key=f"path_{field.index}",
+                        placeholder="e.g., beneficiary.Beneficiary.beneficiaryFirstName",
+                        help="Enter the database path for this field"
+                    )
+                    
+                    # Show autocomplete suggestions
+                    if custom_path:
+                        suggestions = [p for p in db_paths if custom_path.lower() in p.lower()][:5]
+                        if suggestions:
+                            st.caption("📍 Suggestions:")
+                            for sugg in suggestions:
+                                if st.button(sugg, key=f"sugg_{field.index}_{sugg[:20]}"):
+                                    field.is_mapped = True
+                                    field.is_questionnaire = False
+                                    mapper.create_mapping(field, "direct", {"path": sugg})
+                                    st.rerun()
             
             elif mapping_type == "Default Value":
                 default_val = st.text_input(
                     "Default Value",
+                    value="",
                     key=f"default_{field.index}",
-                    placeholder="Enter default value"
+                    placeholder="Enter default value (e.g., true, false, or text)"
                 )
         
         with col3:
             # Action buttons
             if mapping_type != "Keep Current":
-                if st.button("💾", key=f"save_{field.index}", help="Save mapping"):
-                    if mapping_type == "Direct" and 'custom_path' in locals() and custom_path:
-                        mapper.create_mapping(field, "direct", {"path": custom_path})
-                    elif mapping_type == "Default Value" and 'default_val' in locals():
-                        mapper.create_mapping(field, "default", {"value": default_val})
-                    elif mapping_type == "Questionnaire":
+                if st.button("💾", key=f"save_{field.index}", help="Save mapping", type="primary"):
+                    saved = False
+                    
+                    if mapping_type == "Direct Mapping":
+                        # Get the custom path value from the appropriate widget
+                        if 'use_dropdown' in locals() and use_dropdown and 'custom_path' in locals():
+                            path_value = custom_path
+                        elif f"path_{field.index}" in st.session_state:
+                            path_value = st.session_state[f"path_{field.index}"]
+                        else:
+                            path_value = None
+                            
+                        if path_value:
+                            field.is_mapped = True
+                            field.is_questionnaire = False
+                            mapper.create_mapping(field, "direct", {"path": path_value})
+                            st.success("✅ Mapping saved!")
+                            saved = True
+                        else:
+                            st.error("Please enter a database path")
+                            
+                    elif mapping_type == "Default Value":
+                        if f"default_{field.index}" in st.session_state:
+                            default_value = st.session_state[f"default_{field.index}"]
+                            if default_value:
+                                field.is_mapped = True
+                                field.is_questionnaire = False
+                                mapper.create_mapping(field, "default", {"value": default_value})
+                                st.success("✅ Default value saved!")
+                                saved = True
+                            else:
+                                st.error("Please enter a default value")
+                        else:
+                            st.error("Please enter a default value")
+                            
+                    elif mapping_type == "Add to Questionnaire":
+                        field.is_mapped = False
+                        field.is_questionnaire = True
+                        field.db_mapping = None
                         mapper.create_mapping(field, "questionnaire", {})
-                    elif mapping_type == "Skip":
+                        st.success("✅ Added to questionnaire!")
+                        saved = True
+                        
+                    elif mapping_type == "Skip Field":
                         field.is_mapped = False
                         field.is_questionnaire = False
                         field.db_mapping = None
-                    st.rerun()
+                        st.success("✅ Field skipped!")
+                        saved = True
+                    
+                    if saved:
+                        st.rerun()
             
-            if field.db_mapping and not field.is_mapped and st.button("✅", key=f"accept_{field.index}", help="Accept suggestion"):
-                field.is_mapped = True
-                mapper.create_mapping(field, "direct", {"path": field.db_mapping})
-                st.rerun()
+            # Quick accept button for suggestions
+            if field.db_mapping and not field.is_mapped and not field.is_questionnaire:
+                if st.button("✅", key=f"accept_{field.index}", help="Accept suggestion"):
+                    field.is_mapped = True
+                    field.is_questionnaire = False
+                    mapper.create_mapping(field, "direct", {"path": field.db_mapping})
+                    st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2178,14 +2453,96 @@ def main():
         st.subheader("Mapping Preferences")
         auto_accept_high = st.checkbox("Auto-accept high confidence mappings (>80%)", value=True)
         include_suggestions = st.checkbox("Show mapping suggestions", value=True)
+        auto_questionnaire = st.checkbox("Automatically add unmapped fields to questionnaire", value=True)
         
         # Export preferences
         st.subheader("Export Preferences")
         default_format = st.selectbox("Default export format", ["TypeScript", "JavaScript", "JSON"])
+        include_comments = st.checkbox("Include comments in export", value=True)
         
         # Database settings
-        st.subheader("Database Configuration")
-        if st.button("View Database Schema"):
+        st.subheader("📊 Database Schema Browser")
+        st.write("Explore the available database fields for mapping")
+        
+        # Database browser
+        selected_object = st.selectbox(
+            "Select database object",
+            list(DB_OBJECTS.keys()),
+            help="Choose a database object to view its structure"
+        )
+        
+        if selected_object:
+            obj_structure = DB_OBJECTS[selected_object]
+            
+            # Display structure in a user-friendly way
+            for sub_obj, fields in obj_structure.items():
+                if sub_obj:
+                    st.write(f"**{sub_obj}:**")
+                else:
+                    st.write("**Fields:**")
+                
+                if isinstance(fields, list):
+                    # Create columns for better display
+                    cols = st.columns(3)
+                    for i, field in enumerate(fields):
+                        with cols[i % 3]:
+                            full_path = f"{selected_object}.{sub_obj}.{field}" if sub_obj else f"{selected_object}.{field}"
+                            st.code(full_path, language=None)
+                elif isinstance(fields, dict):
+                    # Handle nested structures
+                    for nested_key, nested_fields in fields.items():
+                        st.write(f"  *{nested_key}:*")
+                        if isinstance(nested_fields, list):
+                            cols = st.columns(3)
+                            for i, field in enumerate(nested_fields):
+                                with cols[i % 3]:
+                                    full_path = f"{selected_object}.{sub_obj}.{nested_key}.{field}"
+                                    st.code(full_path, language=None)
+        
+        # Quick reference
+        st.markdown("---")
+        st.subheader("📚 Quick Reference")
+        
+        with st.expander("Common Field Mappings"):
+            st.markdown("""
+            **Attorney Fields:**
+            - `attorney.attorneyInfo.lastName` - Attorney's last name
+            - `attorney.attorneyInfo.stateBarNumber` - Bar number
+            - `attorneyLawfirmDetails.lawfirmDetails.lawFirmName` - Law firm name
+            
+            **Beneficiary Fields:**
+            - `beneficiary.Beneficiary.beneficiaryFirstName` - First name
+            - `beneficiary.Beneficiary.alienNumber` - Alien/USCIS number
+            - `beneficiary.Beneficiary.beneficiarySsn` - Social Security Number
+            
+            **Customer/Petitioner Fields:**
+            - `customer.customer_name` - Company/Organization name
+            - `customer.customer_tax_id` - Federal Tax ID/EIN
+            - `customer.signatory_first_name` - Signatory's name
+            
+            **Address Fields:**
+            - `beneficiary.HomeAddress.addressStreet` - Street address
+            - `beneficiary.HomeAddress.addressCity` - City
+            - `beneficiary.HomeAddress.addressState` - State
+            - `beneficiary.HomeAddress.addressZip` - ZIP code
+            """)
+        
+        with st.expander("Field Type Suffixes"):
+            st.markdown("""
+            **TypeScript Field Type Suffixes:**
+            - `:TextBox` - Regular text input
+            - `:CheckBox` - Checkbox field
+            - `:ConditionBox` - Radio button/conditional
+            - `:SelectBox` - Dropdown selection
+            - `:Date` - Date field
+            - `:SignatureBox` - Signature field
+            - `:FullName` - Full name field
+            - `:SingleBox` - Single character boxes (SSN, A#)
+            - `:AddressTypeBox` - Address type selection
+            """)
+        
+        # View full schema button
+        if st.button("View Complete Database Schema"):
             st.json(DB_OBJECTS)
 
 if __name__ == "__main__":
