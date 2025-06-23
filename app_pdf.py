@@ -264,6 +264,7 @@ class UniversalUSCISMapper:
         self.db_objects = DB_OBJECTS
         self.form_part_structures = FORM_PART_STRUCTURES
         self.init_session_state()
+        self._build_database_paths_cache()
         
     def init_session_state(self):
         """Initialize Streamlit session state"""
@@ -277,6 +278,65 @@ class UniversalUSCISMapper:
             st.session_state.questionnaire_fields = {}
         if 'conditional_mappings' not in st.session_state:
             st.session_state.conditional_mappings = {}
+    
+    def _build_database_paths_cache(self):
+        """Build a cache of all database paths for efficient access"""
+        self.db_paths_cache = []
+        
+        def extract_paths(obj_name, structure, prefix=""):
+            """Recursively extract all paths from the database structure"""
+            if isinstance(structure, dict):
+                for key, value in structure.items():
+                    if key == "":  # Empty string key
+                        # Direct fields under object
+                        if isinstance(value, list):
+                            for field_name in value:
+                                path = f"{obj_name}.{field_name}"
+                                self.db_paths_cache.append(path)
+                    else:
+                        # Named sub-object
+                        new_prefix = f"{obj_name}.{key}"
+                        if isinstance(value, list):
+                            # List of fields
+                            for field_name in value:
+                                path = f"{new_prefix}.{field_name}"
+                                self.db_paths_cache.append(path)
+                        elif isinstance(value, dict):
+                            # Nested structure
+                            for nested_key, nested_value in value.items():
+                                if isinstance(nested_value, list):
+                                    for field_name in nested_value:
+                                        path = f"{new_prefix}.{nested_key}.{field_name}"
+                                        self.db_paths_cache.append(path)
+                                elif isinstance(nested_value, dict):
+                                    # Even deeper nesting
+                                    for deep_key, deep_value in nested_value.items():
+                                        if isinstance(deep_value, list):
+                                            for field_name in deep_value:
+                                                path = f"{new_prefix}.{nested_key}.{deep_key}.{field_name}"
+                                                self.db_paths_cache.append(path)
+            elif isinstance(structure, list):
+                # Direct list of fields
+                for field_name in structure:
+                    if prefix:
+                        path = f"{prefix}.{field_name}"
+                    else:
+                        path = f"{obj_name}.{field_name}"
+                    self.db_paths_cache.append(path)
+        
+        # Build paths for all objects
+        for obj_name, obj_structure in self.db_objects.items():
+            extract_paths(obj_name, obj_structure)
+        
+        # Remove duplicates and sort
+        self.db_paths_cache = sorted(list(set(self.db_paths_cache)))
+        
+        # Debug output
+        print(f"Built database paths cache with {len(self.db_paths_cache)} paths")
+    
+    def get_all_database_paths(self) -> List[str]:
+        """Get all available database paths from cache"""
+        return self.db_paths_cache.copy()
     
     def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
@@ -1434,6 +1494,15 @@ class UniversalUSCISMapper:
         with col4:
             score = self.calculate_mapping_score(fields)
             st.metric("Overall Score", f"{score}%")
+        
+        # Show database paths debug info
+        with st.expander("🗄️ Database Paths Debug Info"):
+            st.write(f"**Total database paths available**: {len(self.db_paths_cache)}")
+            st.write("**Sample paths:**")
+            for i, path in enumerate(self.db_paths_cache[:20]):
+                st.code(path)
+            if len(self.db_paths_cache) > 20:
+                st.write(f"... and {len(self.db_paths_cache) - 20} more paths")
     
     def create_mapping(self, field: PDFField, mapping_type: str, mapping_config: Dict[str, Any]) -> None:
         """Create a field mapping"""
@@ -1808,9 +1877,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     st.header("🗺️ Field Mapping Configuration")
     
-    # Debug info
-    st.write(f"Total fields in session: {len(st.session_state.pdf_fields)}")
-    
     # Info box
     st.info("ℹ️ **Note**: All unmapped fields are automatically added to the questionnaire. You can change this by selecting a different mapping type.")
     
@@ -1923,19 +1989,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     # If no parts found, show debug info
     if not sorted_parts_display:
         st.warning("No fields to display with current filters.")
-        st.write("Debug: Available parts:", sorted_parts)
-        st.write("Debug: Field statuses:")
-        status_counts = {"Mapped": 0, "Suggested": 0, "Questionnaire": 0, "Unmapped": 0}
-        for field in st.session_state.pdf_fields:
-            if field.is_mapped:
-                status_counts["Mapped"] += 1
-            elif field.is_questionnaire:
-                status_counts["Questionnaire"] += 1
-            elif field.db_mapping:
-                status_counts["Suggested"] += 1
-            else:
-                status_counts["Unmapped"] += 1
-        st.write(status_counts)
         return
     
     for part in sorted_parts_display:
@@ -2016,7 +2069,7 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
         
         with col2:
             # Mapping controls
-            mapping_options = ["Keep Current", "Direct Mapping", "Default Value", "Add to Questionnaire", "Skip Field"]
+            mapping_options = ["Keep Current", "Direct Mapping", "Default Value", "Add to Questionnaire", "Custom Path", "Skip Field"]
             
             # Default selection based on current status
             if field.is_mapped:
@@ -2040,44 +2093,8 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
             custom_path = None
             
             if mapping_type == "Direct Mapping":
-                # Build comprehensive list of all available database paths
-                db_paths = []
-                
-                # Iterate through all database objects
-                for obj_name, obj_structure in mapper.db_objects.items():
-                    if isinstance(obj_structure, dict):
-                        for sub_obj, fields in obj_structure.items():
-                            if isinstance(fields, list):
-                                # Direct list of fields
-                                for field_name in fields:
-                                    if sub_obj:  # Has sub-object
-                                        path = f"{obj_name}.{sub_obj}.{field_name}"
-                                    else:  # No sub-object (empty string key)
-                                        path = f"{obj_name}.{field_name}"
-                                    db_paths.append(path)
-                            elif isinstance(fields, dict):
-                                # Nested structure
-                                for nested_obj, nested_fields in fields.items():
-                                    if isinstance(nested_fields, dict):
-                                        # Even more nested
-                                        for deep_obj, deep_fields in nested_fields.items():
-                                            if isinstance(deep_fields, list):
-                                                for field_name in deep_fields:
-                                                    if sub_obj:
-                                                        path = f"{obj_name}.{sub_obj}.{nested_obj}.{deep_obj}.{field_name}"
-                                                    else:
-                                                        path = f"{obj_name}.{nested_obj}.{deep_obj}.{field_name}"
-                                                    db_paths.append(path)
-                                    elif isinstance(nested_fields, list):
-                                        for field_name in nested_fields:
-                                            if sub_obj:
-                                                path = f"{obj_name}.{sub_obj}.{nested_obj}.{field_name}"
-                                            else:
-                                                path = f"{obj_name}.{nested_obj}.{field_name}"
-                                            db_paths.append(path)
-                
-                # Remove duplicates and sort
-                db_paths = sorted(list(set(db_paths)))
+                # Get all database paths
+                db_paths = mapper.get_all_database_paths()
                 
                 # Debug: Show total paths
                 st.caption(f"📊 {len(db_paths)} database fields available")
@@ -2093,95 +2110,89 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         mapper.create_mapping(field, "direct", {"path": field.db_mapping})
                         st.rerun()
                 
-                # Database path selection
-                use_dropdown = st.checkbox("Use dropdown selector", key=f"dropdown_{field.index}", value=True)
+                # Filter paths based on field context
+                part_lower = field.part.lower()
                 
-                if use_dropdown:
-                    # Filter paths based on field context
-                    filtered_paths = db_paths.copy()
-                    
-                    # Smart filtering based on part
-                    part_lower = field.part.lower()
-                    desc_lower = field.description.lower()
-                    
-                    # Primary filter by object type based on part
-                    primary_filter = []
-                    if "attorney" in part_lower or "part 0" in part_lower or "representative" in part_lower:
-                        primary_filter = [p for p in db_paths if p.startswith(("attorney", "attorneyLawfirm"))]
-                    elif "beneficiary" in part_lower or "part 3" in part_lower or "information about you" in part_lower:
-                        primary_filter = [p for p in db_paths if p.startswith("beneficiary")]
-                    elif "petitioner" in part_lower or "part 1" in part_lower or "employer" in part_lower:
-                        primary_filter = [p for p in db_paths if p.startswith("customer")]
-                    elif "case" in part_lower or "petition" in part_lower:
-                        primary_filter = [p for p in db_paths if p.startswith("case")]
-                    elif "lca" in part_lower or "labor" in part_lower:
-                        primary_filter = [p for p in db_paths if p.startswith("lca")]
-                    
-                    # If primary filter has results, use it
-                    if primary_filter:
-                        # Show all from primary filter
-                        dropdown_options = ["-- Select a database field --"] + primary_filter
-                    else:
-                        # Show all paths
-                        dropdown_options = ["-- Select a database field --"] + db_paths
-                    
-                    # Try to find current mapping in options
-                    default_index = 0
-                    if field.db_mapping and field.db_mapping in dropdown_options:
-                        default_index = dropdown_options.index(field.db_mapping)
-                    
-                    custom_path = st.selectbox(
-                        "Select database field",
-                        dropdown_options,
-                        key=f"path_select_{field.index}",
-                        help="Select the database field to map to this PDF field",
-                        index=default_index
-                    )
-                    
-                    # Handle selection
-                    if custom_path and custom_path != "-- Select a database field --":
-                        st.success(f"Selected: {custom_path}")
-                    else:
-                        custom_path = None
-                        
+                # Primary filter by object type based on part
+                filtered_paths = []
+                if "attorney" in part_lower or "part 0" in part_lower or "representative" in part_lower:
+                    filtered_paths = [p for p in db_paths if p.startswith(("attorney", "attorneyLawfirm"))]
+                elif "beneficiary" in part_lower or "part 3" in part_lower or "information about you" in part_lower:
+                    filtered_paths = [p for p in db_paths if p.startswith("beneficiary")]
+                elif "petitioner" in part_lower or "part 1" in part_lower or "employer" in part_lower:
+                    filtered_paths = [p for p in db_paths if p.startswith("customer")]
+                elif "case" in part_lower or "petition" in part_lower:
+                    filtered_paths = [p for p in db_paths if p.startswith("case")]
+                elif "lca" in part_lower or "labor" in part_lower:
+                    filtered_paths = [p for p in db_paths if p.startswith("lca")]
                 else:
-                    # Text input with autocomplete suggestions
-                    custom_path = st.text_input(
-                        "Database path",
-                        value=field.db_mapping if field.db_mapping and not field.db_mapping.startswith("Default:") else "",
-                        key=f"path_{field.index}",
-                        placeholder="e.g., beneficiary.Beneficiary.beneficiaryFirstName",
-                        help="Type to search database fields"
-                    )
+                    # Show all paths if no specific context
+                    filtered_paths = db_paths
+                
+                # Create dropdown options
+                if filtered_paths:
+                    dropdown_options = ["-- Select a database field --"] + filtered_paths
+                else:
+                    dropdown_options = ["-- Select a database field --"] + db_paths
+                
+                # Try to find current mapping in options
+                default_index = 0
+                if field.db_mapping and field.db_mapping in dropdown_options:
+                    default_index = dropdown_options.index(field.db_mapping)
+                
+                custom_path = st.selectbox(
+                    "Select database field",
+                    dropdown_options,
+                    key=f"path_select_{field.index}",
+                    help=f"Select from {len(dropdown_options)-1} available fields",
+                    index=default_index
+                )
+                
+                # Handle selection
+                if custom_path and custom_path != "-- Select a database field --":
+                    st.success(f"Selected: {custom_path}")
+                else:
+                    custom_path = None
+            
+            elif mapping_type == "Custom Path":
+                # Text input for custom path
+                custom_path = st.text_input(
+                    "Enter database path",
+                    value=field.db_mapping if field.db_mapping and not field.db_mapping.startswith("Default:") else "",
+                    key=f"custom_path_{field.index}",
+                    placeholder="e.g., beneficiary.Beneficiary.beneficiaryFirstName",
+                    help="Enter a custom database path"
+                )
+                
+                # Show autocomplete suggestions
+                if custom_path:
+                    db_paths = mapper.get_all_database_paths()
+                    # Find matching paths
+                    search_term = custom_path.lower()
+                    suggestions = [p for p in db_paths if search_term in p.lower()]
                     
-                    # Show autocomplete suggestions
-                    if custom_path:
-                        # Find matching paths
-                        search_term = custom_path.lower()
-                        suggestions = [p for p in db_paths if search_term in p.lower()]
+                    # Smart ordering
+                    exact_matches = [p for p in suggestions if p.lower() == search_term]
+                    starts_with = [p for p in suggestions if p.lower().startswith(search_term) and p not in exact_matches]
+                    contains = [p for p in suggestions if p not in exact_matches and p not in starts_with]
+                    
+                    ordered_suggestions = exact_matches + starts_with + contains
+                    ordered_suggestions = ordered_suggestions[:8]
+                    
+                    if ordered_suggestions:
+                        st.caption(f"📍 Found {len(suggestions)} matches. Click to select:")
                         
-                        # Smart ordering
-                        exact_matches = [p for p in suggestions if p.lower() == search_term]
-                        starts_with = [p for p in suggestions if p.lower().startswith(search_term) and p not in exact_matches]
-                        contains = [p for p in suggestions if p not in exact_matches and p not in starts_with]
-                        
-                        ordered_suggestions = exact_matches + starts_with + contains
-                        ordered_suggestions = ordered_suggestions[:8]
-                        
-                        if ordered_suggestions:
-                            st.caption(f"📍 Found {len(suggestions)} matches. Click to select:")
-                            
-                            # Create columns for suggestions
-                            cols = st.columns(2)
-                            for idx, sugg in enumerate(ordered_suggestions):
-                                with cols[idx % 2]:
-                                    if st.button(f"→ {sugg}", key=f"sugg_{field.index}_{idx}"):
-                                        field.is_mapped = True
-                                        field.is_questionnaire = False
-                                        mapper.create_mapping(field, "direct", {"path": sugg})
-                                        st.rerun()
-                        else:
-                            st.warning("No matching database fields found")
+                        # Create columns for suggestions
+                        cols = st.columns(2)
+                        for idx, sugg in enumerate(ordered_suggestions):
+                            with cols[idx % 2]:
+                                if st.button(f"→ {sugg}", key=f"sugg_{field.index}_{idx}"):
+                                    field.is_mapped = True
+                                    field.is_questionnaire = False
+                                    mapper.create_mapping(field, "direct", {"path": sugg})
+                                    st.rerun()
+                    else:
+                        st.warning("No matching database fields found")
             
             elif mapping_type == "Default Value":
                 default_val = st.text_input(
@@ -2198,22 +2209,28 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     saved = False
                     
                     if mapping_type == "Direct Mapping":
-                        # Get the path value
-                        if use_dropdown and custom_path and custom_path != "-- Select a database field --":
-                            path_value = custom_path
-                        elif not use_dropdown and f"path_{field.index}" in st.session_state:
-                            path_value = st.session_state[f"path_{field.index}"]
-                        else:
-                            path_value = None
-                            
-                        if path_value:
+                        if custom_path and custom_path != "-- Select a database field --":
                             field.is_mapped = True
                             field.is_questionnaire = False
-                            mapper.create_mapping(field, "direct", {"path": path_value})
+                            mapper.create_mapping(field, "direct", {"path": custom_path})
                             st.success("✅ Mapping saved!")
                             saved = True
                         else:
-                            st.error("Please select or enter a database path")
+                            st.error("Please select a database path")
+                    
+                    elif mapping_type == "Custom Path":
+                        if f"custom_path_{field.index}" in st.session_state:
+                            path_value = st.session_state[f"custom_path_{field.index}"]
+                            if path_value:
+                                field.is_mapped = True
+                                field.is_questionnaire = False
+                                mapper.create_mapping(field, "direct", {"path": path_value})
+                                st.success("✅ Custom mapping saved!")
+                                saved = True
+                            else:
+                                st.error("Please enter a database path")
+                        else:
+                            st.error("Please enter a database path")
                             
                     elif mapping_type == "Default Value":
                         if f"default_{field.index}" in st.session_state:
