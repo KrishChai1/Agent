@@ -265,6 +265,10 @@ def extract_pdf_fields(pdf_file):
     """Extract all fields from PDF"""
     fields = []
     
+    if not PDF_AVAILABLE:
+        st.error("No PDF library available. Please install PyMuPDF or PyPDF2.")
+        return []
+    
     if PYMUPDF_AVAILABLE:
         try:
             pdf_bytes = pdf_file.read()
@@ -303,6 +307,7 @@ def extract_pdf_fields(pdf_file):
             
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
+            return []
     
     return fields
 
@@ -422,6 +427,9 @@ def suggest_mapping(field_name, field_type):
 
 def calculate_mapping_score():
     """Calculate overall mapping score"""
+    if not st.session_state.pdf_fields:
+        return 0
+        
     total_fields = len(st.session_state.pdf_fields)
     mapped_fields = len(st.session_state.mapped_fields)
     questionnaire_fields = len(st.session_state.questionnaire_fields)
@@ -602,6 +610,7 @@ def generate_questionnaire_json():
 def generate_typescript_mapping():
     """Generate TypeScript mapping file"""
     form_name = st.session_state.form_type or "UnknownForm"
+    form_name = form_name.replace("-", "")  # Remove hyphens for valid JS variable names
     
     # Group mappings by category
     customer_data = {}
@@ -833,10 +842,11 @@ def main():
                 st.subheader("📄 TypeScript Export")
                 ts_content = generate_typescript_mapping()
                 
+                form_name_clean = st.session_state.form_type.replace("-", "")
                 st.download_button(
-                    f"📥 Download {st.session_state.form_type}.ts",
+                    f"📥 Download {form_name_clean}.ts",
                     data=ts_content,
-                    file_name=f"{st.session_state.form_type}.ts",
+                    file_name=f"{form_name_clean}.ts",
                     mime="text/plain",
                     use_container_width=True
                 )
