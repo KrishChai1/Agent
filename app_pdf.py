@@ -2413,14 +2413,21 @@ def main():
             st.json(DB_OBJECTS)
 
 if __name__ == "__main__":
-     with col2:
+    # Filters
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        parts = list(set(f.part for f in st.session_state.pdf_fields))
+        # ... rest of col1 code
+        
+    with col2:
         status_filter = st.selectbox("Filter by Status", ["All", "Mapped", "Suggested", "Questionnaire", "Unmapped", "Custom"])
     
-    with col3:
+    with col3:  # This line should be at the same indentation as 'with col1:' and 'with col2:'
         field_types = list(set(f.field_type for f in st.session_state.pdf_fields))
         type_filter = st.selectbox("Filter by Type", ["All"] + sorted(field_types))
     
-    with col4:
+    with col4:  # Same indentation level
         search_term = st.text_input("Search fields", placeholder="Enter keyword...")
     
     # Quick actions
