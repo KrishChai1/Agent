@@ -1306,6 +1306,19 @@ export const {form_name} = {{
         }
         return type_mapping.get(field_type, "text")
     
+    def calculate_mapping_score(self, fields: List[PDFField]) -> float:
+        """Calculate overall mapping score"""
+        if not fields:
+            return 0.0
+        
+        total = len(fields)
+        mapped = sum(1 for f in fields if f.is_mapped)
+        questionnaire = sum(1 for f in fields if f.is_questionnaire)
+        
+        # Mapped fields get 100%, questionnaire fields get 50%
+        score = ((mapped * 100) + (questionnaire * 50)) / total
+        return round(score, 1)
+    
     def _calculate_mapping_score(self, fields: List[PDFField]) -> float:
         """Calculate overall mapping score"""
         if not fields:
