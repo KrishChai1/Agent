@@ -1904,25 +1904,34 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
             use_dropdown = False  # Initialize variable
             
             if mapping_type == "Direct Mapping":
-                # Build list of all available database paths
+                # Build comprehensive list of all available database paths
                 db_paths = []
-                for obj, structure in mapper.db_objects.items():
-                    for sub_obj, fields in structure.items():
+                
+                # Iterate through all database objects
+                for obj_name, obj_structure in mapper.db_objects.items():
+                    for sub_obj, fields in obj_structure.items():
                         if isinstance(fields, list):
+                            # Direct list of fields
                             for field_name in fields:
-                                if sub_obj:
-                                    db_paths.append(f"{obj}.{sub_obj}.{field_name}")
-                                else:
-                                    db_paths.append(f"{obj}.{field_name}")
+                                if sub_obj:  # Has sub-object
+                                    db_paths.append(f"{obj_name}.{sub_obj}.{field_name}")
+                                else:  # No sub-object (empty string key)
+                                    db_paths.append(f"{obj_name}.{field_name}")
                         elif isinstance(fields, dict):
-                            # Handle nested structures
-                            for nested_key, nested_fields in fields.items():
+                            # Nested structure (like beneficiary has multiple sub-objects)
+                            for nested_obj, nested_fields in fields.items():
                                 if isinstance(nested_fields, list):
                                     for field_name in nested_fields:
                                         if sub_obj:
-                                            db_paths.append(f"{obj}.{sub_obj}.{nested_key}.{field_name}")
+                                            db_paths.append(f"{obj_name}.{sub_obj}.{nested_obj}.{field_name}")
                                         else:
-                                            db_paths.append(f"{obj}.{nested_key}.{field_name}")
+                                            db_paths.append(f"{obj_name}.{nested_obj}.{field_name}")
+                
+                # Sort paths for better organization
+                db_paths = sorted(list(set(db_paths)))  # Remove duplicates and sort
+                
+                # Debug: Show total paths available
+                st.caption(f"📊 {len(db_paths)} database fields available")
                 
                 # Show suggested mappings if available
                 if field.db_mapping and not field.is_mapped:
@@ -1936,39 +1945,96 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         st.rerun()
                 
                 # Database path selection
-                use_dropdown = st.checkbox("Use dropdown", key=f"dropdown_{field.index}", value=False)
+                use_dropdown = st.checkbox("Use dropdown selector", key=f"dropdown_{field.index}", value=False)
                 
                 if use_dropdown:
                     # Filter paths based on field context
-                    filtered_paths = []
+                    filtered_paths = db_paths.copy()
                     
-                    # Prioritize paths based on part and field name
-                    if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-                        filtered_paths = [p for p in db_paths if p.startswith("attorney")]
-                    elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
-                        filtered_paths = [p for p in db_paths if p.startswith("beneficiary")]
-                    elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
-                        filtered_paths = [p for p in db_paths if p.startswith("customer")]
-                    else:
-                        filtered_paths = db_paths
-                    
-                    # Further filter by field description keywords
+                    # Smart filtering based on part
+                    part_lower = field.part.lower()
                     desc_lower = field.description.lower()
-                    if any(k in desc_lower for k in ['name', 'nombre']):
-                        name_paths = [p for p in filtered_paths if any(n in p.lower() for n in ['name', 'nombre'])]
-                        if name_paths:
-                            filtered_paths = name_paths
-                    elif any(k in desc_lower for k in ['address', 'street', 'city', 'state', 'zip']):
-                        addr_paths = [p for p in filtered_paths if 'address' in p.lower()]
-                        if addr_paths:
-                            filtered_paths = addr_paths
+                    
+                    # Primary filter by object type based on part
+                    primary_filter = []
+                    if "attorney" in part_lower or "part 0" in part_lower or "representative" in part_lower:
+                        primary_filter = [p for p in filtered_paths if p.startswith(("attorney", "attorneyLawfirm"))]
+                    elif "beneficiary" in part_lower or "part 3" in part_lower or "information about you" in part_lower:
+                        primary_filter = [p for p in filtered_paths if p.startswith("beneficiary")]
+                    elif "petitioner" in part_lower or "part 1" in part_lower or "employer" in part_lower:
+                        primary_filter = [p for p in filtered_paths if p.startswith("customer")]
+                    elif "case" in part_lower or "petition" in part_lower:
+                        primary_filter = [p for p in filtered_paths if p.startswith("case")]
+                    elif "lca" in part_lower or "labor" in part_lower:
+                        primary_filter = [p for p in filtered_paths if p.startswith("lca")]
+                    
+                    # Use primary filter if it has results, otherwise use all paths
+                    if primary_filter:
+                        filtered_paths = primary_filter
+                    
+                    # Secondary filter by field description keywords
+                    secondary_filter = []
+                    
+                    # Name fields
+                    if any(k in desc_lower for k in ['last name', 'lastname', 'family name', 'apellido']):
+                        secondary_filter = [p for p in filtered_paths if 'lastname' in p.lower()]
+                    elif any(k in desc_lower for k in ['first name', 'firstname', 'given name', 'nombre']):
+                        secondary_filter = [p for p in filtered_paths if 'firstname' in p.lower()]
+                    elif any(k in desc_lower for k in ['middle name', 'middlename', 'middle initial']):
+                        secondary_filter = [p for p in filtered_paths if 'middlename' in p.lower()]
+                    
+                    # Address fields
+                    elif any(k in desc_lower for k in ['street', 'address line', 'calle']):
+                        secondary_filter = [p for p in filtered_paths if 'addressstreet' in p.lower()]
+                    elif any(k in desc_lower for k in ['city', 'ciudad']):
+                        secondary_filter = [p for p in filtered_paths if 'addresscity' in p.lower()]
+                    elif any(k in desc_lower for k in ['state', 'province', 'estado']):
+                        secondary_filter = [p for p in filtered_paths if 'addressstate' in p.lower()]
+                    elif any(k in desc_lower for k in ['zip', 'postal', 'codigo']):
+                        secondary_filter = [p for p in filtered_paths if 'addresszip' in p.lower()]
+                    
+                    # Other common fields
+                    elif any(k in desc_lower for k in ['phone', 'telephone', 'tel']):
+                        secondary_filter = [p for p in filtered_paths if 'phone' in p.lower()]
+                    elif 'email' in desc_lower:
+                        secondary_filter = [p for p in filtered_paths if 'email' in p.lower()]
+                    elif any(k in desc_lower for k in ['alien number', 'a-number', 'uscis number']):
+                        secondary_filter = [p for p in filtered_paths if 'aliennumber' in p.lower()]
+                    elif any(k in desc_lower for k in ['ssn', 'social security']):
+                        secondary_filter = [p for p in filtered_paths if 'ssn' in p.lower()]
+                    elif any(k in desc_lower for k in ['date of birth', 'dob', 'birth date']):
+                        secondary_filter = [p for p in filtered_paths if 'dateofbirth' in p.lower()]
+                    elif 'passport' in desc_lower:
+                        secondary_filter = [p for p in filtered_paths if 'passport' in p.lower()]
+                    elif 'i-94' in desc_lower or 'i94' in desc_lower:
+                        secondary_filter = [p for p in filtered_paths if 'i94' in p.lower()]
+                    
+                    # Use secondary filter if it has results
+                    if secondary_filter:
+                        # Combine with some additional related fields
+                        final_paths = secondary_filter + [p for p in filtered_paths if p not in secondary_filter][:10]
+                    else:
+                        final_paths = filtered_paths
+                    
+                    # Create the dropdown with grouped options
+                    dropdown_options = ["-- Select a database field --"] + final_paths
                     
                     custom_path = st.selectbox(
-                        "Select database path",
-                        [""] + sorted(filtered_paths),
+                        "Select database field",
+                        dropdown_options,
                         key=f"path_select_{field.index}",
-                        help="Select the database field to map to"
+                        help="Select the database field to map to this PDF field",
+                        index=0 if not field.db_mapping else (
+                            dropdown_options.index(field.db_mapping) if field.db_mapping in dropdown_options else 0
+                        )
                     )
+                    
+                    # Handle selection
+                    if custom_path and custom_path != "-- Select a database field --":
+                        st.success(f"Selected: {custom_path}")
+                    else:
+                        custom_path = None
+                        
                 else:
                     # Text input with autocomplete suggestions
                     custom_path = st.text_input(
@@ -1976,20 +2042,37 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         value=field.db_mapping if field.db_mapping and not field.db_mapping.startswith("Default:") else "",
                         key=f"path_{field.index}",
                         placeholder="e.g., beneficiary.Beneficiary.beneficiaryFirstName",
-                        help="Enter the database path for this field"
+                        help="Type to search database fields"
                     )
                     
                     # Show autocomplete suggestions
                     if custom_path:
-                        suggestions = [p for p in db_paths if custom_path.lower() in p.lower()][:5]
-                        if suggestions:
-                            st.caption("📍 Suggestions:")
-                            for sugg in suggestions:
-                                if st.button(sugg, key=f"sugg_{field.index}_{sugg[:20]}"):
-                                    field.is_mapped = True
-                                    field.is_questionnaire = False
-                                    mapper.create_mapping(field, "direct", {"path": sugg})
-                                    st.rerun()
+                        # Find matching paths
+                        search_term = custom_path.lower()
+                        suggestions = [p for p in db_paths if search_term in p.lower()]
+                        
+                        # Smart ordering: exact matches first, then starts with, then contains
+                        exact_matches = [p for p in suggestions if p.lower() == search_term]
+                        starts_with = [p for p in suggestions if p.lower().startswith(search_term) and p not in exact_matches]
+                        contains = [p for p in suggestions if p not in exact_matches and p not in starts_with]
+                        
+                        ordered_suggestions = exact_matches + starts_with + contains
+                        ordered_suggestions = ordered_suggestions[:8]  # Limit to 8 suggestions
+                        
+                        if ordered_suggestions:
+                            st.caption(f"📍 Found {len(suggestions)} matches. Click to select:")
+                            
+                            # Create columns for suggestions
+                            cols = st.columns(2)
+                            for idx, sugg in enumerate(ordered_suggestions):
+                                with cols[idx % 2]:
+                                    if st.button(f"→ {sugg}", key=f"sugg_{field.index}_{idx}"):
+                                        field.is_mapped = True
+                                        field.is_questionnaire = False
+                                        mapper.create_mapping(field, "direct", {"path": sugg})
+                                        st.rerun()
+                        else:
+                            st.warning("No matching database fields found")
             
             elif mapping_type == "Default Value":
                 default_val = st.text_input(
