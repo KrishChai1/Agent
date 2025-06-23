@@ -280,7 +280,7 @@ class UniversalUSCISMapper:
     
     def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
-        # Extract part number from the assigned part, not from field name
+        # Extract part number from the assigned part
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
         if not part_match and re.search(r'Part\s*0', part, re.IGNORECASE):
             part_num = "0"
@@ -295,7 +295,7 @@ class UniversalUSCISMapper:
         # Clean the field name more aggressively
         clean_name = field_name
         
-        # Remove common prefixes and patterns
+        # Remove all the form structure patterns
         patterns_to_remove = [
             r'form\d*\[\d+\]\.',
             r'#subform\[\d+\]\.',
@@ -311,7 +311,6 @@ class UniversalUSCISMapper:
             r'^Page\d+\.',
             r'^form\.',
             r'^field\.',
-            # Remove misleading part references from field names
             r'P\d+line',
             r'Part\d+line',
             r'SubP\d+line',
@@ -320,62 +319,57 @@ class UniversalUSCISMapper:
         for pattern in patterns_to_remove:
             clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
         
-        # Extract item/field identifier more intelligently
+        # Extract meaningful field identifier
         field_id = item
         
-        # Try multiple strategies to extract field ID
         if not field_id:
-            # Strategy 1: Look for line patterns first (after removing part references)
-            line_patterns = [
-                r'line(\d+[a-zA-Z]?)',  # line1a, line2b
-                r'[_\.\-](\d+[a-zA-Z]?)$',  # End of string
-                r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # Middle of string
-                r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',  # Item number
-                r'No[\s_\.\-]*(\d+[a-zA-Z]?)',  # Number
-                r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',  # Question
-                r'Q[\s_\.\-]*(\d+[a-zA-Z]?)',  # Q
-                r'#(\d+[a-zA-Z]?)',  # Hash number
+            # Try to extract from the cleaned field name
+            # Look for common patterns
+            patterns = [
+                # Look for specific field patterns first
+                r'AttorneyStateBarNumber',  # -> would become something like P0_1a
+                r'P(\d+)_(\d+[a-zA-Z]?)',   # Already in format
+                r'Part(\d+)_(\d+[a-zA-Z]?)', # Part format
+                r'line(\d+[a-zA-Z]?)',       # line patterns
+                r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',
+                r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',
+                r'_(\d+[a-zA-Z]?)$',         # End numbers
+                r'#(\d+[a-zA-Z]?)',          # Hash numbers
             ]
             
-            for pattern in line_patterns:
-                match = re.search(pattern, clean_name, re.IGNORECASE)
-                if match:
-                    potential_id = match.group(1)
-                    # Validate it's a reasonable field ID
-                    if re.match(r'^\d{1,2}[a-zA-Z]?$', potential_id):
-                        field_id = potential_id
+            # Special handling for known field types
+            if 'AttorneyStateBarNumber' in clean_name:
+                field_id = '1a'  # Or whatever convention you want
+            elif 'FamilyName' in clean_name or 'LastName' in clean_name:
+                field_id = '3a'
+            elif 'GivenName' in clean_name or 'FirstName' in clean_name:
+                field_id = '3b'
+            elif 'MiddleName' in clean_name:
+                field_id = '3c'
+            else:
+                # Try patterns
+                for pattern in patterns:
+                    match = re.search(pattern, clean_name, re.IGNORECASE)
+                    if match:
+                        if pattern.startswith(r'P(\d+)'):
+                            # Already has part, use the field part
+                            field_id = match.group(2)
+                        else:
+                            field_id = match.group(1) if match.lastindex == 1 else match.group(match.lastindex)
                         break
         
-        # Strategy 2: If still no ID, look in the original item
-        if not field_id and item:
-            # Clean the item and use it
-            field_id = re.sub(r'[^\d\w]', '', item)
-        
-        # Strategy 3: Look for any number in the cleaned name
+        # If still no field ID, try to extract any number
         if not field_id:
-            # Look for standalone numbers
             numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', clean_name)
             if numbers:
-                field_id = numbers[-1]  # Use the last number found
+                field_id = numbers[-1]
         
-        # Strategy 4: Extract from the end of the field after removing noise
-        if not field_id:
-            # Get the last meaningful part of the field name
-            parts = re.split(r'[_\.\-]', clean_name)
-            for part_str in reversed(parts):
-                if part_str and not part_str.lower() in ['text', 'checkbox', 'radio', 'field', 'line']:
-                    # Check if it contains a number
-                    match = re.search(r'(\d{1,2}[a-zA-Z]?)', part_str)
-                    if match:
-                        field_id = match.group(1)
-                        break
-        
-        # Strategy 5: Use incremental counter
+        # Last resort - use counter
         if not field_id:
             field_id = str(self.field_counter)
             self.field_counter += 1
         
-        # Clean up the field ID
+        # Clean up field ID
         field_id = field_id.strip('._- ')
         
         # Ensure field ID is reasonable length
@@ -387,8 +381,7 @@ class UniversalUSCISMapper:
             else:
                 field_id = field_id[:5]
         
-        # Construct the clean name in P1_3a format
-        # Use the part number from the assigned part, not from field name
+        # Construct the clean name
         return f"P{part_num}_{field_id}"
     
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
@@ -1119,11 +1112,11 @@ class UniversalUSCISMapper:
             if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
                 suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
             elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
-                suggestions.append(MappingSuggestion("customer.signatory_last_name", 0.85, "Signatory last name"))
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_last_name", 0.85, "Signatory last name"))
             elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
-                suggestions.append(MappingSuggestion("customer.signatory_first_name", 0.85, "Signatory first name"))
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_first_name", 0.85, "Signatory first name"))
             elif "title" in all_text and "job" in all_text:
-                suggestions.append(MappingSuggestion("customer.signatory_job_title", 0.85, "Signatory job title"))
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_job_title", 0.85, "Signatory job title"))
             elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
                 suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
             elif "naics" in all_text:
@@ -1137,11 +1130,11 @@ class UniversalUSCISMapper:
                 suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
             elif any(p in all_text for p in ['phone', 'telephone']):
                 if "mobile" in all_text or "cell" in all_text:
-                    suggestions.append(MappingSuggestion("customer.signatory_mobile_phone", 0.8, "Signatory mobile"))
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_mobile_phone", 0.8, "Signatory mobile"))
                 else:
-                    suggestions.append(MappingSuggestion("customer.signatory_work_phone", 0.8, "Signatory work phone"))
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_work_phone", 0.8, "Signatory work phone"))
             elif "email" in all_text:
-                suggestions.append(MappingSuggestion("customer.signatory_email_id", 0.85, "Signatory email"))
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_email_id", 0.85, "Signatory email"))
         
         # Beneficiary mappings (usually Part 3)
         elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
@@ -1967,6 +1960,29 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         expanded = "Part 1" in part or "Part 0" in part  # Expand Part 0 and 1 by default
         
         with st.expander(f"{icon} {part} ({len(fields)} fields: {type_summary})", expanded=expanded):
+            # Add a quick summary of fields in this part
+            st.markdown("**Fields in this part:**")
+            
+            # Create a preview table
+            preview_data = []
+            for field in fields[:5]:  # Show first 5 fields
+                preview_data.append({
+                    "Clean Name": field.clean_name,
+                    "Description": field.description,
+                    "Type": field.field_type,
+                    "Status": "✅ Mapped" if field.is_mapped else "📋 Questionnaire" if field.is_questionnaire else "💡 Suggested" if field.db_mapping else "❌ Unmapped"
+                })
+            
+            if preview_data:
+                preview_df = pd.DataFrame(preview_data)
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                
+                if len(fields) > 5:
+                    st.caption(f"... and {len(fields) - 5} more fields")
+            
+            st.markdown("---")
+            
+            # Now show the detailed field cards
             for field in fields:
                 render_field_mapping_card(field, mapper)
 
@@ -1978,12 +1994,14 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
         col1, col2, col3 = st.columns([5, 4, 1])
         
         with col1:
-            # Field info
-            field_label = f"**{field.description}**"
+            # Field info - Use clean name as primary display
+            field_label = f"**{field.clean_name}** - {field.description}"
             if field.item:
                 field_label += f" (Item {field.item})"
             st.markdown(field_label)
-            st.caption(f"Field: `{field.raw_name}` | Clean: `{field.clean_name}` | Type: {field.field_type} | Page: {field.page}")
+            
+            # Show raw name in caption for debugging
+            st.caption(f"Raw: `{field.raw_name}` | Type: {field.field_type} | Page: {field.page}")
             
             # Current mapping status
             if field.is_mapped and field.db_mapping:
@@ -2019,8 +2037,7 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
             )
             
             # Show appropriate controls based on selection
-            custom_path = None  # Initialize variable
-            use_dropdown = False  # Initialize variable
+            custom_path = None
             
             if mapping_type == "Direct Mapping":
                 # Build comprehensive list of all available database paths
@@ -2028,28 +2045,41 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 
                 # Iterate through all database objects
                 for obj_name, obj_structure in mapper.db_objects.items():
-                    for sub_obj, fields in obj_structure.items():
-                        if isinstance(fields, list):
-                            # Direct list of fields
-                            for field_name in fields:
-                                if sub_obj:  # Has sub-object
-                                    db_paths.append(f"{obj_name}.{sub_obj}.{field_name}")
-                                else:  # No sub-object (empty string key)
-                                    db_paths.append(f"{obj_name}.{field_name}")
-                        elif isinstance(fields, dict):
-                            # Nested structure (like beneficiary has multiple sub-objects)
-                            for nested_obj, nested_fields in fields.items():
-                                if isinstance(nested_fields, list):
-                                    for field_name in nested_fields:
-                                        if sub_obj:
-                                            db_paths.append(f"{obj_name}.{sub_obj}.{nested_obj}.{field_name}")
-                                        else:
-                                            db_paths.append(f"{obj_name}.{nested_obj}.{field_name}")
+                    if isinstance(obj_structure, dict):
+                        for sub_obj, fields in obj_structure.items():
+                            if isinstance(fields, list):
+                                # Direct list of fields
+                                for field_name in fields:
+                                    if sub_obj:  # Has sub-object
+                                        path = f"{obj_name}.{sub_obj}.{field_name}"
+                                    else:  # No sub-object (empty string key)
+                                        path = f"{obj_name}.{field_name}"
+                                    db_paths.append(path)
+                            elif isinstance(fields, dict):
+                                # Nested structure
+                                for nested_obj, nested_fields in fields.items():
+                                    if isinstance(nested_fields, dict):
+                                        # Even more nested
+                                        for deep_obj, deep_fields in nested_fields.items():
+                                            if isinstance(deep_fields, list):
+                                                for field_name in deep_fields:
+                                                    if sub_obj:
+                                                        path = f"{obj_name}.{sub_obj}.{nested_obj}.{deep_obj}.{field_name}"
+                                                    else:
+                                                        path = f"{obj_name}.{nested_obj}.{deep_obj}.{field_name}"
+                                                    db_paths.append(path)
+                                    elif isinstance(nested_fields, list):
+                                        for field_name in nested_fields:
+                                            if sub_obj:
+                                                path = f"{obj_name}.{sub_obj}.{nested_obj}.{field_name}"
+                                            else:
+                                                path = f"{obj_name}.{nested_obj}.{field_name}"
+                                            db_paths.append(path)
                 
-                # Sort paths for better organization
-                db_paths = sorted(list(set(db_paths)))  # Remove duplicates and sort
+                # Remove duplicates and sort
+                db_paths = sorted(list(set(db_paths)))
                 
-                # Debug: Show total paths available
+                # Debug: Show total paths
                 st.caption(f"📊 {len(db_paths)} database fields available")
                 
                 # Show suggested mappings if available
@@ -2064,7 +2094,7 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         st.rerun()
                 
                 # Database path selection
-                use_dropdown = st.checkbox("Use dropdown selector", key=f"dropdown_{field.index}", value=False)
+                use_dropdown = st.checkbox("Use dropdown selector", key=f"dropdown_{field.index}", value=True)
                 
                 if use_dropdown:
                     # Filter paths based on field context
@@ -2077,75 +2107,35 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     # Primary filter by object type based on part
                     primary_filter = []
                     if "attorney" in part_lower or "part 0" in part_lower or "representative" in part_lower:
-                        primary_filter = [p for p in filtered_paths if p.startswith(("attorney", "attorneyLawfirm"))]
+                        primary_filter = [p for p in db_paths if p.startswith(("attorney", "attorneyLawfirm"))]
                     elif "beneficiary" in part_lower or "part 3" in part_lower or "information about you" in part_lower:
-                        primary_filter = [p for p in filtered_paths if p.startswith("beneficiary")]
+                        primary_filter = [p for p in db_paths if p.startswith("beneficiary")]
                     elif "petitioner" in part_lower or "part 1" in part_lower or "employer" in part_lower:
-                        primary_filter = [p for p in filtered_paths if p.startswith("customer")]
+                        primary_filter = [p for p in db_paths if p.startswith("customer")]
                     elif "case" in part_lower or "petition" in part_lower:
-                        primary_filter = [p for p in filtered_paths if p.startswith("case")]
+                        primary_filter = [p for p in db_paths if p.startswith("case")]
                     elif "lca" in part_lower or "labor" in part_lower:
-                        primary_filter = [p for p in filtered_paths if p.startswith("lca")]
+                        primary_filter = [p for p in db_paths if p.startswith("lca")]
                     
-                    # Use primary filter if it has results, otherwise use all paths
+                    # If primary filter has results, use it
                     if primary_filter:
-                        filtered_paths = primary_filter
-                    
-                    # Secondary filter by field description keywords
-                    secondary_filter = []
-                    
-                    # Name fields
-                    if any(k in desc_lower for k in ['last name', 'lastname', 'family name', 'apellido']):
-                        secondary_filter = [p for p in filtered_paths if 'lastname' in p.lower()]
-                    elif any(k in desc_lower for k in ['first name', 'firstname', 'given name', 'nombre']):
-                        secondary_filter = [p for p in filtered_paths if 'firstname' in p.lower()]
-                    elif any(k in desc_lower for k in ['middle name', 'middlename', 'middle initial']):
-                        secondary_filter = [p for p in filtered_paths if 'middlename' in p.lower()]
-                    
-                    # Address fields
-                    elif any(k in desc_lower for k in ['street', 'address line', 'calle']):
-                        secondary_filter = [p for p in filtered_paths if 'addressstreet' in p.lower()]
-                    elif any(k in desc_lower for k in ['city', 'ciudad']):
-                        secondary_filter = [p for p in filtered_paths if 'addresscity' in p.lower()]
-                    elif any(k in desc_lower for k in ['state', 'province', 'estado']):
-                        secondary_filter = [p for p in filtered_paths if 'addressstate' in p.lower()]
-                    elif any(k in desc_lower for k in ['zip', 'postal', 'codigo']):
-                        secondary_filter = [p for p in filtered_paths if 'addresszip' in p.lower()]
-                    
-                    # Other common fields
-                    elif any(k in desc_lower for k in ['phone', 'telephone', 'tel']):
-                        secondary_filter = [p for p in filtered_paths if 'phone' in p.lower()]
-                    elif 'email' in desc_lower:
-                        secondary_filter = [p for p in filtered_paths if 'email' in p.lower()]
-                    elif any(k in desc_lower for k in ['alien number', 'a-number', 'uscis number']):
-                        secondary_filter = [p for p in filtered_paths if 'aliennumber' in p.lower()]
-                    elif any(k in desc_lower for k in ['ssn', 'social security']):
-                        secondary_filter = [p for p in filtered_paths if 'ssn' in p.lower()]
-                    elif any(k in desc_lower for k in ['date of birth', 'dob', 'birth date']):
-                        secondary_filter = [p for p in filtered_paths if 'dateofbirth' in p.lower()]
-                    elif 'passport' in desc_lower:
-                        secondary_filter = [p for p in filtered_paths if 'passport' in p.lower()]
-                    elif 'i-94' in desc_lower or 'i94' in desc_lower:
-                        secondary_filter = [p for p in filtered_paths if 'i94' in p.lower()]
-                    
-                    # Use secondary filter if it has results
-                    if secondary_filter:
-                        # Combine with some additional related fields
-                        final_paths = secondary_filter + [p for p in filtered_paths if p not in secondary_filter][:10]
+                        # Show all from primary filter
+                        dropdown_options = ["-- Select a database field --"] + primary_filter
                     else:
-                        final_paths = filtered_paths
+                        # Show all paths
+                        dropdown_options = ["-- Select a database field --"] + db_paths
                     
-                    # Create the dropdown with grouped options
-                    dropdown_options = ["-- Select a database field --"] + final_paths
+                    # Try to find current mapping in options
+                    default_index = 0
+                    if field.db_mapping and field.db_mapping in dropdown_options:
+                        default_index = dropdown_options.index(field.db_mapping)
                     
                     custom_path = st.selectbox(
                         "Select database field",
                         dropdown_options,
                         key=f"path_select_{field.index}",
                         help="Select the database field to map to this PDF field",
-                        index=0 if not field.db_mapping else (
-                            dropdown_options.index(field.db_mapping) if field.db_mapping in dropdown_options else 0
-                        )
+                        index=default_index
                     )
                     
                     # Handle selection
@@ -2170,13 +2160,13 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         search_term = custom_path.lower()
                         suggestions = [p for p in db_paths if search_term in p.lower()]
                         
-                        # Smart ordering: exact matches first, then starts with, then contains
+                        # Smart ordering
                         exact_matches = [p for p in suggestions if p.lower() == search_term]
                         starts_with = [p for p in suggestions if p.lower().startswith(search_term) and p not in exact_matches]
                         contains = [p for p in suggestions if p not in exact_matches and p not in starts_with]
                         
                         ordered_suggestions = exact_matches + starts_with + contains
-                        ordered_suggestions = ordered_suggestions[:8]  # Limit to 8 suggestions
+                        ordered_suggestions = ordered_suggestions[:8]
                         
                         if ordered_suggestions:
                             st.caption(f"📍 Found {len(suggestions)} matches. Click to select:")
@@ -2208,10 +2198,10 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     saved = False
                     
                     if mapping_type == "Direct Mapping":
-                        # Get the custom path value from the appropriate widget
-                        if 'use_dropdown' in locals() and use_dropdown and 'custom_path' in locals():
+                        # Get the path value
+                        if use_dropdown and custom_path and custom_path != "-- Select a database field --":
                             path_value = custom_path
-                        elif f"path_{field.index}" in st.session_state:
+                        elif not use_dropdown and f"path_{field.index}" in st.session_state:
                             path_value = st.session_state[f"path_{field.index}"]
                         else:
                             path_value = None
@@ -2223,7 +2213,7 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                             st.success("✅ Mapping saved!")
                             saved = True
                         else:
-                            st.error("Please enter a database path")
+                            st.error("Please select or enter a database path")
                             
                     elif mapping_type == "Default Value":
                         if f"default_{field.index}" in st.session_state:
@@ -2720,7 +2710,7 @@ def main():
             **Customer/Petitioner Fields:**
             - `customer.customer_name` - Company/Organization name
             - `customer.customer_tax_id` - Federal Tax ID/EIN
-            - `customer.signatory_first_name` - Signatory's name
+            - `customer.signatory.signatory_first_name` - Signatory's name
             
             **Address Fields:**
             - `beneficiary.HomeAddress.addressStreet` - Street address
