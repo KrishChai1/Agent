@@ -175,17 +175,25 @@ FIELD_TYPE_SUFFIX_MAP = {
     "number": ":NumberBox"
 }
 
-# Special field type mappings
+# Special field type mappings - be specific to avoid false matches
 SPECIAL_FIELD_TYPES = {
+    # These are very specific field names that should get special types
     "addressType": ":AddressTypeBox",
+    "address_type": ":AddressTypeBox",
     "representative": ":ConditionBox",
     "careOfName": ":FullName",
+    "care_of_name": ":FullName",
     "alienNumber": ":SingleBox",
+    "alien_number": ":SingleBox",
     "ussocialssn": ":SingleBox",
     "arrivalDepartureRecords": ":ConditionBox",
+    "arrival_departure_records": ":ConditionBox",
     "dependentApplication": ":ConditionBox",
+    "dependent_application": ":ConditionBox",
     "h1bBeneficiaryFirstName": ":MultipleBox",
     "beneficiaryFullName": ":FullName",
+    "beneficiary_full_name": ":FullName",
+    # Note: We removed generic patterns to avoid false matches
 }
 
 # Form-specific part structures
@@ -272,7 +280,7 @@ class UniversalUSCISMapper:
     
     def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
-        # Extract part number
+        # Extract part number from the assigned part, not from field name
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
         if not part_match and re.search(r'Part\s*0', part, re.IGNORECASE):
             part_num = "0"
@@ -303,6 +311,10 @@ class UniversalUSCISMapper:
             r'^Page\d+\.',
             r'^form\.',
             r'^field\.',
+            # Remove misleading part references from field names
+            r'P\d+line',
+            r'Part\d+line',
+            r'SubP\d+line',
         ]
         
         for pattern in patterns_to_remove:
@@ -313,51 +325,52 @@ class UniversalUSCISMapper:
         
         # Try multiple strategies to extract field ID
         if not field_id:
-            # Strategy 1: Look for patterns like _3a, .3a, -3a
-            id_patterns = [
+            # Strategy 1: Look for line patterns first (after removing part references)
+            line_patterns = [
+                r'line(\d+[a-zA-Z]?)',  # line1a, line2b
                 r'[_\.\-](\d+[a-zA-Z]?)$',  # End of string
                 r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # Middle of string
                 r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',  # Item number
                 r'No[\s_\.\-]*(\d+[a-zA-Z]?)',  # Number
-                r'Line[\s_\.\-]*(\d+[a-zA-Z]?)',  # Line
                 r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',  # Question
                 r'Q[\s_\.\-]*(\d+[a-zA-Z]?)',  # Q
                 r'#(\d+[a-zA-Z]?)',  # Hash number
             ]
             
-            for pattern in id_patterns:
+            for pattern in line_patterns:
                 match = re.search(pattern, clean_name, re.IGNORECASE)
                 if match:
-                    field_id = match.group(1)
-                    break
-        
-        # Strategy 2: If still no ID, look in the middle of the cleaned name
-        if not field_id:
-            # Look for any number in the cleaned name
-            numbers = re.findall(r'\d+[a-zA-Z]?', clean_name)
-            if numbers:
-                # Prefer numbers that look like field IDs (1-99 with optional letter)
-                for num in numbers:
-                    if re.match(r'^\d{1,2}[a-zA-Z]?$', num):
-                        field_id = num
+                    potential_id = match.group(1)
+                    # Validate it's a reasonable field ID
+                    if re.match(r'^\d{1,2}[a-zA-Z]?$', potential_id):
+                        field_id = potential_id
                         break
-                
-                # If no good match, use the last number
-                if not field_id and numbers:
-                    field_id = numbers[-1]
         
-        # Strategy 3: Extract from the end of the field after removing noise
+        # Strategy 2: If still no ID, look in the original item
+        if not field_id and item:
+            # Clean the item and use it
+            field_id = re.sub(r'[^\d\w]', '', item)
+        
+        # Strategy 3: Look for any number in the cleaned name
+        if not field_id:
+            # Look for standalone numbers
+            numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', clean_name)
+            if numbers:
+                field_id = numbers[-1]  # Use the last number found
+        
+        # Strategy 4: Extract from the end of the field after removing noise
         if not field_id:
             # Get the last meaningful part of the field name
             parts = re.split(r'[_\.\-]', clean_name)
             for part_str in reversed(parts):
-                if part_str and not part_str.lower() in ['text', 'checkbox', 'radio', 'field']:
+                if part_str and not part_str.lower() in ['text', 'checkbox', 'radio', 'field', 'line']:
                     # Check if it contains a number
-                    if re.search(r'\d', part_str):
-                        field_id = part_str
+                    match = re.search(r'(\d{1,2}[a-zA-Z]?)', part_str)
+                    if match:
+                        field_id = match.group(1)
                         break
         
-        # Strategy 4: Use incremental counter
+        # Strategy 5: Use incremental counter
         if not field_id:
             field_id = str(self.field_counter)
             self.field_counter += 1
@@ -375,6 +388,7 @@ class UniversalUSCISMapper:
                 field_id = field_id[:5]
         
         # Construct the clean name in P1_3a format
+        # Use the part number from the assigned part, not from field name
         return f"P{part_num}_{field_id}"
     
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
@@ -750,6 +764,11 @@ class UniversalUSCISMapper:
         # First clean the field name
         clean_name = self._clean_field_name_for_analysis(field_name)
         
+        # Remove misleading part references
+        clean_name = re.sub(r'P\d+line', 'line', clean_name, flags=re.IGNORECASE)
+        clean_name = re.sub(r'Part\d+line', 'line', clean_name, flags=re.IGNORECASE)
+        clean_name = re.sub(r'SubP\d+line', 'line', clean_name, flags=re.IGNORECASE)
+        
         # Also check display name
         all_text = f"{clean_name} {field_display}"
         
@@ -764,12 +783,10 @@ class UniversalUSCISMapper:
             r'No\.?\s*(\d+[a-zA-Z]?)',
             r'Number\s*(\d+[a-zA-Z]?)',
             
-            # Field ID patterns
+            # Field ID patterns - updated to avoid part references
+            r'line(\d+[a-zA-Z]?)',  # line1a, line2b, etc.
             r'[_\.\-](\d+[a-zA-Z]?)$',  # At end
             r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # In middle
-            r'pt\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
-            r'P\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
-            r'Part\d+[_\.\-](\d+[a-zA-Z]?)',  # Part-based
             
             # Other patterns
             r'#(\d+[a-zA-Z]?)',
@@ -781,21 +798,25 @@ class UniversalUSCISMapper:
             match = re.search(pattern, clean_name, re.IGNORECASE)
             if match:
                 item = match.group(1)
-                return item.rstrip('.')
+                # Validate item - should be reasonable (1-99 with optional letter)
+                if re.match(r'^\d{1,2}[a-zA-Z]?$', item):
+                    return item.rstrip('.')
         
         # If not found, try on full text
         for pattern in patterns:
             match = re.search(pattern, all_text, re.IGNORECASE)
             if match:
                 item = match.group(1)
-                return item.rstrip('.')
+                # Validate item
+                if re.match(r'^\d{1,2}[a-zA-Z]?$', item):
+                    return item.rstrip('.')
         
         # Last resort: look for any reasonable field identifier
         # Extract all alphanumeric segments
         segments = re.findall(r'[a-zA-Z0-9]+', clean_name)
         for segment in reversed(segments):  # Start from end
-            # Check if segment looks like a field ID
-            if re.match(r'^\d{1,2}[a-zA-Z]?$', segment):
+            # Check if segment looks like a field ID (not a part reference)
+            if re.match(r'^\d{1,2}[a-zA-Z]?$', segment) and not re.match(r'^P\d+$', segment):
                 return segment
         
         return ""
@@ -822,30 +843,55 @@ class UniversalUSCISMapper:
         """Get TypeScript field type suffix based on field name and type"""
         field_name_lower = field_name.lower()
         
-        # Check special field types first
-        for key, suffix in SPECIAL_FIELD_TYPES.items():
-            if key.lower() in field_name_lower:
-                return suffix
+        # Clean the field name first to better match patterns
+        clean_name = re.sub(r'\[\d+\]', '', field_name_lower)
+        clean_name = re.sub(r'form\d*\.', '', clean_name)
+        clean_name = re.sub(r'#subform\d*\.', '', clean_name)
         
-        # Check for specific patterns
-        if 'addresstype' in field_name_lower or 'address_type' in field_name_lower:
-            return ":AddressTypeBox"
-        elif 'fullname' in field_name_lower or 'full_name' in field_name_lower:
+        # Check special field types first - be more specific
+        # Only assign FullName if it's explicitly a full name field
+        if any(pattern in clean_name for pattern in ['fullname', 'full_name', 'completename']):
             return ":FullName"
-        elif 'ssn' in field_name_lower or 'social' in field_name_lower:
+        
+        # Check for name fields - individual name fields should be TextBox
+        elif any(pattern in clean_name for pattern in ['lastname', 'last_name', 'familyname', 'family_name']):
+            return ":TextBox"  # Individual name fields are text boxes
+        elif any(pattern in clean_name for pattern in ['firstname', 'first_name', 'givenname', 'given_name']):
+            return ":TextBox"  # Individual name fields are text boxes
+        elif any(pattern in clean_name for pattern in ['middlename', 'middle_name', 'middleinitial', 'middle_initial']):
+            return ":TextBox"  # Individual name fields are text boxes
+        
+        # Check for specific field patterns
+        elif 'addresstype' in clean_name or 'address_type' in clean_name:
+            return ":AddressTypeBox"
+        elif any(pattern in clean_name for pattern in ['ssn', 'social_security', 'socialsecurity']):
             return ":SingleBox"
-        elif 'alien' in field_name_lower and 'number' in field_name_lower:
+        elif 'alien' in clean_name and any(pattern in clean_name for pattern in ['number', 'no', '#']):
+            return ":SingleBox"
+        elif 'representative' in clean_name and field_type == "radio":
+            return ":ConditionBox"
+        elif 'careofname' in clean_name or 'care_of_name' in clean_name:
+            return ":FullName"
+        elif any(pattern in clean_name for pattern in ['uscisaccount', 'uscis_account', 'onlineaccount']):
             return ":SingleBox"
         elif field_type == "radio":
             return ":ConditionBox"
         elif field_type == "checkbox":
             return ":CheckBox"
-        elif field_type == "date":
+        elif field_type == "date" or any(pattern in clean_name for pattern in ['date', 'fecha', 'dob']):
             return ":Date"
-        elif field_type == "signature":
+        elif field_type == "signature" or 'signature' in clean_name:
             return ":SignatureBox"
+        elif field_type == "select" or field_type == "listbox":
+            return ":SelectBox"
+        elif any(pattern in clean_name for pattern in ['phone', 'telephone', 'fax']):
+            return ":TextBox"  # Phone numbers are usually text boxes
+        elif 'email' in clean_name:
+            return ":TextBox"  # Email is a text box
+        elif any(pattern in clean_name for pattern in ['number', 'count', 'total']) and not 'phone' in clean_name:
+            return ":NumberBox"  # Numeric fields
         
-        # Default mapping
+        # Default mapping based on field type
         return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
     def _generate_description(self, field_name: str, field_display: str = "") -> str:
@@ -880,14 +926,23 @@ class UniversalUSCISMapper:
             r'^field\.',
             r'^Page\d+\.',
             
-            # Part patterns (we'll handle these separately)
+            # Part patterns - clean these to avoid confusion
             r'^Part\d+[_\.\-]',
             r'^P\d+[_\.\-]',
             r'^pt\d+[_\.\-]',
+            r'P\d+line\d+[a-zA-Z]?[_\.\-]?',  # Remove P1line1a type patterns
+            r'Part\d+line\d+[a-zA-Z]?[_\.\-]?',  # Remove Part1line1a type patterns
+            
+            # Sub-patterns that might be misleading
+            r'^Sub\s*P\d+line\d+[a-zA-Z]?\s*',  # Remove "Sub P1line1a" prefix
+            r'^SubP\d+line\d+[a-zA-Z]?\s*',     # Remove "SubP1line1a" prefix
         ]
         
         for pattern in cleaning_patterns:
             desc = re.sub(pattern, '', desc, flags=re.IGNORECASE)
+        
+        # Additional cleaning for line references
+        desc = re.sub(r'line\d+[a-zA-Z]?[_\.\-]?', '', desc, flags=re.IGNORECASE)
         
         # Extract meaningful part after cleaning
         # Look for the last meaningful segment
@@ -898,7 +953,7 @@ class UniversalUSCISMapper:
             # Skip empty or purely numeric segments
             if segment and not segment.isdigit() and len(segment) > 1:
                 # Skip common technical terms
-                if segment.lower() not in ['form', 'page', 'field', 'subform', 'text', 'checkbox']:
+                if segment.lower() not in ['form', 'page', 'field', 'subform', 'text', 'checkbox', 'sub']:
                     meaningful_segments.append(segment)
         
         # Use the most meaningful segment
@@ -909,26 +964,35 @@ class UniversalUSCISMapper:
         desc = desc.strip('._- ')
         
         # If we still have technical junk, try different approach
-        if not desc or desc.lower() in ['field', 'text', 'checkbox', 'radio']:
+        if not desc or desc.lower() in ['field', 'text', 'checkbox', 'radio', 'sub']:
             # Try to extract from original field name
             parts = field_name.split('.')
             for part in reversed(parts):
                 clean_part = re.sub(r'\[\d+\]', '', part)
+                clean_part = re.sub(r'P\d+line\d+[a-zA-Z]?', '', clean_part, flags=re.IGNORECASE)
+                clean_part = re.sub(r'line\d+[a-zA-Z]?', '', clean_part, flags=re.IGNORECASE)
                 if clean_part and not clean_part.isdigit() and len(clean_part) > 2:
-                    if clean_part.lower() not in ['form', 'page', 'field', 'subform']:
+                    if clean_part.lower() not in ['form', 'page', 'field', 'subform', 'sub']:
                         desc = clean_part
                         break
         
         # Handle underscores and camelCase
         if '_' in desc:
             parts = desc.split('_')
-            desc = ' '.join([p for p in parts if p and not p.isdigit()])
+            # Filter out part references
+            parts = [p for p in parts if p and not p.isdigit() and not re.match(r'^P\d+$', p, re.IGNORECASE)]
+            desc = ' '.join(parts)
         
         # Convert camelCase to spaces
         desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', desc)
         
-        # Expand common abbreviations
+        # Expand common abbreviations and fix common field names
         abbreviations = {
+            'FamilyName': 'Last Name',
+            'GivenName': 'First Name',
+            'MiddleName': 'Middle Name',
+            'LastName': 'Last Name',
+            'FirstName': 'First Name',
             'Apt': 'Apartment',
             'Ste': 'Suite',
             'Flr': 'Floor',
@@ -965,26 +1029,32 @@ class UniversalUSCISMapper:
             'Intl': 'International'
         }
         
+        # Apply abbreviation expansions
         for abbr, full in abbreviations.items():
+            # Case-insensitive replacement for whole words
             desc = re.sub(rf'\b{abbr}\b', full, desc, flags=re.IGNORECASE)
         
         # Clean up and format
         desc = ' '.join(desc.split())
         desc = desc.strip('._- ')
         
+        # Remove any remaining "Sub" prefix
+        if desc.startswith('Sub '):
+            desc = desc[4:]
+        
         # Smart title case (preserve acronyms)
         if desc:
             words = desc.split()
             result = []
             for word in words:
-                if word.isupper() and len(word) > 1:
+                if word.isupper() and len(word) > 1 and word not in ['SSN', 'EIN', 'FEIN', 'LLC']:
                     result.append(word)  # Keep acronyms
                 else:
                     result.append(word.capitalize())
             desc = ' '.join(result)
         
-        # If still empty or generic, provide a default
-        if not desc or desc.lower() in ['field', 'text', '']:
+        # If still empty or generic, provide a default based on item
+        if not desc or desc.lower() in ['field', 'text', '', 'sub']:
             # Try to use item number if available
             item_match = re.search(r'(\d+[a-zA-Z]?)', field_name)
             if item_match:
@@ -1166,20 +1236,69 @@ class UniversalUSCISMapper:
         """Get suggestions specific to G-28 form"""
         suggestions = []
         field_name = field.raw_name.lower()
+        clean_name = field.clean_name.lower()
+        desc_lower = field.description.lower()
         
         # Part 0/1 - Attorney Information
         if "part 0" in field.part.lower() or ("part 1" in field.part.lower() and "attorney" in field.part.lower()):
-            if "bar" in field_name and "number" in field_name:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "G-28 attorney bar number"))
-            elif "licensing" in field_name:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "G-28 licensing authority"))
-            elif "uscis" in field_name and "account" in field_name:
+            # Name fields
+            if any(p in desc_lower for p in ['last name', 'family name', 'apellido']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
+            elif any(p in desc_lower for p in ['first name', 'given name', 'nombre']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
+            elif any(p in desc_lower for p in ['middle name', 'middle initial']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
+            
+            # Bar and licensing
+            elif "bar" in field_name and any(p in field_name for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
+            elif "licensing" in field_name and "authority" in field_name:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
+            elif "highest" in field_name and "court" in field_name:
+                if "state" in field_name:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateOfHighestCourt", 0.9, "State of highest court"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.nameOfHighestCourt", 0.9, "Name of highest court"))
+            
+            # Contact information
+            elif any(p in field_name for p in ['phone', 'telephone']):
+                if "mobile" in field_name or "cell" in field_name:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.9, "Attorney mobile phone"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.9, "Attorney work phone"))
+            elif "email" in field_name:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
+            elif "fax" in field_name:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
+            
+            # USCIS account
+            elif "uscis" in field_name and any(p in field_name for p in ['account', 'online']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
+            
+            # Signature
+            elif "signature" in field_name:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.signature", 0.9, "Attorney signature"))
+        
+        # Part 2 - Law Firm Information (if exists)
+        elif "part 2" in field.part.lower() or "firm" in field.part.lower():
+            if any(p in field_name for p in ['firm', 'organization']) and "name" in field_name:
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
+            elif "fein" in field_name or ("tax" in field_name and "id" in field_name):
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
         
         # Part 3 - Client Information
-        elif "part 3" in field.part.lower():
-            if "petitioner" in field_name or "client" in field_name:
-                suggestions.append(MappingSuggestion("customer.customer_name", 0.85, "G-28 client name"))
+        elif "part 3" in field.part.lower() or "client" in field.part.lower():
+            if any(p in field_name for p in ['petitioner', 'client', 'applicant']) and "name" in field_name:
+                suggestions.append(MappingSuggestion("customer.customer_name", 0.85, "Client/Company name"))
+            elif any(p in desc_lower for p in ['alien', 'uscis']) and "number" in desc_lower:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.85, "Client alien number"))
+        
+        # Address fields (check context)
+        if any(p in field_name for p in ['street', 'address']) and not any(p in field_name for p in ['city', 'state', 'zip']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street address"))
+            elif "firm" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
         
         return suggestions
     
