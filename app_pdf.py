@@ -354,62 +354,81 @@ class UniversalUSCISMapper:
             if not part_match:
                 part_num = "0"
         
-        # Clean the field name more aggressively
-        clean_name = field_name
-        
-        # Remove all the form structure patterns
-        patterns_to_remove = [
-            r'form\d*\[\d+\]\.',
-            r'#subform\[\d+\]\.',
-            r'#pageSet\[\d+\]\.',
-            r'Page\d+\[\d+\]\.',
-            r'PDF417BarCode\d*\[\d+\]',
-            r'topmostSubform\[\d+\]\.',
-            r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
-            r'Pdf417bar\s*Code\d+',
-            r'\[\d+\]',
-            r'^#',
-            r'\.pdf$',
-            r'^Page\d+\.',
-            r'^form\.',
-            r'^field\.',
-            r'P\d+line',
-            r'Part\d+line',
-            r'SubP\d+line',
-        ]
-        
-        for pattern in patterns_to_remove:
-            clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
-        
-        # Extract meaningful field identifier
+        # Use the item if provided from extraction
         field_id = item
         
         if not field_id:
+            # Check for SubP patterns first - PRIORITIZE THIS
+            subp_match = re.search(r'SubP\d+line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+            if subp_match:
+                field_id = subp_match.group(1)
+                # IMPORTANT: Return early to avoid overwriting
+                return f"P{part_num}_{field_id}"
+            
+            # Clean the field name more aggressively
+            clean_name = field_name
+            
+            # Remove all the form structure patterns
+            patterns_to_remove = [
+                r'form\d*\[\d+\]\.',
+                r'#subform\[\d+\]\.',
+                r'#pageSet\[\d+\]\.',
+                r'Page\d+\[\d+\]\.',
+                r'PDF417BarCode\d*\[\d+\]',
+                r'topmostSubform\[\d+\]\.',
+                r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
+                r'Pdf417bar\s*Code\d+',
+                r'\[\d+\]',
+                r'^#',
+                r'\.pdf$',
+                r'^Page\d+\.',
+                r'^form\.',
+                r'^field\.',
+                r'P\d+line',
+                r'Part\d+line',
+                r'SubP\d+line',
+            ]
+            
+            for pattern in patterns_to_remove:
+                clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
+            
+            # Look for line patterns FIRST before other processing
+            line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+            if line_match:
+                field_id = line_match.group(1)
+                # Validate it's a reasonable field ID
+                if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
+                    return f"P{part_num}_{field_id}"
+            
             # Try to extract from the cleaned field name
             # Look for common patterns
             patterns = [
                 # Look for specific field patterns first
-                r'AttorneyStateBarNumber',  # -> would become something like P0_1a
                 r'P(\d+)_(\d+[a-zA-Z]?)',   # Already in format
                 r'Part(\d+)_(\d+[a-zA-Z]?)', # Part format
-                r'line(\d+[a-zA-Z]?)',       # line patterns
                 r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',
                 r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',
                 r'_(\d+[a-zA-Z]?)$',         # End numbers
                 r'#(\d+[a-zA-Z]?)',          # Hash numbers
+                r'\b(\d{1,2}[a-zA-Z]?)\b$',  # Numbers at end
             ]
             
             # Special handling for known field types
             if 'AttorneyStateBarNumber' in clean_name:
-                field_id = '1a'  # Or whatever convention you want
-            elif 'FamilyName' in clean_name or 'LastName' in clean_name:
-                field_id = '3a'
-            elif 'GivenName' in clean_name or 'FirstName' in clean_name:
-                field_id = '3b'
-            elif 'MiddleName' in clean_name:
-                field_id = '3c'
+                # Look for a number pattern in the original field name
+                num_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+                if num_match:
+                    field_id = num_match.group(1)
+                else:
+                    field_id = '2a'  # Default for state bar number
+            elif any(name in clean_name for name in ['FamilyName', 'LastName', 'Apellido']):
+                field_id = field_id or '1a'  # Default for family name
+            elif any(name in clean_name for name in ['GivenName', 'FirstName', 'Nombre']):
+                field_id = field_id or '1b'  # Default for given name
+            elif any(name in clean_name for name in ['MiddleName', 'MiddleInitial']):
+                field_id = field_id or '1c'  # Default for middle name
             else:
-                # Try patterns
+                # Try patterns on clean name
                 for pattern in patterns:
                     match = re.search(pattern, clean_name, re.IGNORECASE)
                     if match:
@@ -418,139 +437,47 @@ class UniversalUSCISMapper:
                             field_id = match.group(2)
                         else:
                             field_id = match.group(1) if match.lastindex == 1 else match.group(match.lastindex)
-                        break
+                        # Validate field ID
+                        if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
+                            break
+                        else:
+                            field_id = None  # Invalid, keep looking
         
-        # If still no field ID, try to extract any number
+        # If still no field ID, try to extract any reasonable number
         if not field_id:
-            numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', clean_name)
+            # Look for standalone numbers in original field name
+            numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', field_name)
             if numbers:
-                field_id = numbers[-1]
+                # Filter out part numbers and other invalid patterns
+                valid_numbers = [n for n in numbers if not re.match(r'^0\d$', n) and not re.match(r'^\d{3,}', n)]
+                if valid_numbers:
+                    # Prefer numbers that look like field IDs (e.g., 1a, 2b, 3, etc.)
+                    for num in valid_numbers:
+                        if re.match(r'^\d{1,2}[a-zA-Z]?$', num):
+                            field_id = num
+                            break
+                    if not field_id and valid_numbers:
+                        field_id = valid_numbers[-1]
         
         # Last resort - use counter
         if not field_id:
             field_id = str(self.field_counter)
             self.field_counter += 1
         
-        # Clean up field ID
+        # Clean up field ID - remove any trailing text
         field_id = field_id.strip('._- ')
         
-        # Ensure field ID is reasonable length
-        if len(field_id) > 5:
-            # Try to extract just the numeric part with optional letter
-            match = re.search(r'(\d{1,2}[a-zA-Z]?)', field_id)
-            if match:
-                field_id = match.group(1)
-            else:
-                field_id = field_id[:5]
+        # Final validation - ensure field ID is ONLY number + optional letter
+        field_id_match = re.match(r'^(\d{1,2}[a-zA-Z]?)', field_id)
+        if field_id_match:
+            field_id = field_id_match.group(1)
+        else:
+            # If still invalid, use counter
+            field_id = str(self.field_counter)
+            self.field_counter += 1
         
         # Construct the clean name
         return f"P{part_num}_{field_id}"
-    def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
-        """Extract all fields from any USCIS PDF form with accurate part detection"""
-        fields = []
-        self.field_counter = 1  # Initialize field counter
-        
-        try:
-            pdf_bytes = pdf_file.read()
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            
-            # Clean form type to get base form name
-            base_form_type = form_type.split(' - ')[0].strip()
-            
-            # Check if this form has attorney section
-            has_attorney_section = base_form_type in ["G-28", "I-129", "I-130", "I-140"]
-            
-            # First pass: collect all field names to understand structure
-            all_field_data = []
-            field_index = 0
-            seen_fields = set()  # Track seen field names to avoid duplicates
-            
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                for widget in page.widgets():
-                    if widget.field_name:
-                        # Skip duplicate field names
-                        if widget.field_name in seen_fields:
-                            continue
-                        seen_fields.add(widget.field_name)
-                        
-                        all_field_data.append({
-                            'name': widget.field_name,
-                            'page': page_num + 1,
-                            'widget': widget,
-                            'index': field_index,
-                            'display': widget.field_display or ""
-                        })
-                        field_index += 1
-            
-            # Analyze field names to understand part structure
-            part_mapping = self._analyze_form_structure_advanced(all_field_data, base_form_type, has_attorney_section)
-            
-            # Second pass: create field objects with correct parts
-            for field_data in all_field_data:
-                widget = field_data['widget']
-                
-                # Extract field information
-                field_type = self._get_field_type(widget)
-                
-                # Get part from our analysis
-                part = part_mapping.get(field_data['index'], f"Page {field_data['page']}")
-                
-                # Extract item
-                item = self._extract_item_advanced(widget.field_name, field_data['display'])
-                
-                # Generate description
-                description = self._generate_description(widget.field_name, widget.field_display)
-                
-                # Determine field type suffix
-                field_type_suffix = self._get_field_type_suffix(widget.field_name, field_type)
-                
-                # Generate clean name for export
-                clean_name = self._clean_field_name_for_export(widget.field_name, part, item)
-                
-                # Create field object
-                pdf_field = PDFField(
-                    index=field_data['index'],
-                    raw_name=widget.field_name,
-                    field_type=field_type,
-                    value=widget.field_value or '',
-                    page=field_data['page'],
-                    part=part,
-                    item=item,
-                    description=description,
-                    field_type_suffix=field_type_suffix,
-                    clean_name=clean_name
-                )
-                
-                # Get mapping suggestions
-                suggestions = self._get_mapping_suggestions(pdf_field, base_form_type)
-                if suggestions:
-                    best_suggestion = suggestions[0]
-                    pdf_field.db_mapping = best_suggestion.db_path
-                    pdf_field.confidence_score = best_suggestion.confidence
-                    pdf_field.mapping_type = best_suggestion.field_type
-                    pdf_field.is_mapped = False  # Not mapped yet, just suggested
-                    pdf_field.is_questionnaire = False
-                else:
-                    # No mapping found - mark as questionnaire by default
-                    pdf_field.is_questionnaire = True
-                    pdf_field.is_mapped = False
-                    pdf_field.db_mapping = None
-                
-                fields.append(pdf_field)
-            
-            doc.close()
-            
-            # Display extraction summary
-            self._display_extraction_summary(fields, form_type)
-            
-        except Exception as e:
-            st.error(f"Error extracting PDF: {str(e)}")
-            import traceback
-            st.error(traceback.format_exc())
-            return []
-        
-        return fields
     
     def add_custom_field(self, part: str, item: str, description: str, field_type: str = "text") -> PDFField:
         """Add a custom field to the form"""
