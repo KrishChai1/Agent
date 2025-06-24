@@ -478,6 +478,148 @@ def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "
         
         # Construct the clean name
         return f"P{part_num}_{field_id}"
+    
+    def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
+        """Extract all fields from any USCIS PDF form with accurate part detection"""
+        fields = []
+        self.field_counter = 1  # Initialize field counter
+        
+        try:
+            pdf_bytes = pdf_file.read()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            # Clean form type to get base form name
+            base_form_type = form_type.split(' - ')[0].strip()
+            
+            # Check if this form has attorney section
+            has_attorney_section = base_form_type in ["G-28", "I-129", "I-130", "I-140"]
+            
+            # First pass: collect all field names to understand structure
+            all_field_data = []
+            field_index = 0
+            seen_fields = set()  # Track seen field names to avoid duplicates
+            
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                for widget in page.widgets():
+                    if widget.field_name:
+                        # Skip duplicate field names
+                        if widget.field_name in seen_fields:
+                            continue
+                        seen_fields.add(widget.field_name)
+                        
+                        all_field_data.append({
+                            'name': widget.field_name,
+                            'page': page_num + 1,
+                            'widget': widget,
+                            'index': field_index,
+                            'display': widget.field_display or ""
+                        })
+                        field_index += 1
+            
+            # Analyze field names to understand part structure
+            part_mapping = self._analyze_form_structure_advanced(all_field_data, base_form_type, has_attorney_section)
+            
+            # Second pass: create field objects with correct parts
+            for field_data in all_field_data:
+                widget = field_data['widget']
+                
+                # Extract field information
+                field_type = self._get_field_type(widget)
+                
+                # Get part from our analysis
+                part = part_mapping.get(field_data['index'], f"Page {field_data['page']}")
+                
+                # Extract item
+                item = self._extract_item_advanced(widget.field_name, field_data['display'])
+                
+                # Generate description
+                description = self._generate_description(widget.field_name, widget.field_display)
+                
+                # Determine field type suffix
+                field_type_suffix = self._get_field_type_suffix(widget.field_name, field_type)
+                
+                # Generate clean name for export
+                clean_name = self._clean_field_name_for_export(widget.field_name, part, item)
+                
+                # Create field object
+                pdf_field = PDFField(
+                    index=field_data['index'],
+                    raw_name=widget.field_name,
+                    field_type=field_type,
+                    value=widget.field_value or '',
+                    page=field_data['page'],
+                    part=part,
+                    item=item,
+                    description=description,
+                    field_type_suffix=field_type_suffix,
+                    clean_name=clean_name
+                )
+                
+                # Get mapping suggestions
+                suggestions = self._get_mapping_suggestions(pdf_field, base_form_type)
+                if suggestions:
+                    best_suggestion = suggestions[0]
+                    pdf_field.db_mapping = best_suggestion.db_path
+                    pdf_field.confidence_score = best_suggestion.confidence
+                    pdf_field.mapping_type = best_suggestion.field_type
+                    pdf_field.is_mapped = False  # Not mapped yet, just suggested
+                    pdf_field.is_questionnaire = False
+                else:
+                    # No mapping found - mark as questionnaire by default
+                    pdf_field.is_questionnaire = True
+                    pdf_field.is_mapped = False
+                    pdf_field.db_mapping = None
+                
+                fields.append(pdf_field)
+            
+            doc.close()
+            
+            # Display extraction summary
+            self._display_extraction_summary(fields, form_type)
+            
+        except Exception as e:
+            st.error(f"Error extracting PDF: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+            return []
+        
+        return fields
+    
+    def add_custom_field(self, part: str, item: str, description: str, field_type: str = "text") -> PDFField:
+        """Add a custom field to the form"""
+        # Generate unique index
+        custom_index = st.session_state.custom_field_counter
+        st.session_state.custom_field_counter += 1
+        
+        # Extract part number for clean name
+        part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
+        part_num = part_match.group(1) if part_match else "1"
+        
+        # Generate clean name
+        clean_name = f"P{part_num}_{item}" if item else f"P{part_num}_custom{custom_index}"
+        
+        # Determine field type suffix
+        field_type_suffix = FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
+        
+        # Create custom field
+        custom_field = PDFField(
+            index=custom_index,
+            raw_name=f"custom_field_{custom_index}",
+            field_type=field_type,
+            value="",
+            page=1,
+            part=part,
+            item=item,
+            description=description,
+            field_type_suffix=field_type_suffix,
+            clean_name=clean_name,
+            is_custom_field=True,
+            is_questionnaire=True  # Default to questionnaire
+        )
+        
+        return custom_field
+    
     def _clean_field_name_for_analysis(self, field_name: str) -> str:
         """Clean field name for better pattern analysis"""
         # Remove common noise patterns
