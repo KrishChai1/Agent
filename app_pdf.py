@@ -1108,8 +1108,8 @@ class UniversalUSCISMapper:
     "defaultData": {self._format_data_section(categories['defaultData'])},
     "conditionalData": {self._format_conditional_section(categories['conditionalData'])},
     "caseData": {self._format_data_section(categories['caseData'])},
-    "lcaData": {self._format_data_section(categories['lcaData'])}
-}}""
+    "lcaData": {self._format_data_section(categories['lcaData'])} 
+}}
         
         return ts_content
     
