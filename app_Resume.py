@@ -931,7 +931,151 @@ class EnhancedResumeParser:
         
         return self.parsed_data
 
-# Replace the main function to use the enhanced parser
+def apply_custom_css():
+    """Apply custom CSS for TrackTalents branding"""
+    import streamlit as st
+    st.markdown("""
+    <style>
+    /* Import Google Fonts */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+    
+    /* Global Styles */
+    .main {
+        font-family: 'Poppins', sans-serif;
+    }
+    
+    /* TrackTalents Header */
+    .track-talents-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 15px;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+    }
+    
+    .track-talents-logo {
+        font-size: 3rem;
+        font-weight: 700;
+        color: white;
+        margin-bottom: 0.5rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+    
+    .track-talents-tagline {
+        font-size: 1.3rem;
+        color: rgba(255,255,255,0.95);
+        font-weight: 300;
+    }
+    
+    /* Upload Section */
+    .upload-section {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        padding: 2.5rem;
+        border-radius: 20px;
+        border: 3px dashed #667eea;
+        text-align: center;
+        margin: 2rem 0;
+        transition: all 0.3s ease;
+    }
+    
+    .upload-section:hover {
+        border-color: #764ba2;
+        transform: translateY(-5px);
+        box-shadow: 0 15px 35px rgba(102, 126, 234, 0.2);
+    }
+    
+    /* Metrics Cards */
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        border-left: 5px solid #667eea;
+        margin: 1rem 0;
+        transition: all 0.3s ease;
+    }
+    
+    .metric-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 12px 35px rgba(0,0,0,0.15);
+    }
+    
+    /* Success Message */
+    .success-message {
+        background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+        color: white;
+        padding: 1.5rem;
+        border-radius: 15px;
+        text-align: center;
+        margin: 1rem 0;
+        font-weight: 500;
+        box-shadow: 0 8px 25px rgba(76, 175, 80, 0.3);
+    }
+    
+    /* Download Section */
+    .download-section {
+        background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+        padding: 2rem;
+        border-radius: 20px;
+        margin: 2rem 0;
+        border: 2px solid rgba(102, 126, 234, 0.2);
+    }
+    
+    /* Button Styling */
+    .stButton > button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        padding: 0.75rem 2rem;
+        font-weight: 500;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+    }
+    
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+    }
+    
+    /* Footer */
+    .track-talents-footer {
+        text-align: center;
+        padding: 2rem;
+        background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+        border-radius: 15px;
+        margin-top: 3rem;
+        color: #666;
+    }
+    
+    /* Enhancement Badge */
+    .enhancement-badge {
+        background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%);
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-weight: 600;
+        display: inline-block;
+        margin: 1rem 0;
+        box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+def create_track_talents_header():
+    """Create the TrackTalents branded header"""
+    import streamlit as st
+    st.markdown("""
+    <div class="track-talents-header">
+        <div class="track-talents-logo">🎯 TrackTalents</div>
+        <div class="track-talents-tagline">AI-Powered Resume Parser & Talent Analytics</div>
+        <div class="enhancement-badge">✨ Enhanced with Advanced AI ✨</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# Replace the main function to use the enhanced parser with full UI
 def main():
     import streamlit as st
     import pandas as pd
@@ -943,11 +1087,50 @@ def main():
         layout="wide"
     )
     
-    # Apply custom CSS (keeping the original CSS function)
-    # apply_custom_css()  # You'll need to copy this from the original
+    # Apply custom CSS
+    apply_custom_css()
     
-    st.markdown("# 🎯 TrackTalents - Enhanced Resume Parser")
-    st.markdown("**New Features:** Better name detection & accurate skills experience estimation")
+    # TrackTalents Header
+    create_track_talents_header()
+    
+    # Sidebar with proper styling
+    st.sidebar.header("📋 Instructions")
+    st.sidebar.markdown("""
+    **How to Use:**
+    1. Upload your resume file
+    2. Supported formats: PDF, DOCX, TXT
+    3. Click 'Parse Resume' to extract information
+    4. Download the structured JSON data
+    
+    **✨ New Enhanced Features:**
+    - **Smart Name Detection** - Multiple strategies for accurate name extraction
+    - **Intelligent Skills Analysis** - Real experience estimation from resume content
+    - **Context-Aware Parsing** - Better understanding of resume structure
+    - **Career Level Detection** - Adjusts estimates based on seniority
+    
+    **Original Features:**
+    - Advanced AI parsing
+    - Skills detection
+    - Contact extraction
+    - Work history analysis
+    - Education parsing
+    - JSON export
+    """)
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**🆕 Enhancement Highlights:**")
+    st.sidebar.success("✅ Better Name Recognition")
+    st.sidebar.success("✅ Accurate Skills Experience")
+    st.sidebar.success("✅ Context-Aware Analysis")
+    st.sidebar.success("✅ Zero New Dependencies")
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Support:**")
+    st.sidebar.markdown("📧 support@tracktalents.com")
+    st.sidebar.markdown("🌐 www.tracktalents.com")
+    
+    # Main content
+    st.markdown("## 📁 Upload Resume")
     
     # File upload
     uploaded_file = st.file_uploader(
@@ -957,7 +1140,22 @@ def main():
     )
     
     if uploaded_file is not None:
-        st.success(f"✅ File uploaded: **{uploaded_file.name}**")
+        # Success message
+        st.markdown(f"""
+        <div class="success-message">
+            ✅ File uploaded successfully: <strong>{uploaded_file.name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # File information
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("File Name", uploaded_file.name)
+        with col2:
+            st.metric("File Size", f"{uploaded_file.size:,} bytes")
+        with col3:
+            st.metric("File Type", uploaded_file.type or "Unknown")
         
         if st.button("🚀 Parse with Enhanced AI", type="primary"):
             with st.spinner("Processing with enhanced algorithms..."):
@@ -973,69 +1171,254 @@ def main():
                         text_content = parser.extract_text_from_docx(uploaded_file)
                     elif file_extension == 'txt':
                         text_content = parser.extract_text_from_txt(uploaded_file)
+                    else:
+                        st.error("Unsupported file format")
+                        return
                     
                     if not text_content.strip():
                         st.error("Could not extract text from the file")
                         return
                     
-                    # Parse with enhanced methods
+                    # Parse the resume with enhanced methods
                     parsed_data = parser.parse_resume(text_content, uploaded_file.name)
                     
-                    st.success("✅ Resume parsed successfully!")
+                    st.success("✅ Resume parsed successfully with Enhanced AI!")
                     
-                    # Display results
+                    # Display results in tabs
+                    tab1, tab2, tab3, tab4 = st.tabs(["📊 Enhanced Summary", "👤 Personal Info", "💼 Experience & Skills", "📥 Download JSON"])
+                    
                     data = parsed_data["ResumeParserData"]
                     
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        st.subheader("👤 Name Detection")
-                        full_name = f"{data['FirstName']} {data['Middlename']} {data['LastName']}".strip()
-                        if full_name.strip():
-                            st.success(f"**Name:** {full_name}")
-                        else:
-                            st.warning("Name not detected")
+                    with tab1:
+                        st.subheader("📋 Enhanced Resume Summary")
                         
-                        st.write(f"**Email:** {data['Email']}")
-                        st.write(f"**Phone:** {data['Phone']}")
+                        # Enhancement indicators
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("### 👤 **Enhanced Name Detection**")
+                            full_name = f"{data['FirstName']} {data['Middlename']} {data['LastName']}".strip()
+                            if full_name.strip():
+                                st.success(f"✅ **Name Found:** {full_name}")
+                            else:
+                                st.warning("⚠️ Name not detected")
+                            
+                            st.write("**Email:**", data['Email'])
+                            st.write("**Phone:**", data['Phone'])
+                            st.write("**LinkedIn:**", data['LinkedInProfileUrl'] or "Not found")
+                        
+                        with col2:
+                            st.markdown("### 🛠️ **Enhanced Skills Analysis**")
+                            skills = data['SkillsKeywords']['OperationalSkills']['SkillSet']
+                            if skills:
+                                st.success(f"✅ **Skills Found:** {len(skills)} with accurate experience")
+                                
+                                # Show top skills with enhanced experience
+                                st.markdown("**Top Skills with Experience:**")
+                                for skill in skills[:5]:
+                                    months = int(skill['ExperienceInMonths'])
+                                    years = months // 12
+                                    remaining_months = months % 12
+                                    
+                                    if years > 0:
+                                        exp_str = f"{years}y {remaining_months}m" if remaining_months > 0 else f"{years}y"
+                                    else:
+                                        exp_str = f"{remaining_months}m"
+                                    
+                                    st.write(f"• **{skill['Skill']}**: {exp_str}")
+                            else:
+                                st.warning("⚠️ No skills detected")
+                        
+                        # Summary metrics
+                        st.markdown("### 📊 **Summary Metrics**")
+                        col1, col2, col3, col4 = st.columns(4)
+                        
+                        with col1:
+                            st.metric("Category", data['Category'] or "Not categorized")
+                        with col2:
+                            st.metric("Sub-Category", data['SubCategory'] or "Not specified")
+                        with col3:
+                            st.metric("Current Employer", data['CurrentEmployer'] or "Not found")
+                        with col4:
+                            st.metric("Experience", data['WorkedPeriod'] or "Not specified")
                     
-                    with col2:
-                        st.subheader("🛠️ Skills Analysis")
+                    with tab2:
+                        st.subheader("👤 Personal Information")
+                        
+                        personal_data = {
+                            "First Name": data['FirstName'],
+                            "Middle Name": data['Middlename'],
+                            "Last Name": data['LastName'],
+                            "Email": data['Email'],
+                            "Phone": data['Phone'],
+                            "LinkedIn": data['LinkedInProfileUrl'],
+                            "City": data['City'],
+                            "State": data['State'],
+                            "Zip Code": data['ZipCode']
+                        }
+                        
+                        df_personal = pd.DataFrame(list(personal_data.items()), columns=['Field', 'Value'])
+                        st.dataframe(df_personal, use_container_width=True)
+                        
+                        if data['Qualification']:
+                            st.subheader("🎓 Education")
+                            st.write(data['Qualification'])
+                    
+                    with tab3:
+                        st.subheader("💼 Skills & Experience Analysis")
+                        
+                        # Enhanced Skills section
                         skills = data['SkillsKeywords']['OperationalSkills']['SkillSet']
-                        st.write(f"**Skills Found:** {len(skills)}")
-                        
                         if skills:
-                            for skill in skills[:5]:
-                                months = int(skill['ExperienceInMonths'])
-                                years = months // 12
-                                remaining_months = months % 12
-                                
-                                if years > 0:
-                                    exp_str = f"{years}y {remaining_months}m" if remaining_months > 0 else f"{years}y"
-                                else:
-                                    exp_str = f"{remaining_months}m"
-                                
-                                st.write(f"• **{skill['Skill']}:** {exp_str}")
+                            st.write(f"**Total Skills Found:** {len(skills)}")
+                            
+                            # Create enhanced skills DataFrame
+                            skills_df = pd.DataFrame(skills)
+                            skills_df['ExperienceYears'] = (skills_df['ExperienceInMonths'].astype(int) / 12).round(1)
+                            skills_df = skills_df.sort_values('ExperienceYears', ascending=False)
+                            
+                            # Display skills table
+                            display_df = skills_df[['Skill', 'ExperienceYears', 'ExperienceInMonths']].copy()
+                            display_df.columns = ['Skill', 'Years of Experience', 'Months']
+                            st.dataframe(display_df, use_container_width=True)
+                            
+                            # Skills categories breakdown
+                            st.subheader("📈 Skills Experience Distribution")
+                            
+                            # Create experience ranges
+                            expert_skills = skills_df[skills_df['ExperienceYears'] >= 5]['Skill'].tolist()
+                            experienced_skills = skills_df[(skills_df['ExperienceYears'] >= 2) & (skills_df['ExperienceYears'] < 5)]['Skill'].tolist()
+                            beginner_skills = skills_df[skills_df['ExperienceYears'] < 2]['Skill'].tolist()
+                            
+                            col1, col2, col3 = st.columns(3)
+                            
+                            with col1:
+                                st.markdown("**🏆 Expert Level (5+ years)**")
+                                for skill in expert_skills[:5]:
+                                    st.write(f"• {skill}")
+                                if len(expert_skills) > 5:
+                                    st.write(f"... and {len(expert_skills) - 5} more")
+                            
+                            with col2:
+                                st.markdown("**⭐ Experienced (2-5 years)**")
+                                for skill in experienced_skills[:5]:
+                                    st.write(f"• {skill}")
+                                if len(experienced_skills) > 5:
+                                    st.write(f"... and {len(experienced_skills) - 5} more")
+                            
+                            with col3:
+                                st.markdown("**🌱 Developing (< 2 years)**")
+                                for skill in beginner_skills[:5]:
+                                    st.write(f"• {skill}")
+                                if len(beginner_skills) > 5:
+                                    st.write(f"... and {len(beginner_skills) - 5} more")
+                            
+                            # Skills summary
+                            skill_names = [skill['Skill'] for skill in skills]
+                            st.write("**All Skills:**", ", ".join(skill_names))
+                        else:
+                            st.write("No skills detected")
+                        
+                        # Experience section
+                        st.subheader("💼 Work Experience")
+                        st.write("**Total Experience:**", data['WorkedPeriod'])
+                        st.write("**Current Employer:**", data['CurrentEmployer'])
+                        st.write("**Job Profile:**", data['JobProfile'])
+                        
+                        # Work history
+                        work_history = data['SegrigatedExperience']['WorkHistory']
+                        if work_history:
+                            st.subheader("📋 Work History")
+                            for i, job in enumerate(work_history[:3]):
+                                st.write(f"**{i+1}. {job['Employer']}** - {job['JobProfile']}")
+                                st.write(f"   📅 {job['JobPeriod']}")
                     
-                    # Skills table
-                    if skills:
-                        st.subheader("📊 Complete Skills Breakdown")
-                        skills_df = pd.DataFrame(skills)
-                        skills_df['Years'] = (skills_df['ExperienceInMonths'].astype(int) / 12).round(1)
-                        display_df = skills_df[['Skill', 'Years']].sort_values('Years', ascending=False)
-                        st.dataframe(display_df, use_container_width=True)
-                    
-                    # Download
-                    json_string = json.dumps(parsed_data, indent=2)
-                    st.download_button(
-                        label="📥 Download Enhanced JSON",
-                        data=json_string,
-                        file_name=f"enhanced_{uploaded_file.name}.json",
-                        mime="application/json"
-                    )
+                    with tab4:
+                        st.markdown("""
+                        <div class="download-section">
+                            <h3 style="color: #667eea; text-align: center; margin-bottom: 2rem;">📥 Download Enhanced Results</h3>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Enhanced JSON download
+                        json_string = json.dumps(parsed_data, indent=2)
+                        st.download_button(
+                            label="📋 Download Complete Enhanced JSON",
+                            data=json_string,
+                            file_name=f"tracktalents_enhanced_{uploaded_file.name}.json",
+                            mime="application/json",
+                            use_container_width=True
+                        )
+                        
+                        # Skills only download with enhanced experience
+                        skills_data = {
+                            "candidate_name": f"{data['FirstName']} {data['LastName']}".strip(),
+                            "parsing_method": "Enhanced AI",
+                            "skills_with_experience": [
+                                {
+                                    "skill": skill['Skill'],
+                                    "experience_months": int(skill['ExperienceInMonths']),
+                                    "experience_years": round(int(skill['ExperienceInMonths']) / 12, 1)
+                                }
+                                for skill in skills
+                            ],
+                            "skills_count": len(skills),
+                            "total_experience": data['WorkedPeriod'],
+                            "category": data['Category'],
+                            "enhancement_features": [
+                                "Smart name detection",
+                                "Accurate skills experience estimation",
+                                "Context-aware parsing",
+                                "Career level detection"
+                            ]
+                        }
+                        skills_json = json.dumps(skills_data, indent=2)
+                        
+                        st.download_button(
+                            label="🛠️ Download Enhanced Skills Analysis",
+                            data=skills_json,
+                            file_name=f"enhanced_skills_{uploaded_file.name}.json",
+                            mime="application/json",
+                            use_container_width=True
+                        )
+                        
+                        # Display JSON
+                        st.subheader("📄 Enhanced JSON Output Preview")
+                        st.json(parsed_data)
+                        
+                        # Display raw text
+                        with st.expander("👁️ View Extracted Text"):
+                            st.text_area("Raw extracted text:", text_content, height=300)
                 
                 except Exception as e:
-                    st.error(f"Error: {str(e)}")
+                    st.error(f"Error parsing resume: {str(e)}")
+                    st.exception(e)
+    
+    # Enhanced Footer
+    st.markdown("""
+    <div class="track-talents-footer">
+        <div style="font-size: 1.5rem; font-weight: 600; color: #667eea; margin-bottom: 1rem;">
+            🎯 TrackTalents - Enhanced AI Resume Parser
+        </div>
+        <p style="margin-bottom: 1rem;">
+            Powered by Advanced AI • Enhanced Intelligence • Built for HR Excellence • Designed for Scale
+        </p>
+        <div style="margin: 1rem 0;">
+            <span style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 0.5rem 1rem; border-radius: 15px; margin: 0 0.5rem;">
+                ✨ Enhanced Name Detection
+            </span>
+            <span style="background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%); color: white; padding: 0.5rem 1rem; border-radius: 15px; margin: 0 0.5rem;">
+                🛠️ Accurate Skills Experience
+            </span>
+            <span style="background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%); color: white; padding: 0.5rem 1rem; border-radius: 15px; margin: 0 0.5rem;">
+                🧠 Context-Aware Analysis
+            </span>
+        </div>
+        <p style="font-size: 0.85rem; color: #999;">
+            © 2025 TrackTalents. All rights reserved. Enhanced with Advanced AI.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
