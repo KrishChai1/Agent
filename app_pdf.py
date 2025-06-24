@@ -1,3 +1,23 @@
+
+What can I help you with today?
+
+attributes in **Extraction Summary for parts is not matching in field mapping **P0_1aSub Family Name.. rewrite that funcion to get it working
+
+
+
+import streamlit as st import json import re import fitz # PyMuPDF from datetime import datetime from typing import Dict, List, Any, Optional, Tuple, Union from collections import OrderedDict, defaultdict import pandas as pd from dataclasses import dataclass, field import difflib # Complete Databa
+
+pasted
+
+
+
+
+Pasted content
+
+150.83 KB •3,342 lines
+•
+Formatting may be inconsistent from source
+
 import streamlit as st
 import json
 import re
