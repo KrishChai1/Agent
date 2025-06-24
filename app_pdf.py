@@ -3096,7 +3096,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
         st.info("💡 Use the TypeScript file in your application to map form fields to your database structure.")
 
 def main():
-    """Main application entry point"""
     st.set_page_config(
         page_title="Universal USCIS Form Mapper",
         page_icon="🏛️",
