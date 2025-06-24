@@ -1208,271 +1208,173 @@ class UniversalUSCISMapper:
         
         return desc
     
-   def _get_mapping_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
-    """Get intelligent mapping suggestions for a field"""
-    suggestions = []
-    
-    # Clean field name and description for better matching
-    field_name_lower = field.raw_name.lower()
-    desc_lower = field.description.lower()
-    clean_name_lower = field.clean_name.lower()
-    
-    # Combine all text for comprehensive matching
-    all_text = f"{field_name_lower} {desc_lower} {clean_name_lower}"
-    
-    # Form-specific mapping rules
-    if form_type == "G-28":
-        suggestions.extend(self._get_g28_suggestions(field))
-    elif form_type == "I-129":
-        suggestions.extend(self._get_i129_suggestions(field))
-    elif form_type == "I-90":
-        suggestions.extend(self._get_i90_suggestions(field))
-    elif form_type == "I-539":
-        suggestions.extend(self._get_i539_suggestions(field))
-    
-    # Enhanced generic pattern matching
-    
-    # Attorney/Representative mappings (Part 0 or attorney sections)
-    if "part 0" in field.part.lower() or "attorney" in field.part.lower() or "representative" in field.part.lower():
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
-        elif "bar" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
-        elif any(p in all_text for p in ['firm', 'office']) and "name" in all_text:
-            suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
-        elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
-            suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
-        elif any(p in all_text for p in ['phone', 'telephone', 'tel']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.85, "Attorney mobile phone"))
-            else:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.85, "Attorney work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
-        elif "fax" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
-        elif "licensing" in all_text and "authority" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
-        elif "uscis" in all_text and "account" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
-    
-    # IMPORTANT: "Information About You" ALWAYS maps to beneficiary
-    # This is true for I-539, I-90, and many other forms where the applicant is the beneficiary
-    elif "information about you" in field.part.lower():
-        # These are beneficiary fields
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Your last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Your first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Your middle name"))
-        elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#', 'registration']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien registration number"))
-        elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
-        elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
-        elif "gender" in all_text or "sex" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
-        elif "country" in all_text and "birth" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
-        elif "country" in all_text and ("citizenship" in all_text or "nationality" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCitizenOfCountry", 0.9, "Country of citizenship"))
-        elif "marital" in all_text and "status" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
-        elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
-        elif "i-94" in all_text or "i94" in all_text:
-            if any(p in all_text for p in ['number', 'no', '#']):
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
-            elif "arrival" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
-            elif "home" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
-            elif "daytime" in all_text or "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Phone number"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
-        elif "uscis" in all_text and "account" in all_text and "online" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryUscisAccountNumber", 0.9, "USCIS Online Account Number"))
-    
-    # Petitioner/Customer mappings (usually Part 1 when it's NOT "Information About You")
-    elif ("part 1" in field.part.lower() or "petitioner" in field.part.lower()) and "information about you" not in field.part.lower():
-        if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
-        elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_last_name", 0.85, "Signatory last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_first_name", 0.85, "Signatory first name"))
-        elif "title" in all_text and "job" in all_text:
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_job_title", 0.85, "Signatory job title"))
-        elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
-            suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
-        elif "naics" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_naics_code", 0.9, "NAICS code"))
-        elif "employees" in all_text:
-            if "h1b" in all_text or "h-1b" in all_text:
-                suggestions.append(MappingSuggestion("customer.customer_total_h1b_employees", 0.85, "H1B employees"))
-            else:
-                suggestions.append(MappingSuggestion("customer.customer_total_employees", 0.85, "Total employees"))
-        elif "established" in all_text or "year" in all_text and "business" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("customer.signatory.signatory_mobile_phone", 0.8, "Signatory mobile"))
-            else:
-                suggestions.append(MappingSuggestion("customer.signatory.signatory_work_phone", 0.8, "Signatory work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_email_id", 0.85, "Signatory email"))
-    
-    # Beneficiary mappings (usually Part 3, but also Part 1 when it's "Information About You")
-    elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Beneficiary last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Beneficiary first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Beneficiary middle name"))
-        elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien number"))
-        elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
-        elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
-        elif "gender" in all_text or "sex" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
-        elif "country" in all_text and "birth" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
-        elif "marital" in all_text and "status" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
-        elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
-        elif "i-94" in all_text or "i94" in all_text:
-            if any(p in all_text for p in ['number', 'no', '#']):
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
-            elif "arrival" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
-            elif "home" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
-    
-    # Address mappings (check field context)
-    if any(p in all_text for p in ['street', 'address', 'calle']) and not any(p in all_text for p in ['email']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            if "firm" in all_text:
-                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
-            else:
-                suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_street", 0.85, "Company street"))
+    def _get_mapping_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
+        """Get intelligent mapping suggestions for a field"""
+        suggestions = []
+        
+        # Clean field name and description for better matching
+        field_name_lower = field.raw_name.lower()
+        desc_lower = field.description.lower()
+        clean_name_lower = field.clean_name.lower()
+        
+        # Combine all text for comprehensive matching
+        all_text = f"{field_name_lower} {desc_lower} {clean_name_lower}"
+        
+        # Form-specific mapping rules
+        if form_type == "G-28":
+            suggestions.extend(self._get_g28_suggestions(field))
+        elif form_type == "I-129":
+            suggestions.extend(self._get_i129_suggestions(field))
+        elif form_type == "I-90":
+            suggestions.extend(self._get_i90_suggestions(field))
+        
+        # Enhanced generic pattern matching
+        
+        # Attorney/Representative mappings (Part 0 or attorney sections)
+        if "part 0" in field.part.lower() or "attorney" in field.part.lower() or "representative" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
+            elif "bar" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
+            elif any(p in all_text for p in ['firm', 'office']) and "name" in all_text:
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
+            elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
+            elif any(p in all_text for p in ['phone', 'telephone', 'tel']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.85, "Attorney mobile phone"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.85, "Attorney work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
+            elif "fax" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
+            elif "licensing" in all_text and "authority" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
+            elif "uscis" in all_text and "account" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
+        
+        # Petitioner/Customer mappings (usually Part 1)
+        elif "part 1" in field.part.lower() or "petitioner" in field.part.lower():
+            if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
+            elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_last_name", 0.85, "Signatory last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_first_name", 0.85, "Signatory first name"))
+            elif "title" in all_text and "job" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_job_title", 0.85, "Signatory job title"))
+            elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
+            elif "naics" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_naics_code", 0.9, "NAICS code"))
+            elif "employees" in all_text:
+                if "h1b" in all_text or "h-1b" in all_text:
+                    suggestions.append(MappingSuggestion("customer.customer_total_h1b_employees", 0.85, "H1B employees"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.customer_total_employees", 0.85, "Total employees"))
+            elif "established" in all_text or "year" in all_text and "business" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_mobile_phone", 0.8, "Signatory mobile"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_work_phone", 0.8, "Signatory work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_email_id", 0.85, "Signatory email"))
+        
+        # Beneficiary mappings (usually Part 3)
         elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Foreign address street"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressStreet", 0.85, "Work address street"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Physical address street"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressStreet", 0.85, "Home/Mailing address street"))
-    
-    elif any(p in all_text for p in ['city', 'ciudad']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressCity", 0.85, "Attorney city"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_city", 0.85, "Company city"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Foreign address city"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressCity", 0.85, "Work address city"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Physical address city"))
-            else:
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Beneficiary last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Beneficiary first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Beneficiary middle name"))
+            elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien number"))
+            elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
+            elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
+            elif "gender" in all_text or "sex" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
+            elif "country" in all_text and "birth" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
+            elif "marital" in all_text and "status" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
+            elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
+            elif "i-94" in all_text or "i94" in all_text:
+                if any(p in all_text for p in ['number', 'no', '#']):
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
+                elif "arrival" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
+                elif "home" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
+        
+        # Address mappings (check field context)
+        if any(p in all_text for p in ['street', 'address', 'calle']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                if "firm" in all_text:
+                    suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_street", 0.85, "Company street"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+                if "foreign" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Foreign address street"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressStreet", 0.85, "Work address street"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressStreet", 0.85, "Home address street"))
+        
+        elif any(p in all_text for p in ['city', 'ciudad']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressCity", 0.85, "Attorney city"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_city", 0.85, "Company city"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
                 suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressCity", 0.85, "City"))
-    
-    elif any(p in all_text for p in ['state', 'province', 'estado']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressState", 0.85, "Attorney state"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_state", 0.85, "Company state"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Foreign address state"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressState", 0.85, "Work address state"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Physical address state"))
-            else:
+        
+        elif any(p in all_text for p in ['state', 'province', 'estado']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressState", 0.85, "Attorney state"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_state", 0.85, "Company state"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
                 suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressState", 0.85, "State"))
-    
-    elif any(p in all_text for p in ['zip', 'postal', 'codigo']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressZip", 0.85, "Attorney ZIP"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_zip", 0.85, "Company ZIP"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Foreign address ZIP"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressZip", 0.85, "Work address ZIP"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Physical address ZIP"))
-            else:
+        
+        elif any(p in all_text for p in ['zip', 'postal', 'codigo']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressZip", 0.85, "Attorney ZIP"))
+            elif "petitioner" in field.part.lower() or "part 1" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.address.address_zip", 0.85, "Company ZIP"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
                 suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressZip", 0.85, "ZIP code"))
-    
-    # Apartment/Suite/Floor handling
-    elif any(p in all_text for p in ['apt', 'apartment', 'ste', 'suite', 'flr', 'floor']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            if "firm" in all_text:
-                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressNumber", 0.85, "Law firm apt/suite"))
+        
+        # Case/Petition specific mappings
+        elif any(p in all_text for p in ['petition', 'classification', 'category']):
+            if "h1b" in all_text or "h-1b" in all_text:
+                suggestions.append(MappingSuggestion("case.h1BPetitionType", 0.85, "H1B petition type"))
             else:
-                suggestions.append(MappingSuggestion("attorney.address.addressNumber", 0.85, "Attorney apt/suite"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_number", 0.85, "Company suite"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Foreign address apt/suite"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressNumber", 0.85, "Work address suite"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Physical address apt/suite"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressNumber", 0.85, "Apt/Suite/Floor number"))
-    
-    # In Care Of field
-    elif any(p in all_text for p in ['care of', 'careof', 'in care', 'incare', 'c/o']):
-        if "information about you" in field.part.lower():
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryInCareOf", 0.85, "In care of name"))
-        elif "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.inCareOf", 0.85, "Attorney in care of"))
-        elif "petitioner" in field.part.lower():
-            suggestions.append(MappingSuggestion("customer.inCareOf", 0.85, "Company in care of"))
-    
-    # Case/Petition specific mappings
-    elif any(p in all_text for p in ['petition', 'classification', 'category']):
-        if "h1b" in all_text or "h-1b" in all_text:
-            suggestions.append(MappingSuggestion("case.h1BPetitionType", 0.85, "H1B petition type"))
-        else:
-            suggestions.append(MappingSuggestion("case.caseType", 0.85, "Case type"))
-    
-    # Sort by confidence and return top suggestions
-    suggestions.sort(key=lambda x: x.confidence, reverse=True)
-    return suggestions[:3]  # Return top 3 suggestions for better coverage
+                suggestions.append(MappingSuggestion("case.caseType", 0.85, "Case type"))
+        
+        # Sort by confidence and return top suggestions
+        suggestions.sort(key=lambda x: x.confidence, reverse=True)
+        return suggestions[:3]  # Return top 3 suggestions for better coverage
     
     def _get_g28_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions specific to G-28 form"""
