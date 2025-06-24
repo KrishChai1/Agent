@@ -3076,7 +3076,7 @@ def render_export_section(mapper: UniversalUSCISMapper):
 
 ## Field Mappings
 
-"""
+""map"""
             for field in fields:
                 if field.is_mapped:
                     doc_content += f"- **{field.description}** ({field.clean_name}): `{field.db_mapping}`"
