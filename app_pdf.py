@@ -339,9 +339,8 @@ class UniversalUSCISMapper:
     def get_all_database_paths(self) -> List[str]:
         """Get all available database paths from cache"""
         return self.db_paths_cache.copy()
-
-
-  def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
+   
+    def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
         # Extract part number from the assigned part
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
@@ -445,7 +444,6 @@ class UniversalUSCISMapper:
                     # Validate field ID
                     if re.match(r'^\d{1,2}[a-zA-Z]?, field_id):
                         break
-            
                     else:
                         field_id = None  # Invalid, keep looking
         
@@ -460,7 +458,6 @@ class UniversalUSCISMapper:
                     # Prefer numbers that look like field IDs (e.g., 1a, 2b, 3, etc.)
                     for num in valid_numbers:
                         if re.match(r'^\d{1,2}[a-zA-Z]?, num):
-                            field_id = num
                             break
                     if not field_id and valid_numbers:
                         field_id = valid_numbers[-1]
@@ -484,7 +481,7 @@ class UniversalUSCISMapper:
         
         # Construct the clean name
         return f"P{part_num}_{field_id}"
-
+        
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         """Extract all fields from any USCIS PDF form with accurate part detection"""
         fields = []
