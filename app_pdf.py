@@ -1,23 +1,3 @@
-
-What can I help you with today?
-
-attributes in **Extraction Summary for parts is not matching in field mapping **P0_1aSub Family Name.. rewrite that funcion to get it working
-
-
-
-import streamlit as st import json import re import fitz # PyMuPDF from datetime import datetime from typing import Dict, List, Any, Optional, Tuple, Union from collections import OrderedDict, defaultdict import pandas as pd from dataclasses import dataclass, field import difflib # Complete Databa
-
-pasted
-
-
-
-
-Pasted content
-
-150.83 KB •3,342 lines
-•
-Formatting may be inconsistent from source
-
 import streamlit as st
 import json
 import re
@@ -360,7 +340,7 @@ class UniversalUSCISMapper:
         """Get all available database paths from cache"""
         return self.db_paths_cache.copy()
     
-def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
+    def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
         # Extract part number from the assigned part
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
@@ -378,105 +358,103 @@ def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "
         field_id = item
         
         if not field_id:
-            # Check for SubP patterns first - PRIORITIZE THIS
+            # Check for SubP patterns first
             subp_match = re.search(r'SubP\d+line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
             if subp_match:
                 field_id = subp_match.group(1)
-                # IMPORTANT: Return early to avoid overwriting
-                return f"P{part_num}_{field_id}"
-            
-            # Clean the field name more aggressively
-            clean_name = field_name
-            
-            # Remove all the form structure patterns
-            patterns_to_remove = [
-                r'form\d*\[\d+\]\.',
-                r'#subform\[\d+\]\.',
-                r'#pageSet\[\d+\]\.',
-                r'Page\d+\[\d+\]\.',
-                r'PDF417BarCode\d*\[\d+\]',
-                r'topmostSubform\[\d+\]\.',
-                r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
-                r'Pdf417bar\s*Code\d+',
-                r'\[\d+\]',
-                r'^#',
-                r'\.pdf$',
-                r'^Page\d+\.',
-                r'^form\.',
-                r'^field\.',
-                r'P\d+line',
-                r'Part\d+line',
-                r'SubP\d+line',
-            ]
-            
-            for pattern in patterns_to_remove:
-                clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
-            
-            # Look for line patterns FIRST before other processing
+            else:
+                # Clean the field name more aggressively
+                clean_name = field_name
+                
+                # Remove all the form structure patterns
+                patterns_to_remove = [
+                    r'form\d*\[\d+\]\.',
+                    r'#subform\[\d+\]\.',
+                    r'#pageSet\[\d+\]\.',
+                    r'Page\d+\[\d+\]\.',
+                    r'PDF417BarCode\d*\[\d+\]',
+                    r'topmostSubform\[\d+\]\.',
+                    r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
+                    r'Pdf417bar\s*Code\d+',
+                    r'\[\d+\]',
+                    r'^#',
+                    r'\.pdf$',
+                    r'^Page\d+\.',
+                    r'^form\.',
+                    r'^field\.',
+                    r'P\d+line',
+                    r'Part\d+line',
+                    r'SubP\d+line',
+                ]
+                
+                for pattern in patterns_to_remove:
+                    clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
+                
+                # Try to extract from the cleaned field name
+                # Look for common patterns
+                patterns = [
+                    # Look for specific field patterns first
+                    r'AttorneyStateBarNumber',  # -> would become something like P0_1a
+                    r'P(\d+)_(\d+[a-zA-Z]?)',   # Already in format
+                    r'Part(\d+)_(\d+[a-zA-Z]?)', # Part format
+                    r'line(\d+[a-zA-Z]?)',       # line patterns
+                    r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',
+                    r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',
+                    r'_(\d+[a-zA-Z]?)$',         # End numbers
+                    r'#(\d+[a-zA-Z]?)',          # Hash numbers
+                ]
+                
+                # Special handling for known field types
+                if 'AttorneyStateBarNumber' in clean_name:
+                    # Look for a number pattern in the original field name
+                    num_match = re.search(r'(\d+[a-zA-Z]?)', field_name)
+                    if num_match:
+                        field_id = num_match.group(1)
+                    else:
+                        field_id = '1a'  # Default for state bar number
+                elif 'FamilyName' in clean_name or 'LastName' in clean_name:
+                    # Check if there's a line number before it
+                    line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+                    if line_match:
+                        field_id = line_match.group(1)
+                    else:
+                        field_id = '1a'  # Default for family name
+                elif 'GivenName' in clean_name or 'FirstName' in clean_name:
+                    line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+                    if line_match:
+                        field_id = line_match.group(1)
+                    else:
+                        field_id = '1b'
+                elif 'MiddleName' in clean_name:
+                    line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
+                    if line_match:
+                        field_id = line_match.group(1)
+                    else:
+                        field_id = '1c'
+                else:
+                    # Try patterns
+                    for pattern in patterns:
+                        match = re.search(pattern, clean_name, re.IGNORECASE)
+                        if match:
+                            if pattern.startswith(r'P(\d+)'):
+                                # Already has part, use the field part
+                                field_id = match.group(2)
+                            else:
+                                field_id = match.group(1) if match.lastindex == 1 else match.group(match.lastindex)
+                            break
+        
+        # If still no field ID, try to extract any number
+        if not field_id:
+            # Look in the original field name for any line numbers
             line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
             if line_match:
                 field_id = line_match.group(1)
-                # Validate it's a reasonable field ID
-                if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
-                    return f"P{part_num}_{field_id}"
-            
-            # Try to extract from the cleaned field name
-            # Look for common patterns
-            patterns = [
-                # Look for specific field patterns first
-                r'P(\d+)_(\d+[a-zA-Z]?)',   # Already in format
-                r'Part(\d+)_(\d+[a-zA-Z]?)', # Part format
-                r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',
-                r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',
-                r'_(\d+[a-zA-Z]?)$',         # End numbers
-                r'#(\d+[a-zA-Z]?)',          # Hash numbers
-                r'\b(\d{1,2}[a-zA-Z]?)\b$',  # Numbers at end
-            ]
-            
-            # Special handling for known field types
-            if 'AttorneyStateBarNumber' in clean_name:
-                # Look for a number pattern in the original field name
-                num_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
-                if num_match:
-                    field_id = num_match.group(1)
-                else:
-                    field_id = '2a'  # Default for state bar number
-            elif any(name in clean_name for name in ['FamilyName', 'LastName', 'Apellido']):
-                field_id = field_id or '1a'  # Default for family name
-            elif any(name in clean_name for name in ['GivenName', 'FirstName', 'Nombre']):
-                field_id = field_id or '1b'  # Default for given name
-            elif any(name in clean_name for name in ['MiddleName', 'MiddleInitial']):
-                field_id = field_id or '1c'  # Default for middle name
             else:
-                # Try patterns on clean name
-                for pattern in patterns:
-                    match = re.search(pattern, clean_name, re.IGNORECASE)
-                    if match:
-                        if pattern.startswith(r'P(\d+)'):
-                            # Already has part, use the field part
-                            field_id = match.group(2)
-                        else:
-                            field_id = match.group(1) if match.lastindex == 1 else match.group(match.lastindex)
-                        # Validate field ID
-                        if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
-                            break
-                        else:
-                            field_id = None  # Invalid, keep looking
-        
-        # If still no field ID, try to extract any reasonable number
-        if not field_id:
-            # Look for standalone numbers in original field name
-            numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', field_name)
-            if numbers:
-                # Filter out part numbers and other invalid patterns
-                valid_numbers = [n for n in numbers if not re.match(r'^0\d$', n) and not re.match(r'^\d{3,}', n)]
-                if valid_numbers:
-                    # Prefer numbers that look like field IDs (e.g., 1a, 2b, 3, etc.)
-                    for num in valid_numbers:
-                        if re.match(r'^\d{1,2}[a-zA-Z]?$', num):
-                            field_id = num
-                            break
-                    if not field_id and valid_numbers:
+                numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', field_name)
+                if numbers:
+                    # Filter out part numbers
+                    valid_numbers = [n for n in numbers if not re.match(r'^0\d$', n)]  # Skip 00-09
+                    if valid_numbers:
                         field_id = valid_numbers[-1]
         
         # Last resort - use counter
@@ -484,17 +462,17 @@ def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "
             field_id = str(self.field_counter)
             self.field_counter += 1
         
-        # Clean up field ID - remove any trailing text
+        # Clean up field ID
         field_id = field_id.strip('._- ')
         
-        # Final validation - ensure field ID is ONLY number + optional letter
-        field_id_match = re.match(r'^(\d{1,2}[a-zA-Z]?)', field_id)
-        if field_id_match:
-            field_id = field_id_match.group(1)
-        else:
-            # If still invalid, use counter
-            field_id = str(self.field_counter)
-            self.field_counter += 1
+        # Ensure field ID is reasonable length
+        if len(field_id) > 5:
+            # Try to extract just the numeric part with optional letter
+            match = re.search(r'(\d{1,2}[a-zA-Z]?)', field_id)
+            if match:
+                field_id = match.group(1)
+            else:
+                field_id = field_id[:5]
         
         # Construct the clean name
         return f"P{part_num}_{field_id}"
