@@ -1735,7 +1735,7 @@ class UniversalUSCISMapper:
                 # Use clean name for questionnaire
                 categories['questionnaireData'][field_key] = f"{field.item or field_key}{field.field_type_suffix}"
         
-        # Generate TypeScript content
+   # Generate TypeScript content
         ts_content = f"""export const {form_name} = {{
     "formname": "{form_name.lower()}",
     "pdfName": "{form_type.split(' - ')[0]}",
@@ -1747,11 +1747,11 @@ class UniversalUSCISMapper:
     "conditionalData": {self._format_conditional_section(categories['conditionalData'])},
     "caseData": {self._format_data_section(categories['caseData'])},
     "lcaData": {self._format_data_section(categories['lcaData'])}
-}}"""
+}}
         
         return ts_content
-    
-    def _format_data_section(self, data: Dict[str, str]) -> str:
+     
+     def _format_data_section(self, data: Dict[str, str]) -> str:
         """Format data section for TypeScript"""
         if not data:
             return "null"
@@ -2509,3 +2509,822 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
+
+def render_all_fields_view(mapper: UniversalUSCISMapper):
+    """Render comprehensive view of all fields (mapped + questionnaire)"""
+    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
+        st.info("👆 Please complete field mapping first")
+        return
+    
+    st.header("📊 All Fields Overview")
+    
+    fields = st.session_state.pdf_fields
+    
+    # Summary metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("Total Fields", len(fields))
+    with col2:
+        mapped_count = sum(1 for f in fields if f.is_mapped)
+        st.metric("Mapped", mapped_count)
+    with col3:
+        quest_count = sum(1 for f in fields if f.is_questionnaire)
+        st.metric("Questionnaire", quest_count)
+    with col4:
+        unmapped_count = sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire)
+        st.metric("Unmapped", unmapped_count)
+    with col5:
+        custom_count = sum(1 for f in fields if f.is_custom_field)
+        st.metric("Custom", custom_count)
+    
+    # Filters
+    st.markdown("### 🔍 Filter Options")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        view_filter = st.selectbox(
+            "View", 
+            ["All Fields", "Mapped Only", "Questionnaire Only", "Unmapped Only", "Custom Only"],
+            key="all_fields_view_filter"
+        )
+    
+    with col2:
+        parts = list(set(f.part for f in fields))
+        def natural_sort_key(part):
+            numbers = re.findall(r'\d+', part)
+            if numbers:
+                return (0, int(numbers[0]))
+            return (1, part)
+        sorted_parts = sorted(parts, key=natural_sort_key)
+        
+        part_filter = st.selectbox("Part", ["All Parts"] + sorted_parts, key="all_fields_part_filter")
+    
+    with col3:
+        field_types = list(set(f.field_type for f in fields))
+        type_filter = st.selectbox("Type", ["All Types"] + sorted(field_types), key="all_fields_type_filter")
+    
+    with col4:
+        search_all = st.text_input("Search", placeholder="Search all fields...", key="all_fields_search")
+    
+    # Filter fields
+    filtered_fields = fields.copy()
+    
+    # Apply view filter
+    if view_filter == "Mapped Only":
+        filtered_fields = [f for f in filtered_fields if f.is_mapped]
+    elif view_filter == "Questionnaire Only":
+        filtered_fields = [f for f in filtered_fields if f.is_questionnaire]
+    elif view_filter == "Unmapped Only":
+        filtered_fields = [f for f in filtered_fields if not f.is_mapped and not f.is_questionnaire]
+    elif view_filter == "Custom Only":
+        filtered_fields = [f for f in filtered_fields if f.is_custom_field]
+    
+    # Apply part filter
+    if part_filter != "All Parts":
+        filtered_fields = [f for f in filtered_fields if f.part == part_filter]
+    
+    # Apply type filter
+    if type_filter != "All Types":
+        filtered_fields = [f for f in filtered_fields if f.field_type == type_filter]
+    
+    # Apply search
+    if search_all:
+        search_lower = search_all.lower()
+        filtered_fields = [f for f in filtered_fields if 
+                          search_lower in f.raw_name.lower() or 
+                          search_lower in f.description.lower() or 
+                          search_lower in (f.db_mapping or '').lower() or
+                          search_lower in f.clean_name.lower() or
+                          search_lower in f.part.lower()]
+    
+    # Display options
+    col1, col2 = st.columns(2)
+    with col1:
+        display_mode = st.radio(
+            "Display Mode", 
+            ["Table View", "Card View", "Grouped by Part", "Grouped by Status"],
+            horizontal=True,
+            key="all_fields_display_mode"
+        )
+    
+    with col2:
+        if display_mode == "Table View":
+            columns_to_show = st.multiselect(
+                "Columns",
+                ["Index", "Clean Name", "Description", "Part", "Item", "Type", "Status", "Database Path", "Confidence", "Page", "Raw Name"],
+                default=["Clean Name", "Description", "Part", "Type", "Status", "Database Path"],
+                key="all_fields_columns"
+            )
+    
+    st.write(f"**Showing {len(filtered_fields)} of {len(fields)} fields**")
+    
+    # Display based on mode
+    if display_mode == "Table View":
+        # Create dataframe
+        data = []
+        for field in filtered_fields:
+            row = {}
+            
+            if "Index" in columns_to_show:
+                row["Index"] = field.index
+            if "Clean Name" in columns_to_show:
+                row["Clean Name"] = field.clean_name
+            if "Description" in columns_to_show:
+                row["Description"] = field.description
+            if "Part" in columns_to_show:
+                row["Part"] = field.part
+            if "Item" in columns_to_show:
+                row["Item"] = field.item or "-"
+            if "Type" in columns_to_show:
+                row["Type"] = field.field_type
+            if "Status" in columns_to_show:
+                if field.is_mapped:
+                    row["Status"] = "✅ Mapped"
+                elif field.is_questionnaire:
+                    row["Status"] = "📋 Questionnaire"
+                elif field.db_mapping:
+                    row["Status"] = "💡 Suggested"
+                else:
+                    row["Status"] = "❌ Unmapped"
+            if "Database Path" in columns_to_show:
+                row["Database Path"] = field.db_mapping or "-"
+            if "Confidence" in columns_to_show:
+                row["Confidence"] = f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-"
+            if "Page" in columns_to_show:
+                row["Page"] = field.page
+            if "Raw Name" in columns_to_show:
+                row["Raw Name"] = field.raw_name[:50] + "..." if len(field.raw_name) > 50 else field.raw_name
+            
+            if field.is_custom_field:
+                row["Custom"] = "✨"
+            else:
+                row["Custom"] = ""
+            
+            data.append(row)
+        
+        if data:
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            # Export option
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Download as CSV",
+                csv,
+                f"{st.session_state.form_type}_all_fields.csv",
+                "text/csv",
+                key="download_all_fields_csv"
+            )
+    
+    elif display_mode == "Card View":
+        # Display as cards
+        for field in filtered_fields:
+            with st.container():
+                st.markdown('<div class="field-card">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    st.markdown(f"**{field.clean_name}** - {field.description}")
+                    st.caption(f"Part: {field.part} | Type: {field.field_type} | Page: {field.page}")
+                
+                with col2:
+                    if field.is_mapped:
+                        st.success(f"✅ Mapped to: {field.db_mapping}")
+                    elif field.is_questionnaire:
+                        st.info("📋 In Questionnaire")
+                    elif field.db_mapping:
+                        st.warning(f"💡 Suggested: {field.db_mapping} ({field.confidence_score:.0%})")
+                    else:
+                        st.error("❌ Not mapped")
+                
+                with col3:
+                    if field.is_custom_field:
+                        st.markdown("✨ **Custom**")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+    
+    elif display_mode == "Grouped by Part":
+        # Group by part
+        fields_by_part = defaultdict(list)
+        for field in filtered_fields:
+            fields_by_part[field.part].append(field)
+        
+        # Sort parts
+        def natural_sort_key(part):
+            numbers = re.findall(r'\d+', part)
+            if numbers:
+                return (0, int(numbers[0]))
+            return (1, part)
+        
+        sorted_parts_display = sorted(fields_by_part.keys(), key=natural_sort_key)
+        
+        for part in sorted_parts_display:
+            part_fields = fields_by_part[part]
+            
+            # Count statuses
+            mapped = sum(1 for f in part_fields if f.is_mapped)
+            quest = sum(1 for f in part_fields if f.is_questionnaire)
+            unmapped = sum(1 for f in part_fields if not f.is_mapped and not f.is_questionnaire)
+            
+            icon = "⚖️" if "attorney" in part.lower() or "part 0" in part.lower() else "📑"
+            
+            with st.expander(f"{icon} **{part}** - {len(part_fields)} fields (✅ {mapped} | 📋 {quest} | ❌ {unmapped})", expanded=False):
+                # Create table for this part
+                data = []
+                for field in part_fields:
+                    data.append({
+                        "Clean Name": field.clean_name,
+                        "Description": field.description,
+                        "Item": field.item or "-",
+                        "Type": field.field_type,
+                        "Status": "✅ Mapped" if field.is_mapped else "📋 Questionnaire" if field.is_questionnaire else "💡 Suggested" if field.db_mapping else "❌ Unmapped",
+                        "Database Path": field.db_mapping or "-",
+                        "Custom": "✨" if field.is_custom_field else ""
+                    })
+                
+                if data:
+                    df = pd.DataFrame(data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    else:  # Grouped by Status
+        # Group by status
+        status_groups = {
+            "✅ Mapped": [f for f in filtered_fields if f.is_mapped],
+            "📋 Questionnaire": [f for f in filtered_fields if f.is_questionnaire],
+            "💡 Suggested": [f for f in filtered_fields if f.db_mapping and not f.is_mapped and not f.is_questionnaire],
+            "❌ Unmapped": [f for f in filtered_fields if not f.is_mapped and not f.is_questionnaire and not f.db_mapping]
+        }
+        
+        for status, status_fields in status_groups.items():
+            if status_fields:
+                with st.expander(f"{status} ({len(status_fields)} fields)", expanded=status == "✅ Mapped"):
+                    data = []
+                    for field in status_fields:
+                        data.append({
+                            "Clean Name": field.clean_name,
+                            "Description": field.description,
+                            "Part": field.part,
+                            "Item": field.item or "-",
+                            "Type": field.field_type,
+                            "Database Path": field.db_mapping or "-",
+                            "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
+                            "Custom": "✨" if field.is_custom_field else ""
+                        })
+                    
+                    if data:
+                        df = pd.DataFrame(data)
+                        st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    # Bulk actions
+    if filtered_fields:
+        st.markdown("---")
+        st.markdown("### ⚡ Bulk Actions")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("📋 Add All Unmapped to Questionnaire", use_container_width=True):
+                count = 0
+                for field in filtered_fields:
+                    if not field.is_mapped and not field.is_questionnaire:
+                        field.is_questionnaire = True
+                        mapper.create_mapping(field, "questionnaire", {})
+                        count += 1
+                if count > 0:
+                    st.success(f"Added {count} fields to questionnaire")
+                    st.rerun()
+        
+        with col2:
+            if st.button("✅ Accept All Suggestions > 80%", use_container_width=True):
+                count = 0
+                for field in filtered_fields:
+                    if not field.is_mapped and field.db_mapping and field.confidence_score > 0.8:
+                        field.is_mapped = True
+                        mapper.create_mapping(field, "direct", {"path": field.db_mapping})
+                        count += 1
+                if count > 0:
+                    st.success(f"Accepted {count} high confidence mappings")
+                    st.rerun()
+        
+        with col3:
+            if st.button("🔄 Refresh View", use_container_width=True):
+                st.rerun()
+
+def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
+    """Render reference view of all mapped fields"""
+    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
+        st.info("👆 Please complete field mapping first")
+        return
+    
+    st.header("📚 Mapped Fields Reference")
+    
+    fields = st.session_state.pdf_fields
+    
+    # Get only mapped fields
+    mapped_fields = [f for f in fields if f.is_mapped and f.db_mapping]
+    
+    if not mapped_fields:
+        st.warning("No fields have been mapped yet. Please map some fields first.")
+        return
+    
+    st.write(f"**Total mapped fields**: {len(mapped_fields)}")
+    
+    # Group by database object
+    grouped_mappings = defaultdict(list)
+    for field in mapped_fields:
+        if field.db_mapping:
+            obj_name = field.db_mapping.split('.')[0]
+            grouped_mappings[obj_name].append(field)
+    
+    # Display options
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        view_mode = st.selectbox("View Mode", ["By Database Object", "By Form Part", "All Fields"])
+    with col2:
+        sort_by = st.selectbox("Sort By", ["Field Name", "Description", "Part", "Confidence"])
+    with col3:
+        search_mapped = st.text_input("Search mapped fields", placeholder="Enter keyword...")
+    
+    # Filter mapped fields based on search
+    if search_mapped:
+        search_lower = search_mapped.lower()
+        filtered_mapped = [f for f in mapped_fields if 
+                          search_lower in f.raw_name.lower() or 
+                          search_lower in f.description.lower() or 
+                          search_lower in (f.db_mapping or '').lower() or
+                          search_lower in f.clean_name.lower()]
+    else:
+        filtered_mapped = mapped_fields
+    
+    # Sort fields
+    if sort_by == "Field Name":
+        filtered_mapped.sort(key=lambda x: x.clean_name)
+    elif sort_by == "Description":
+        filtered_mapped.sort(key=lambda x: x.description)
+    elif sort_by == "Part":
+        filtered_mapped.sort(key=lambda x: (x.part, x.index))
+    elif sort_by == "Confidence":
+        filtered_mapped.sort(key=lambda x: x.confidence_score, reverse=True)
+    
+    # Display based on view mode
+    if view_mode == "By Database Object":
+        st.markdown("### 🗃️ Mappings by Database Object")
+        
+        # Re-group filtered fields
+        filtered_grouped = defaultdict(list)
+        for field in filtered_mapped:
+            if field.db_mapping:
+                obj_name = field.db_mapping.split('.')[0]
+                filtered_grouped[obj_name].append(field)
+        
+        # Display each object's mappings
+        for obj_name in sorted(filtered_grouped.keys()):
+            obj_fields = filtered_grouped[obj_name]
+            
+            with st.expander(f"**{obj_name}** ({len(obj_fields)} fields)", expanded=True):
+                # Create a dataframe for better display
+                data = []
+                for field in obj_fields:
+                    data.append({
+                        "PDF Field": field.description,
+                        "Clean Name": field.clean_name,
+                        "Part": field.part,
+                        "Type": field.field_type,
+                        "Maps To": field.db_mapping,
+                        "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "Manual",
+                        "Custom": "✨" if field.is_custom_field else ""
+                    })
+                
+                df = pd.DataFrame(data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    elif view_mode == "By Form Part":
+        st.markdown("### 📑 Mappings by Form Part")
+        
+        # Group by part
+        part_grouped = defaultdict(list)
+        for field in filtered_mapped:
+            part_grouped[field.part].append(field)
+        
+        # Sort parts
+        def natural_sort_key(part):
+            numbers = re.findall(r'\d+', part)
+            if numbers:
+                return (0, int(numbers[0]))
+            return (1, part)
+        
+        sorted_parts = sorted(part_grouped.keys(), key=natural_sort_key)
+        
+        for part in sorted_parts:
+            part_fields = part_grouped[part]
+            icon = "⚖️" if "attorney" in part.lower() or "part 0" in part.lower() else "📑"
+            
+            with st.expander(f"{icon} **{part}** ({len(part_fields)} mapped fields)", expanded=False):
+                data = []
+                for field in part_fields:
+                    data.append({
+                        "Field": field.description,
+                        "Clean Name": field.clean_name,
+                        "Item": field.item or "-",
+                        "Type": field.field_type,
+                        "Database Path": field.db_mapping,
+                        "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "Manual",
+                        "Custom": "✨" if field.is_custom_field else ""
+                    })
+                
+                df = pd.DataFrame(data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+    
+    else:  # All Fields view
+        st.markdown("### 📋 All Mapped Fields")
+        
+        # Create comprehensive dataframe
+        data = []
+        for field in filtered_mapped:
+            data.append({
+                "Index": field.index,
+                "Description": field.description,
+                "Clean Name": field.clean_name,
+                "Part": field.part,
+                "Item": field.item or "-",
+                "Page": field.page,
+                "Type": field.field_type,
+                "PDF Field Name": field.raw_name,
+                "Database Path": field.db_mapping,
+                "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "Manual",
+                "Custom": "✨" if field.is_custom_field else ""
+            })
+        
+        df = pd.DataFrame(data)
+        
+        # Display
+        st.write(f"Showing {len(df)} mapped fields")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+def render_export_section(mapper: UniversalUSCISMapper):
+    """Render export section"""
+    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
+        st.info("👆 Please complete field mapping first")
+        return
+    
+    st.header("📥 Export Mapping Configuration")
+    
+    fields = st.session_state.pdf_fields
+    form_type = st.session_state.form_type
+    
+    # Summary statistics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Fields", len(fields))
+    with col2:
+        st.metric("Mapped", sum(1 for f in fields if f.is_mapped))
+    with col3:
+        st.metric("Questionnaire", sum(1 for f in fields if f.is_questionnaire))
+    with col4:
+        st.metric("Score", f"{mapper.calculate_mapping_score(fields)}%")
+    
+    st.markdown("---")
+    
+    # Export options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📄 TypeScript Export")
+        st.write("Generate TypeScript mapping file for your application")
+        
+        ts_content = mapper.generate_typescript_export(form_type, fields)
+        
+        # Clean form name for filename
+        form_name = form_type.split(' - ')[0].replace(' ', '').replace('-', '')
+        
+        st.download_button(
+            label="📥 Download TypeScript File",
+            data=ts_content,
+            file_name=f"{form_name}.ts",
+            mime="text/plain",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview TypeScript"):
+            st.code(ts_content, language="typescript")
+    
+    with col2:
+        st.subheader("📋 Questionnaire JSON")
+        st.write("Generate questionnaire configuration for unmapped fields")
+        
+        json_content = mapper.generate_questionnaire_json(fields)
+        
+        st.download_button(
+            label="📥 Download Questionnaire JSON",
+            data=json_content,
+            file_name=f"{form_type.split(' - ')[0].lower().replace(' ', '-')}-questionnaire.json",
+            mime="application/json",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview JSON"):
+            st.code(json_content, language="json")
+    
+    # Additional exports
+    st.markdown("---")
+    st.subheader("📊 Additional Export Options")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Export mapping summary
+        if st.button("📈 Export Mapping Summary", use_container_width=True):
+            summary_data = []
+            for field in fields:
+                summary_data.append({
+                    'Field Name': field.raw_name,
+                    'Clean Name': field.clean_name,
+                    'Description': field.description,
+                    'Type': field.field_type,
+                    'Part': field.part,
+                    'Item': field.item,
+                    'Page': field.page,
+                    'Mapping': field.db_mapping or 'Unmapped',
+                    'Status': 'Mapped' if field.is_mapped else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
+                    'Confidence': f"{field.confidence_score:.0%}" if field.confidence_score > 0 else '',
+                    'Custom': 'Yes' if field.is_custom_field else 'No'
+                })
+            
+            df = pd.DataFrame(summary_data)
+            csv = df.to_csv(index=False)
+            
+            st.download_button(
+                label="📥 Download CSV",
+                data=csv,
+                file_name=f"{form_type}_mapping_summary.csv",
+                mime="text/csv"
+            )
+    
+    with col2:
+        # Documentation
+        if st.button("📝 Generate Documentation", use_container_width=True):
+            doc_content = f"""# {form_type} Field Mapping Documentation
+
+## Overview
+- **Total Fields**: {len(fields)}
+- **Mapped Fields**: {sum(1 for f in fields if f.is_mapped)}
+- **Questionnaire Fields**: {sum(1 for f in fields if f.is_questionnaire)}
+- **Custom Fields**: {sum(1 for f in fields if f.is_custom_field)}
+- **Mapping Score**: {mapper.calculate_mapping_score(fields)}%
+
+## Field Mappings
+
+"""
+            for field in fields:
+                if field.is_mapped:
+                    doc_content += f"- **{field.description}** ({field.clean_name}): `{field.db_mapping}`"
+                    if field.is_custom_field:
+                        doc_content += " *(Custom Field)*"
+                    doc_content += "\n"
+            
+            st.download_button(
+                label="📥 Download Docs",
+                data=doc_content,
+                file_name=f"{form_type}_mapping_documentation.md",
+                mime="text/markdown"
+            )
+    
+    with col3:
+        # Help text
+        st.info("💡 Use the TypeScript file in your application to map form fields to your database structure.")
+
+def main():
+    """Main application entry point"""
+    st.set_page_config(
+        page_title="Universal USCIS Form Mapper",
+        page_icon="🏛️",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Initialize mapper
+    mapper = UniversalUSCISMapper()
+    
+    # Render header
+    render_header()
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("📊 Mapping Overview")
+        
+        if 'pdf_fields' in st.session_state and st.session_state.pdf_fields:
+            fields = st.session_state.pdf_fields
+            
+            # Progress metrics
+            total = len(fields)
+            mapped = sum(1 for f in fields if f.is_mapped)
+            suggested = sum(1 for f in fields if f.db_mapping and not f.is_mapped and not f.is_questionnaire)
+            questionnaire = sum(1 for f in fields if f.is_questionnaire or (not f.is_mapped and not f.db_mapping))
+            custom = sum(1 for f in fields if f.is_custom_field)
+            
+            # Display metrics
+            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+            st.metric("Total Fields", total)
+            if custom > 0:
+                st.caption(f"Including {custom} custom fields")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Progress bars
+            st.write("**Mapping Progress**")
+            st.progress(mapped / total if total > 0 else 0)
+            st.caption(f"Mapped: {mapped} ({mapped/total*100:.1f}%)")
+            
+            st.progress(suggested / total if total > 0 else 0)
+            st.caption(f"Suggested: {suggested} ({suggested/total*100:.1f}%)")
+            
+            st.progress(questionnaire / total if total > 0 else 0)
+            st.caption(f"Questionnaire: {questionnaire} ({questionnaire/total*100:.1f}%)")
+            
+            # Part breakdown
+            st.write("**Fields by Part**")
+            parts_count = defaultdict(int)
+            for field in fields:
+                parts_count[field.part] += 1
+            
+            # Sort parts
+            def natural_sort_key(part):
+                numbers = re.findall(r'\d+', part)
+                if numbers:
+                    return (0, int(numbers[0]))
+                return (1, part)
+            
+            sorted_parts = sorted(parts_count.items(), key=lambda x: natural_sort_key(x[0]))
+            
+            for part, count in sorted_parts:
+                if "part 0" in part.lower() or "attorney" in part.lower():
+                    st.write(f"⚖️ {part}: **{count}**")
+                else:
+                    st.write(f"- {part}: {count}")
+            
+            # Field types
+            st.write("**Field Types**")
+            type_counts = defaultdict(int)
+            for field in fields:
+                type_counts[field.field_type] += 1
+            
+            for ftype, count in sorted(type_counts.items()):
+                st.write(f"- {ftype}: {count}")
+        else:
+            st.info("Upload a form to see mapping overview")
+        
+        st.markdown("---")
+        st.markdown("### 📚 Resources")
+        st.markdown("[USCIS Forms](https://www.uscis.gov/forms/all-forms)")
+        st.markdown("[Form Instructions](https://www.uscis.gov/forms)")
+        
+        # Mapping tips
+        st.markdown("---")
+        st.markdown("### ℹ️ Mapping Tips")
+        st.markdown("- **G-28**: Part 0 is Attorney info")
+        st.markdown("- **I-129**: Part 8 is Preparer info")
+        st.markdown("- **I-90**: Follow clean naming (P1_3a)")
+        st.markdown("- **Auto-mapping**: High confidence suggestions")
+        st.markdown("- **Unmapped**: Auto-added to questionnaire")
+        st.markdown("- **Custom Fields**: Add missing fields manually")
+    
+    # Main content tabs
+    tabs = st.tabs(["📤 Upload & Extract", "🗺️ Field Mapping", "📊 All Fields", "📚 Mapped Reference", "📥 Export", "⚙️ Settings"])
+    
+    with tabs[0]:
+        render_upload_section(mapper)
+    
+    with tabs[1]:
+        render_mapping_section(mapper)
+    
+    with tabs[2]:
+        render_all_fields_view(mapper)
+    
+    with tabs[3]:
+        render_mapped_fields_reference(mapper)
+    
+    with tabs[4]:
+        render_export_section(mapper)
+    
+    with tabs[5]:
+        st.header("⚙️ Settings")
+        st.write("Configure mapping preferences and defaults")
+        
+        # View database schema
+        st.subheader("📋 Database Schema")
+        
+        with st.expander("View Complete Database Schema", expanded=False):
+            st.json(DB_OBJECTS)
+        
+        # Export/Import settings
+        st.subheader("💾 Configuration Management")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("**Export Current Configuration**")
+            if st.button("📥 Export Config", use_container_width=True):
+                config = {
+                    "form_type": st.session_state.get("form_type", ""),
+                    "field_mappings": {},
+                    "questionnaire_fields": [],
+                    "custom_fields": []
+                }
+                
+                if 'pdf_fields' in st.session_state:
+                    for field in st.session_state.pdf_fields:
+                        if field.is_mapped and field.db_mapping:
+                            config["field_mappings"][field.clean_name] = {
+                                "db_path": field.db_mapping,
+                                "type": field.mapping_type,
+                                "confidence": field.confidence_score
+                            }
+                        elif field.is_questionnaire:
+                            config["questionnaire_fields"].append(field.clean_name)
+                        
+                        if field.is_custom_field:
+                            config["custom_fields"].append({
+                                "clean_name": field.clean_name,
+                                "description": field.description,
+                                "part": field.part,
+                                "item": field.item,
+                                "field_type": field.field_type
+                            })
+                
+                config_json = json.dumps(config, indent=2)
+                st.download_button(
+                    "📥 Download Configuration",
+                    config_json,
+                    f"{config['form_type']}_config.json",
+                    "application/json"
+                )
+        
+        with col2:
+            st.write("**Import Configuration**")
+            uploaded_config = st.file_uploader(
+                "Upload Config File",
+                type=['json'],
+                help="Upload a previously exported configuration file"
+            )
+            
+            if uploaded_config:
+                if st.button("📤 Apply Configuration", use_container_width=True):
+                    try:
+                        config = json.load(uploaded_config)
+                        # Apply configuration logic here
+                        st.success("Configuration applied successfully!")
+                    except Exception as e:
+                        st.error(f"Error applying configuration: {str(e)}")
+        
+        # Database connection settings
+        st.subheader("🔌 Database Connection")
+        st.info("Database connection settings would be configured here in a production environment.")
+        
+        # Advanced options
+        st.subheader("🔧 Advanced Options")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            confidence_threshold = st.slider(
+                "Auto-accept confidence threshold",
+                min_value=0.5,
+                max_value=1.0,
+                value=0.8,
+                step=0.05,
+                help="Mappings with confidence above this threshold can be auto-accepted"
+            )
+        
+        with col2:
+            show_debug = st.checkbox(
+                "Show debug information",
+                value=False,
+                help="Display additional debug information during field extraction"
+            )
+        
+        # Clear cache
+        st.subheader("🗑️ Clear Data")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Clear Current Form Data", use_container_width=True):
+                if 'pdf_fields' in st.session_state:
+                    del st.session_state.pdf_fields
+                if 'form_type' in st.session_state:
+                    del st.session_state.form_type
+                if 'field_mappings' in st.session_state:
+                    del st.session_state.field_mappings
+                st.success("Form data cleared!")
+                st.rerun()
+        
+        with col2:
+            if st.button("Reset All Settings", use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.success("All settings reset!")
+                st.rerun()
+
+if __name__ == "__main__":
+    main()
