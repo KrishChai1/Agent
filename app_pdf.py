@@ -3326,5 +3326,5 @@ def main():
                 st.success("All settings reset!")
                 st.rerun()
 
-if __name__ == "__main__":
+ if __name__ == "__main__":
     main()
