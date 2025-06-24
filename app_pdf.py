@@ -175,9 +175,8 @@ FIELD_TYPE_SUFFIX_MAP = {
     "number": ":NumberBox"
 }
 
-# Special field type mappings - be specific to avoid false matches
+# Special field type mappings
 SPECIAL_FIELD_TYPES = {
-    # These are very specific field names that should get special types
     "addressType": ":AddressTypeBox",
     "address_type": ":AddressTypeBox",
     "representative": ":ConditionBox",
@@ -225,6 +224,16 @@ FORM_PART_STRUCTURES = {
         "Part 5": "Interpreter's Contact Information",
         "Part 6": "Contact Information of Preparer",
         "Part 7": "Additional Information"
+    },
+    "I-539": {
+        "Part 1": "Information About You",
+        "Part 2": "Application Type",
+        "Part 3": "Processing Information",
+        "Part 4": "Additional Information About the Applicant",
+        "Part 5": "Applicant's Statement and Signature",
+        "Part 6": "Interpreter's Contact Information",
+        "Part 7": "Contact Information, Declaration, and Signature of the Person Preparing this Application",
+        "Part 8": "Additional Information"
     }
 }
 
@@ -246,8 +255,8 @@ class PDFField:
     is_questionnaire: bool = False
     confidence_score: float = 0.0
     field_type_suffix: str = ":TextBox"
-    clean_name: str = ""  # Clean field name like I-90.ts format
-    is_custom_field: bool = False  # Flag for custom added fields
+    clean_name: str = ""
+    is_custom_field: bool = False
 
 @dataclass
 class MappingSuggestion:
@@ -279,7 +288,7 @@ class UniversalUSCISMapper:
         if 'conditional_mappings' not in st.session_state:
             st.session_state.conditional_mappings = {}
         if 'custom_field_counter' not in st.session_state:
-            st.session_state.custom_field_counter = 1000  # Start from 1000 for custom fields
+            st.session_state.custom_field_counter = 1000
     
     def _build_database_paths_cache(self):
         """Build a cache of all database paths for efficient access"""
@@ -289,52 +298,32 @@ class UniversalUSCISMapper:
             """Recursively extract all paths from the database structure"""
             if isinstance(structure, dict):
                 for key, value in structure.items():
-                    if key == "":  # Empty string key
-                        # Direct fields under object
+                    if key == "":
                         if isinstance(value, list):
                             for field_name in value:
                                 path = f"{obj_name}.{field_name}"
                                 self.db_paths_cache.append(path)
                     else:
-                        # Named sub-object
                         new_prefix = f"{obj_name}.{key}"
                         if isinstance(value, list):
-                            # List of fields
                             for field_name in value:
                                 path = f"{new_prefix}.{field_name}"
                                 self.db_paths_cache.append(path)
                         elif isinstance(value, dict):
-                            # Nested structure
                             for nested_key, nested_value in value.items():
                                 if isinstance(nested_value, list):
                                     for field_name in nested_value:
                                         path = f"{new_prefix}.{nested_key}.{field_name}"
                                         self.db_paths_cache.append(path)
-                                elif isinstance(nested_value, dict):
-                                    # Even deeper nesting
-                                    for deep_key, deep_value in nested_value.items():
-                                        if isinstance(deep_value, list):
-                                            for field_name in deep_value:
-                                                path = f"{new_prefix}.{nested_key}.{deep_key}.{field_name}"
-                                                self.db_paths_cache.append(path)
             elif isinstance(structure, list):
-                # Direct list of fields
                 for field_name in structure:
-                    if prefix:
-                        path = f"{prefix}.{field_name}"
-                    else:
-                        path = f"{obj_name}.{field_name}"
+                    path = f"{obj_name}.{field_name}" if not prefix else f"{prefix}.{field_name}"
                     self.db_paths_cache.append(path)
         
-        # Build paths for all objects
         for obj_name, obj_structure in self.db_objects.items():
             extract_paths(obj_name, obj_structure)
         
-        # Remove duplicates and sort
         self.db_paths_cache = sorted(list(set(self.db_paths_cache)))
-        
-        # Debug output
-        print(f"Built database paths cache with {len(self.db_paths_cache)} paths")
     
     def get_all_database_paths(self) -> List[str]:
         """Get all available database paths from cache"""
@@ -342,37 +331,28 @@ class UniversalUSCISMapper:
     
     def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
-        # Extract part number from the assigned part
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
         if not part_match and re.search(r'Part\s*0', part, re.IGNORECASE):
             part_num = "0"
         else:
             part_num = part_match.group(1) if part_match else "1"
         
-        # Special handling for attorney section (Part 0)
         if "attorney" in part.lower() or "representative" in part.lower():
             if not part_match:
                 part_num = "0"
         
-        # Use the item if provided from extraction - PRIORITIZE THIS
         if item:
-            # Item was already extracted by _extract_item_advanced
-            # Just use it directly without any further processing
             return f"P{part_num}_{item}"
         
-        # Only process field name if no item was provided
         field_id = ""
         
-        # Check for SubP patterns first
         subp_match = re.search(r'SubP\d+line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
         if subp_match:
             field_id = subp_match.group(1)
             return f"P{part_num}_{field_id}"
         
-        # Clean the field name more aggressively
         clean_name = field_name
         
-        # Remove all the form structure patterns
         patterns_to_remove = [
             r'form\d*\[\d+\]\.',
             r'#subform\[\d+\]\.',
@@ -384,7 +364,7 @@ class UniversalUSCISMapper:
             r'Pdf417bar\s*Code\d+',
             r'\[\d+\]',
             r'^#',
-            r'\.pdf,
+            r'\.pdf',
             r'^Page\d+\.',
             r'^form\.',
             r'^field\.',
@@ -396,117 +376,94 @@ class UniversalUSCISMapper:
         for pattern in patterns_to_remove:
             clean_name = re.sub(pattern, '', clean_name, flags=re.IGNORECASE)
         
-        # Look for line patterns FIRST before other processing
         line_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
         if line_match:
             field_id = line_match.group(1)
-            # Validate it's a reasonable field ID
-            if re.match(r'^\d{1,2}[a-zA-Z]?, field_id):
+            if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
                 return f"P{part_num}_{field_id}"
         
-        # Try to extract from the cleaned field name
-        # Look for common patterns
         patterns = [
-            # Look for specific field patterns first
-            r'P(\d+)_(\d+[a-zA-Z]?)',   # Already in format
-            r'Part(\d+)_(\d+[a-zA-Z]?)', # Part format
+            r'P(\d+)_(\d+[a-zA-Z]?)',
+            r'Part(\d+)_(\d+[a-zA-Z]?)',
             r'Item[\s_\.\-]*(\d+[a-zA-Z]?)',
             r'Question[\s_\.\-]*(\d+[a-zA-Z]?)',
-            r'_(\d+[a-zA-Z]?),         # End numbers
-            r'#(\d+[a-zA-Z]?)',          # Hash numbers
-            r'\b(\d{1,2}[a-zA-Z]?)\b,  # Numbers at end
+            r'_(\d+[a-zA-Z]?)$',
+            r'#(\d+[a-zA-Z]?)',
+            r'\b(\d{1,2}[a-zA-Z]?)\b$',
         ]
         
-        # Special handling for known field types
         if 'AttorneyStateBarNumber' in clean_name:
-            # Look for a number pattern in the original field name
             num_match = re.search(r'line(\d+[a-zA-Z]?)', field_name, re.IGNORECASE)
             if num_match:
                 field_id = num_match.group(1)
             else:
-                field_id = '2a'  # Default for state bar number
+                field_id = '2a'
         elif any(name in clean_name for name in ['FamilyName', 'LastName', 'Apellido']):
-            field_id = field_id or '1a'  # Default for family name
+            field_id = field_id or '1a'
         elif any(name in clean_name for name in ['GivenName', 'FirstName', 'Nombre']):
-            field_id = field_id or '1b'  # Default for given name
+            field_id = field_id or '1b'
         elif any(name in clean_name for name in ['MiddleName', 'MiddleInitial']):
-            field_id = field_id or '1c'  # Default for middle name
+            field_id = field_id or '1c'
         else:
-            # Try patterns on clean name
             for pattern in patterns:
                 match = re.search(pattern, clean_name, re.IGNORECASE)
                 if match:
                     if pattern.startswith(r'P(\d+)'):
-                        # Already has part, use the field part
                         field_id = match.group(2)
                     else:
                         field_id = match.group(1) if match.lastindex == 1 else match.group(match.lastindex)
-                    # Validate field ID
-                    if re.match(r'^\d{1,2}[a-zA-Z]?, field_id):
+                    if re.match(r'^\d{1,2}[a-zA-Z]?$', field_id):
                         break
                     else:
-                        field_id = None  # Invalid, keep looking
+                        field_id = None
         
-        # If still no field ID, try to extract any reasonable number
         if not field_id:
-            # Look for standalone numbers in original field name
             numbers = re.findall(r'\b(\d{1,2}[a-zA-Z]?)\b', field_name)
             if numbers:
-                # Filter out part numbers and other invalid patterns
-                valid_numbers = [n for n in numbers if not re.match(r'^0\d, n) and not re.match(r'^\d{3,}', n)]
+                valid_numbers = [n for n in numbers if not re.match(r'^0\d', n) and not re.match(r'^\d{3,}', n)]
                 if valid_numbers:
-                    # Prefer numbers that look like field IDs (e.g., 1a, 2b, 3, etc.)
                     for num in valid_numbers:
-                        if re.match(r'^\d{1,2}[a-zA-Z]?, num):
+                        if re.match(r'^\d{1,2}[a-zA-Z]?$', num):
+                            field_id = num
                             break
                     if not field_id and valid_numbers:
                         field_id = valid_numbers[-1]
         
-        # Last resort - use counter
         if not field_id:
             field_id = str(self.field_counter)
             self.field_counter += 1
         
-        # Clean up field ID - remove any trailing text
         field_id = field_id.strip('._- ')
         
-        # Final validation - ensure field ID is ONLY number + optional letter
         field_id_match = re.match(r'^(\d{1,2}[a-zA-Z]?)', field_id)
         if field_id_match:
             field_id = field_id_match.group(1)
         else:
-            # If still invalid, use counter
             field_id = str(self.field_counter)
             self.field_counter += 1
         
-        # Construct the clean name
         return f"P{part_num}_{field_id}"
         
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         """Extract all fields from any USCIS PDF form with accurate part detection"""
         fields = []
-        self.field_counter = 1  # Initialize field counter
+        self.field_counter = 1
         
         try:
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            # Clean form type to get base form name
             base_form_type = form_type.split(' - ')[0].strip()
-            
-            # Check if this form has attorney section
             has_attorney_section = base_form_type in ["G-28", "I-129", "I-130", "I-140"]
             
-            # First pass: collect all field names to understand structure
             all_field_data = []
             field_index = 0
-            seen_fields = set()  # Track seen field names to avoid duplicates
+            seen_fields = set()
             
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 for widget in page.widgets():
                     if widget.field_name:
-                        # Skip duplicate field names
                         if widget.field_name in seen_fields:
                             continue
                         seen_fields.add(widget.field_name)
@@ -520,32 +477,18 @@ class UniversalUSCISMapper:
                         })
                         field_index += 1
             
-            # Analyze field names to understand part structure
             part_mapping = self._analyze_form_structure_advanced(all_field_data, base_form_type, has_attorney_section)
             
-            # Second pass: create field objects with correct parts
             for field_data in all_field_data:
                 widget = field_data['widget']
                 
-                # Extract field information
                 field_type = self._get_field_type(widget)
-                
-                # Get part from our analysis
                 part = part_mapping.get(field_data['index'], f"Page {field_data['page']}")
-                
-                # Extract item
                 item = self._extract_item_advanced(widget.field_name, field_data['display'])
-                
-                # Generate description
                 description = self._generate_description(widget.field_name, widget.field_display)
-                
-                # Determine field type suffix
                 field_type_suffix = self._get_field_type_suffix(widget.field_name, field_type)
-                
-                # Generate clean name for export
                 clean_name = self._clean_field_name_for_export(widget.field_name, part, item)
                 
-                # Create field object
                 pdf_field = PDFField(
                     index=field_data['index'],
                     raw_name=widget.field_name,
@@ -559,17 +502,15 @@ class UniversalUSCISMapper:
                     clean_name=clean_name
                 )
                 
-                # Get mapping suggestions
                 suggestions = self._get_mapping_suggestions(pdf_field, base_form_type)
                 if suggestions:
                     best_suggestion = suggestions[0]
                     pdf_field.db_mapping = best_suggestion.db_path
                     pdf_field.confidence_score = best_suggestion.confidence
                     pdf_field.mapping_type = best_suggestion.field_type
-                    pdf_field.is_mapped = False  # Not mapped yet, just suggested
+                    pdf_field.is_mapped = False
                     pdf_field.is_questionnaire = False
                 else:
-                    # No mapping found - mark as questionnaire by default
                     pdf_field.is_questionnaire = True
                     pdf_field.is_mapped = False
                     pdf_field.db_mapping = None
@@ -578,7 +519,6 @@ class UniversalUSCISMapper:
             
             doc.close()
             
-            # Display extraction summary
             self._display_extraction_summary(fields, form_type)
             
         except Exception as e:
@@ -591,21 +531,15 @@ class UniversalUSCISMapper:
     
     def add_custom_field(self, part: str, item: str, description: str, field_type: str = "text") -> PDFField:
         """Add a custom field to the form"""
-        # Generate unique index
         custom_index = st.session_state.custom_field_counter
         st.session_state.custom_field_counter += 1
         
-        # Extract part number for clean name
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
         part_num = part_match.group(1) if part_match else "1"
         
-        # Generate clean name
         clean_name = f"P{part_num}_{item}" if item else f"P{part_num}_custom{custom_index}"
-        
-        # Determine field type suffix
         field_type_suffix = FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
         
-        # Create custom field
         custom_field = PDFField(
             index=custom_index,
             raw_name=f"custom_field_{custom_index}",
@@ -618,14 +552,13 @@ class UniversalUSCISMapper:
             field_type_suffix=field_type_suffix,
             clean_name=clean_name,
             is_custom_field=True,
-            is_questionnaire=True  # Default to questionnaire
+            is_questionnaire=True
         )
         
         return custom_field
     
     def _clean_field_name_for_analysis(self, field_name: str) -> str:
         """Clean field name for better pattern analysis"""
-        # Remove common noise patterns
         patterns_to_remove = [
             r'form\d*\[\d+\]\.',
             r'#subform\[\d+\]\.',
@@ -648,7 +581,23 @@ class UniversalUSCISMapper:
         field_groups = {}
         
         # Common patterns that indicate field groupings
+        # Updated to properly handle attorney fields as Part 0
         group_patterns = {
+            # Attorney/Representative patterns should map to Part 0
+            'attorney state bar': 'Part 0',
+            'form g-28': 'Part 0',
+            'g-28 is attached': 'Part 0',
+            'attorney or accredited': 'Part 0',
+            'accredited representative': 'Part 0',
+            'uscis online account number': 'Part 0',
+            'to be completed by attorney': 'Part 0',
+            'attorney': 'Part 0',
+            'representative': 'Part 0',
+            'appearance': 'Part 0',
+            'bar number': 'Part 0',
+            'licensing authority': 'Part 0',
+            
+            # Other parts
             'petitioner': 'Part 1',
             'beneficiary': 'Part 3',
             'employment': 'Part 5',
@@ -656,14 +605,12 @@ class UniversalUSCISMapper:
             'declaration': 'Part 7',
             'preparer': 'Part 8',
             'additional': 'Part 9',
-            'attorney': 'Part 0',
-            'representative': 'Part 0',
-            'appearance': 'Part 0',
         }
         
         for field_data in all_field_data:
             field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
             
+            # Check patterns in order - attorney patterns first to ensure Part 0 assignment
             for pattern, part in group_patterns.items():
                 if pattern in field_text:
                     field_groups[field_data['index']] = part
@@ -675,22 +622,18 @@ class UniversalUSCISMapper:
         """Detect logical part boundaries based on page transitions"""
         page_boundaries = {}
         
-        # Analyze field distribution across pages
         fields_per_page = defaultdict(list)
         for field_data in all_field_data:
             fields_per_page[field_data['page']].append(field_data)
         
-        # Look for patterns in page transitions
         for page, fields in fields_per_page.items():
-            if len(fields) < 5:  # Small number of fields might indicate end of part
+            if len(fields) < 5:
                 continue
             
-            # Check first few fields of the page for part indicators
             first_fields = fields[:5]
             for field in first_fields:
                 clean_name = self._clean_field_name_for_analysis(field['name'])
                 
-                # Look for part indicators
                 part_match = re.search(r'Part[\s_\-]*(\d+)', clean_name, re.IGNORECASE)
                 if part_match:
                     page_boundaries[page] = f"Part {part_match.group(1)}"
@@ -703,14 +646,12 @@ class UniversalUSCISMapper:
         """Infer part from field context and surrounding fields"""
         page = field_data['page']
         
-        # Look at nearby fields for clues
         window_size = 10
         start_idx = max(0, current_index - window_size)
         end_idx = min(len(all_fields), current_index + window_size + 1)
         
         nearby_fields = all_fields[start_idx:end_idx]
         
-        # Check for part indicators in nearby fields
         for nearby in nearby_fields:
             clean_name = self._clean_field_name_for_analysis(nearby['name'])
             part_match = re.search(r'Part[\s_\-]*(\d+)', clean_name, re.IGNORECASE)
@@ -720,7 +661,6 @@ class UniversalUSCISMapper:
                     return f"{part} - {known_structure[part]}"
                 return part
         
-        # Default based on page number
         if page == 1:
             return "Part 1" if not known_structure else "Part 1 - " + known_structure.get("Part 1", "Information")
         else:
@@ -732,7 +672,6 @@ class UniversalUSCISMapper:
     def _smooth_part_assignments(self, part_mapping: Dict[int, str], 
                                 all_field_data: List[Dict]) -> Dict[int, str]:
         """Smooth out part assignments to fix inconsistencies"""
-        # Group consecutive fields and ensure they have consistent parts
         sorted_fields = sorted(all_field_data, key=lambda x: (x['page'], x['index']))
         
         for i in range(1, len(sorted_fields) - 1):
@@ -744,11 +683,9 @@ class UniversalUSCISMapper:
             prev_idx = prev['index']
             next_idx = next_field['index']
             
-            # If current field has no clear part but neighbors do
             if current_idx in part_mapping:
                 current_part = part_mapping[current_idx]
                 
-                # If surrounded by same part and on same page, assign same part
                 if (prev_idx in part_mapping and next_idx in part_mapping and 
                     part_mapping[prev_idx] == part_mapping[next_idx] and
                     current['page'] == prev['page'] == next_field['page'] and
@@ -761,10 +698,7 @@ class UniversalUSCISMapper:
         """Advanced form structure analysis with improved part detection"""
         part_mapping = {}
         
-        # Get known structure for this form type
         known_structure = self.form_part_structures.get(form_type, {})
-        
-        # Enhanced part detection using multiple strategies
         
         # Strategy 1: Look for part indicators in field names (cleaned)
         part_indicators = {}
@@ -772,10 +706,8 @@ class UniversalUSCISMapper:
             field_name = field_data['name']
             display_name = field_data.get('display', '')
             
-            # Clean the field name for better pattern matching
             clean_field = self._clean_field_name_for_analysis(field_name)
             
-            # Look for part patterns in cleaned name
             part_patterns = [
                 (r'Part[\s_\-]*(\d+)', lambda m: f"Part {m.group(1)}"),
                 (r'P(\d+)_', lambda m: f"Part {m.group(1)}"),
@@ -798,31 +730,82 @@ class UniversalUSCISMapper:
         # Strategy 3: Use page boundaries and field positions
         page_boundaries = self._detect_page_boundaries(all_field_data)
         
-        # Strategy 4: Check for attorney fields on first page
-        if has_attorney_section:
-            attorney_keywords = ['attorney', 'representative', 'bar', 'licensing', 'accredited', 'g-28', 'g28', 'appearance', 'eligibility']
-            first_page_fields = [f for f in all_field_data if f['page'] == 1]
+        # Strategy 4: Check for attorney fields - enhanced detection
+        # First, look for the specific text pattern that indicates attorney section
+        attorney_section_indicators = [
+            'to be completed by an attorney',
+            'to be completed by attorney',
+            'attorney or accredited representative',
+            'completed by an attorney or accredited representative',
+            'attorney section'
+        ]
+        
+        # Specific attorney field patterns
+        attorney_field_patterns = [
+            'attorney state bar number',
+            'state bar number',
+            'form g-28',
+            'g-28 is attached',
+            'attorney or accredited representative',
+            'uscis online account number',
+            'licensing authority',
+            'bar number',
+            'accredited representative'
+        ]
+        
+        # Check all fields for attorney section indicators
+        attorney_section_detected = False
+        attorney_section_fields = set()
+        
+        for field_data in all_field_data:
+            field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
             
-            # More thorough check for attorney fields
-            attorney_field_count = 0
-            for f in first_page_fields:
-                field_text = f"{f['name']} {f.get('display', '')}".lower()
-                if any(keyword in field_text for keyword in attorney_keywords):
-                    attorney_field_count += 1
+            # Check if this field indicates start of attorney section
+            if any(indicator in field_text for indicator in attorney_section_indicators):
+                attorney_section_detected = True
+                # Mark this field and potentially following fields as Part 0
+                attorney_section_fields.add(field_data['index'])
+                
+                # Find all fields on the same page that might be part of attorney section
+                page = field_data['page']
+                for other_field in all_field_data:
+                    if other_field['page'] == page:
+                        other_text = f"{other_field['name']} {other_field.get('display', '')}".lower()
+                        # Check if it's an attorney-related field
+                        if any(pattern in other_text for pattern in attorney_field_patterns):
+                            attorney_section_fields.add(other_field['index'])
+        
+        # Also check for specific attorney fields even without section indicator
+        if has_attorney_section or attorney_section_detected:
+            for field_data in all_field_data:
+                field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
+                
+                # Check for specific attorney field patterns
+                if any(pattern in field_text for pattern in attorney_field_patterns):
+                    attorney_section_fields.add(field_data['index'])
+                    attorney_section_detected = True
+        
+        # Assign Part 0 to identified attorney fields
+        if attorney_section_detected:
+            for field_idx in attorney_section_fields:
+                part_mapping[field_idx] = "Part 0 - To be completed by attorney or BIA-accredited representative"
             
-            # If significant number of attorney fields on first page
-            if attorney_field_count >= 3 or (attorney_field_count > 0 and len(first_page_fields) < 20):
-                for f in first_page_fields:
-                    part_mapping[f['index']] = "Part 0 - To be completed by attorney or BIA-accredited representative"
+            # For forms with attorney section, ensure first substantive fields after attorney section start at Part 1
+            # Don't auto-assign other fields on the same page to Part 0 unless they're attorney-related
         
         # Strategy 5: Use field sequence and content analysis
         current_part = None
         current_page = 1
         field_count_in_part = 0
         last_part_indicator_index = -1
+        seen_attorney_section = attorney_section_detected
         
         for i, field_data in enumerate(all_field_data):
-            if field_data['index'] in part_mapping:  # Skip already mapped fields
+            if field_data['index'] in part_mapping:  # Skip already mapped fields (including Part 0)
+                current_part = part_mapping[field_data['index']]
+                # If we've seen Part 0 and now see a different part, mark transition
+                if "Part 0" in current_part:
+                    seen_attorney_section = True
                 continue
             
             field_name = field_data['name']
@@ -873,6 +856,14 @@ class UniversalUSCISMapper:
             # Default: try to infer from context
             else:
                 inferred_part = self._infer_part_from_context(field_data, all_field_data, i, known_structure)
+                # If we've seen attorney section and current inferred is Part 1, and we're on page 1,
+                # make sure we're not incorrectly assigning attorney fields to Part 1
+                if seen_attorney_section and "Part 1" in inferred_part and page == 1:
+                    # Double-check if this might be an attorney field
+                    field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
+                    if any(pattern in field_text for pattern in attorney_field_patterns):
+                        inferred_part = "Part 0 - To be completed by attorney or BIA-accredited representative"
+                
                 part_mapping[field_data['index']] = inferred_part
                 if inferred_part != current_part:
                     current_part = inferred_part
@@ -886,26 +877,19 @@ class UniversalUSCISMapper:
     
     def _extract_item_advanced(self, field_name: str, field_display: str = "") -> str:
         """Advanced item extraction with better pattern matching"""
-        # First clean the field name
         clean_name = self._clean_field_name_for_analysis(field_name)
         
-        # Special handling for SubP patterns
-        # If field name has SubP0line1a pattern, extract the item (1a)
         subp_match = re.search(r'SubP\d+line(\d+[a-zA-Z]?)', clean_name, re.IGNORECASE)
         if subp_match:
             return subp_match.group(1)
         
-        # Remove misleading part references
         clean_name = re.sub(r'P\d+line', 'line', clean_name, flags=re.IGNORECASE)
         clean_name = re.sub(r'Part\d+line', 'line', clean_name, flags=re.IGNORECASE)
         clean_name = re.sub(r'SubP\d+line', 'line', clean_name, flags=re.IGNORECASE)
         
-        # Also check display name
         all_text = f"{clean_name} {field_display}"
         
-        # Comprehensive patterns for item extraction
         patterns = [
-            # Explicit item patterns
             r'Item\s*Number\s*(\d+[a-zA-Z]?\.?)',
             r'Item\s*(\d+[a-zA-Z]?\.?)',
             r'Line\s*(\d+[a-zA-Z]?\.?)',
@@ -913,40 +897,29 @@ class UniversalUSCISMapper:
             r'Q\s*(\d+[a-zA-Z]?\.?)',
             r'No\.?\s*(\d+[a-zA-Z]?)',
             r'Number\s*(\d+[a-zA-Z]?)',
-            
-            # Field ID patterns - updated to avoid part references
-            r'line(\d+[a-zA-Z]?)',  # line1a, line2b, etc.
-            r'[_\.\-](\d+[a-zA-Z]?)$',  # At end
-            r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',  # In middle
-            
-            # Other patterns
+            r'line(\d+[a-zA-Z]?)',
+            r'[_\.\-](\d+[a-zA-Z]?)$',
+            r'[_\.\-](\d+[a-zA-Z]?)[_\.\-]',
             r'#(\d+[a-zA-Z]?)',
-            r'\b(\d{1,2}[a-zA-Z]?)\b',  # Standalone small numbers with optional letter
+            r'\b(\d{1,2}[a-zA-Z]?)\b',
         ]
         
-        # Try patterns on clean name first
         for pattern in patterns:
             match = re.search(pattern, clean_name, re.IGNORECASE)
             if match:
                 item = match.group(1)
-                # Validate item - should be reasonable (1-99 with optional letter)
                 if re.match(r'^\d{1,2}[a-zA-Z]?$', item):
                     return item.rstrip('.')
         
-        # If not found, try on full text
         for pattern in patterns:
             match = re.search(pattern, all_text, re.IGNORECASE)
             if match:
                 item = match.group(1)
-                # Validate item
                 if re.match(r'^\d{1,2}[a-zA-Z]?$', item):
                     return item.rstrip('.')
         
-        # Last resort: look for any reasonable field identifier
-        # Extract all alphanumeric segments
         segments = re.findall(r'[a-zA-Z0-9]+', clean_name)
-        for segment in reversed(segments):  # Start from end
-            # Check if segment looks like a field ID (not a part reference)
+        for segment in reversed(segments):
             if re.match(r'^\d{1,2}[a-zA-Z]?$', segment) and not re.match(r'^P\d+$', segment):
                 return segment
         
@@ -965,7 +938,6 @@ class UniversalUSCISMapper:
         elif widget.field_type == fitz.PDF_WIDGET_TYPE_SIGNATURE:
             return "signature"
         else:
-            # Check if it's a date field
             if any(pattern in widget.field_name.lower() for pattern in ['date', 'mm/dd/yyyy', 'fecha']):
                 return "date"
             return "text"
@@ -974,25 +946,20 @@ class UniversalUSCISMapper:
         """Get TypeScript field type suffix based on field name and type"""
         field_name_lower = field_name.lower()
         
-        # Clean the field name first to better match patterns
         clean_name = re.sub(r'\[\d+\]', '', field_name_lower)
         clean_name = re.sub(r'form\d*\.', '', clean_name)
         clean_name = re.sub(r'#subform\d*\.', '', clean_name)
         
-        # Check special field types first - be more specific
-        # Only assign FullName if it's explicitly a full name field
         if any(pattern in clean_name for pattern in ['fullname', 'full_name', 'completename']):
             return ":FullName"
         
-        # Check for name fields - individual name fields should be TextBox
         elif any(pattern in clean_name for pattern in ['lastname', 'last_name', 'familyname', 'family_name']):
-            return ":TextBox"  # Individual name fields are text boxes
+            return ":TextBox"
         elif any(pattern in clean_name for pattern in ['firstname', 'first_name', 'givenname', 'given_name']):
-            return ":TextBox"  # Individual name fields are text boxes
+            return ":TextBox"
         elif any(pattern in clean_name for pattern in ['middlename', 'middle_name', 'middleinitial', 'middle_initial']):
-            return ":TextBox"  # Individual name fields are text boxes
+            return ":TextBox"
         
-        # Check for specific field patterns
         elif 'addresstype' in clean_name or 'address_type' in clean_name:
             return ":AddressTypeBox"
         elif any(pattern in clean_name for pattern in ['ssn', 'social_security', 'socialsecurity']):
@@ -1016,102 +983,74 @@ class UniversalUSCISMapper:
         elif field_type == "select" or field_type == "listbox":
             return ":SelectBox"
         elif any(pattern in clean_name for pattern in ['phone', 'telephone', 'fax']):
-            return ":TextBox"  # Phone numbers are usually text boxes
+            return ":TextBox"
         elif 'email' in clean_name:
-            return ":TextBox"  # Email is a text box
+            return ":TextBox"
         elif any(pattern in clean_name for pattern in ['number', 'count', 'total']) and not 'phone' in clean_name:
-            return ":NumberBox"  # Numeric fields
+            return ":NumberBox"
         
-        # Default mapping based on field type
         return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
     def _generate_description(self, field_name: str, field_display: str = "") -> str:
         """Generate human-readable description"""
-        # Store original for fallback
         original_name = field_name
         
-        # Use display name if available and meaningful
         if field_display and field_display != field_name and not field_display.startswith('form'):
             desc = field_display
         else:
             desc = field_name
         
-        # First, handle Sub patterns more carefully
-        # Check if this is a SubP pattern that shouldn't be removed
         sub_pattern_match = re.search(r'SubP\d+line\d+[a-zA-Z]?', desc)
         if sub_pattern_match:
-            # Extract the actual field name after SubP pattern
             after_pattern = desc[sub_pattern_match.end():]
             if after_pattern:
-                # Clean the after pattern part
                 after_pattern = re.sub(r'^[_\.\-\s]+', '', after_pattern)
                 if after_pattern and not after_pattern.isdigit():
                     desc = after_pattern
         
-        # Aggressive cleaning for complex field names
         cleaning_patterns = [
-            # Form structure patterns
             r'form\d*\[\d+\]\.',
             r'#subform\[\d+\]\.',
             r'#pageSet\[\d+\]\.',
             r'Page\d+\[\d+\]\.',
             r'topmostSubform\[\d+\]\.',
             r'Form\d+\s*#page\s*Set\s*Page\d+\s*',
-            
-            # PDF-specific patterns
             r'PDF417BarCode\d*\[\d+\]',
             r'Pdf417bar\s*Code\d+',
             r'\.pdf$',
-            
-            # Array indices
             r'\[\d+\]',
-            
-            # Technical prefixes
             r'^#',
             r'^form\.',
             r'^field\.',
             r'^Page\d+\.',
-            
-            # Part patterns - clean these to avoid confusion
             r'^Part\d+[_\.\-]',
             r'^P\d+[_\.\-]',
             r'^pt\d+[_\.\-]',
-            r'P\d+line\d+[a-zA-Z]?[_\.\-]?',  # Remove P1line1a type patterns
-            r'Part\d+line\d+[a-zA-Z]?[_\.\-]?',  # Remove Part1line1a type patterns
-            
-            # Sub-patterns - be more careful here
-            r'^SubP\d+line\d+[a-zA-Z]?[_\.\-]',  # Remove SubP1line1a_ prefix
-            r'^Sub\s*P\d+line\d+[a-zA-Z]?\s*[_\.\-]',  # Remove "Sub P1line1a_" prefix
+            r'P\d+line\d+[a-zA-Z]?[_\.\-]?',
+            r'Part\d+line\d+[a-zA-Z]?[_\.\-]?',
+            r'^SubP\d+line\d+[a-zA-Z]?[_\.\-]',
+            r'^Sub\s*P\d+line\d+[a-zA-Z]?\s*[_\.\-]',
         ]
         
         for pattern in cleaning_patterns:
             desc = re.sub(pattern, '', desc, flags=re.IGNORECASE)
         
-        # Additional cleaning for line references
         desc = re.sub(r'^line\d+[a-zA-Z]?[_\.\-]?', '', desc, flags=re.IGNORECASE)
         
-        # Extract meaningful part after cleaning
-        # Look for the last meaningful segment
         segments = desc.split('.')
         meaningful_segments = []
         
         for segment in segments:
-            # Skip empty or purely numeric segments
             if segment and not segment.isdigit() and len(segment) > 1:
-                # Skip common technical terms
                 if segment.lower() not in ['form', 'page', 'field', 'subform', 'text', 'checkbox', 'sub']:
                     meaningful_segments.append(segment)
         
-        # Use the most meaningful segment
         if meaningful_segments:
-            desc = meaningful_segments[-1]  # Usually the last segment is most descriptive
+            desc = meaningful_segments[-1]
         
-        # Further cleaning
         desc = desc.strip('._- ')
         
-        # If we still have technical junk, try different approach
         if not desc or desc.lower() in ['field', 'text', 'checkbox', 'radio', 'sub']:
-            # Try to extract from original field name
             parts = original_name.split('.')
             for part in reversed(parts):
                 clean_part = re.sub(r'\[\d+\]', '', part)
@@ -1124,17 +1063,13 @@ class UniversalUSCISMapper:
                         desc = clean_part
                         break
         
-        # Handle underscores and camelCase
         if '_' in desc:
             parts = desc.split('_')
-            # Filter out part references and empty parts
             parts = [p for p in parts if p and not p.isdigit() and not re.match(r'^P\d+$', p, re.IGNORECASE)]
             desc = ' '.join(parts)
         
-        # Convert camelCase to spaces
         desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', desc)
         
-        # Expand common abbreviations and fix common field names
         abbreviations = {
             'FamilyName': 'Last Name',
             'GivenName': 'First Name',
@@ -1178,33 +1113,26 @@ class UniversalUSCISMapper:
             'AttorneyStateBarNumber': 'State Bar Number'
         }
         
-        # Apply abbreviation expansions
         for abbr, full in abbreviations.items():
-            # Case-insensitive replacement for whole words
             desc = re.sub(rf'\b{abbr}\b', full, desc, flags=re.IGNORECASE)
         
-        # Clean up and format
         desc = ' '.join(desc.split())
         desc = desc.strip('._- ')
         
-        # Only remove "Sub" if it's a standalone prefix, not part of a word
         if desc.startswith('Sub ') and len(desc) > 4:
             desc = desc[4:]
         
-        # Smart title case (preserve acronyms)
         if desc:
             words = desc.split()
             result = []
             for word in words:
                 if word.isupper() and len(word) > 1 and word not in ['SSN', 'EIN', 'FEIN', 'LLC']:
-                    result.append(word)  # Keep acronyms
+                    result.append(word)
                 else:
                     result.append(word.capitalize())
             desc = ' '.join(result)
         
-        # If still empty or generic, provide a default based on item
         if not desc or desc.lower() in ['field', 'text', '', 'sub']:
-            # Try to use item number if available
             item_match = re.search(r'(\d+[a-zA-Z]?)', original_name)
             if item_match:
                 desc = f"Field {item_match.group(1)}"
@@ -1214,271 +1142,264 @@ class UniversalUSCISMapper:
         return desc
     
     def _get_mapping_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
-            """Get intelligent mapping suggestions for a field"""
-
+        """Get intelligent mapping suggestions for a field"""
         suggestions = []
-    
-    # Clean field name and description for better matching
-    field_name_lower = field.raw_name.lower()
-    desc_lower = field.description.lower()
-    clean_name_lower = field.clean_name.lower()
-    
-    # Combine all text for comprehensive matching
-    all_text = f"{field_name_lower} {desc_lower} {clean_name_lower}"
-    
-    # Form-specific mapping rules
-    if form_type == "G-28":
-        suggestions.extend(self._get_g28_suggestions(field))
-    elif form_type == "I-129":
-        suggestions.extend(self._get_i129_suggestions(field))
-    elif form_type == "I-90":
-        suggestions.extend(self._get_i90_suggestions(field))
-    elif form_type == "I-539":
-        suggestions.extend(self._get_i539_suggestions(field))
-    
-    # Enhanced generic pattern matching
-    
-    # Attorney/Representative mappings (Part 0 or attorney sections)
-    if "part 0" in field.part.lower() or "attorney" in field.part.lower() or "representative" in field.part.lower():
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
-        elif "bar" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
-        elif any(p in all_text for p in ['firm', 'office']) and "name" in all_text:
-            suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
-        elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
-            suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
-        elif any(p in all_text for p in ['phone', 'telephone', 'tel']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.85, "Attorney mobile phone"))
-            else:
-                suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.85, "Attorney work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
-        elif "fax" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
-        elif "licensing" in all_text and "authority" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
-        elif "uscis" in all_text and "account" in all_text:
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
-    
-    # IMPORTANT: "Information About You" ALWAYS maps to beneficiary
-    # This is true for I-539, I-90, and many other forms where the applicant is the beneficiary
-    elif "information about you" in field.part.lower():
-        # These are beneficiary fields
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Your last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Your first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Your middle name"))
-        elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#', 'registration']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien registration number"))
-        elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
-        elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
-        elif "gender" in all_text or "sex" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
-        elif "country" in all_text and "birth" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
-        elif "country" in all_text and ("citizenship" in all_text or "nationality" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCitizenOfCountry", 0.9, "Country of citizenship"))
-        elif "marital" in all_text and "status" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
-        elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
-        elif "i-94" in all_text or "i94" in all_text:
-            if any(p in all_text for p in ['number', 'no', '#']):
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
-            elif "arrival" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
-            elif "home" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
-            elif "daytime" in all_text or "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Phone number"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
-        elif "uscis" in all_text and "account" in all_text and "online" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryUscisAccountNumber", 0.9, "USCIS Online Account Number"))
-    
-    # Petitioner/Customer mappings (usually Part 1 when it's NOT "Information About You")
-    elif ("part 1" in field.part.lower() or "petitioner" in field.part.lower()) and "information about you" not in field.part.lower():
-        if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
-        elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_last_name", 0.85, "Signatory last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_first_name", 0.85, "Signatory first name"))
-        elif "title" in all_text and "job" in all_text:
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_job_title", 0.85, "Signatory job title"))
-        elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
-            suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
-        elif "naics" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_naics_code", 0.9, "NAICS code"))
-        elif "employees" in all_text:
+        
+        field_name_lower = field.raw_name.lower()
+        desc_lower = field.description.lower()
+        clean_name_lower = field.clean_name.lower()
+        
+        all_text = f"{field_name_lower} {desc_lower} {clean_name_lower}"
+        
+        if form_type == "G-28":
+            suggestions.extend(self._get_g28_suggestions(field))
+        elif form_type == "I-129":
+            suggestions.extend(self._get_i129_suggestions(field))
+        elif form_type == "I-90":
+            suggestions.extend(self._get_i90_suggestions(field))
+        elif form_type == "I-539":
+            suggestions.extend(self._get_i539_suggestions(field))
+        
+        # Generic pattern matching
+        
+        # Attorney/Representative mappings (Part 0 or attorney sections)
+        if "part 0" in field.part.lower() or "attorney" in field.part.lower() or "representative" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.firstName", 0.95, "Attorney first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
+            elif "bar" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
+            elif any(p in all_text for p in ['firm', 'office']) and "name" in all_text:
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
+            elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
+            elif any(p in all_text for p in ['phone', 'telephone', 'tel']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.85, "Attorney mobile phone"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.attorneyInfo.workPhone", 0.85, "Attorney work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.emailAddress", 0.9, "Attorney email"))
+            elif "fax" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
+            elif "licensing" in all_text and "authority" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.licensingAuthority", 0.9, "Licensing authority"))
+            elif "uscis" in all_text and "account" in all_text:
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
+        
+        # "Information About You" ALWAYS maps to beneficiary
+        elif "information about you" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Your last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Your first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Your middle name"))
+            elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#', 'registration']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien registration number"))
+            elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
+            elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
+            elif "gender" in all_text or "sex" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
+            elif "country" in all_text and "birth" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
+            elif "country" in all_text and ("citizenship" in all_text or "nationality" in all_text):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCitizenOfCountry", 0.9, "Country of citizenship"))
+            elif "marital" in all_text and "status" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
+            elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
+            elif "i-94" in all_text or "i94" in all_text:
+                if any(p in all_text for p in ['number', 'no', '#']):
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
+                elif "arrival" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
+                elif "home" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
+                elif "daytime" in all_text or "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Phone number"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
+            elif "uscis" in all_text and "account" in all_text and "online" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryUscisAccountNumber", 0.9, "USCIS Online Account Number"))
+        
+        # Petitioner/Customer mappings (usually Part 1 when it's NOT "Information About You")
+        elif ("part 1" in field.part.lower() or "petitioner" in field.part.lower()) and "information about you" not in field.part.lower():
+            if any(p in all_text for p in ['company', 'organization', 'business', 'employer']) and "name" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "Company/Organization name"))
+            elif any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_last_name", 0.85, "Signatory last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_first_name", 0.85, "Signatory first name"))
+            elif "title" in all_text and "job" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_job_title", 0.85, "Signatory job title"))
+            elif "fein" in all_text or ("federal" in all_text and "ein" in all_text) or ("tax" in all_text and "id" in all_text):
+                suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "Federal Tax ID"))
+            elif "naics" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_naics_code", 0.9, "NAICS code"))
+            elif "employees" in all_text:
+                if "h1b" in all_text or "h-1b" in all_text:
+                    suggestions.append(MappingSuggestion("customer.customer_total_h1b_employees", 0.85, "H1B employees"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.customer_total_employees", 0.85, "Total employees"))
+            elif "established" in all_text or "year" in all_text and "business" in all_text:
+                suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_mobile_phone", 0.8, "Signatory mobile"))
+                else:
+                    suggestions.append(MappingSuggestion("customer.signatory.signatory_work_phone", 0.8, "Signatory work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("customer.signatory.signatory_email_id", 0.85, "Signatory email"))
+        
+        # Beneficiary mappings (usually Part 3, but also Part 1 when it's "Information About You")
+        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Beneficiary last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Beneficiary first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Beneficiary middle name"))
+            elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien number"))
+            elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
+            elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
+            elif "gender" in all_text or "sex" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
+            elif "country" in all_text and "birth" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
+            elif "marital" in all_text and "status" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
+            elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
+                suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
+            elif "i-94" in all_text or "i94" in all_text:
+                if any(p in all_text for p in ['number', 'no', '#']):
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
+                elif "arrival" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
+            elif any(p in all_text for p in ['phone', 'telephone']):
+                if "mobile" in all_text or "cell" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
+                elif "home" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
+            elif "email" in all_text:
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
+        
+        # Address mappings (check field context)
+        if any(p in all_text for p in ['street', 'address', 'calle']) and not any(p in all_text for p in ['email']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                if "firm" in all_text:
+                    suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street"))
+            elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
+                suggestions.append(MappingSuggestion("customer.address.address_street", 0.85, "Company street"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+                if "foreign" in all_text or "abroad" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Foreign address street"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressStreet", 0.85, "Work address street"))
+                elif "physical" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Physical address street"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressStreet", 0.85, "Home/Mailing address street"))
+        
+        elif any(p in all_text for p in ['city', 'ciudad']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressCity", 0.85, "Attorney city"))
+            elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
+                suggestions.append(MappingSuggestion("customer.address.address_city", 0.85, "Company city"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+                if "foreign" in all_text or "abroad" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Foreign address city"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressCity", 0.85, "Work address city"))
+                elif "physical" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Physical address city"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressCity", 0.85, "City"))
+        
+        elif any(p in all_text for p in ['state', 'province', 'estado']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressState", 0.85, "Attorney state"))
+            elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
+                suggestions.append(MappingSuggestion("customer.address.address_state", 0.85, "Company state"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+                if "foreign" in all_text or "abroad" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Foreign address state"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressState", 0.85, "Work address state"))
+                elif "physical" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Physical address state"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressState", 0.85, "State"))
+        
+        elif any(p in all_text for p in ['zip', 'postal', 'codigo']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.address.addressZip", 0.85, "Attorney ZIP"))
+            elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
+                suggestions.append(MappingSuggestion("customer.address.address_zip", 0.85, "Company ZIP"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+                if "foreign" in all_text or "abroad" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Foreign address ZIP"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressZip", 0.85, "Work address ZIP"))
+                elif "physical" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Physical address ZIP"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressZip", 0.85, "ZIP code"))
+        
+        # Apartment/Suite/Floor handling
+        elif any(p in all_text for p in ['apt', 'apartment', 'ste', 'suite', 'flr', 'floor']):
+            if "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                if "firm" in all_text:
+                    suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressNumber", 0.85, "Law firm apt/suite"))
+                else:
+                    suggestions.append(MappingSuggestion("attorney.address.addressNumber", 0.85, "Attorney apt/suite"))
+            elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
+                suggestions.append(MappingSuggestion("customer.address.address_number", 0.85, "Company suite"))
+            elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
+                if "foreign" in all_text or "abroad" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Foreign address apt/suite"))
+                elif "work" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressNumber", 0.85, "Work address suite"))
+                elif "physical" in all_text:
+                    suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Physical address apt/suite"))
+                else:
+                    suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressNumber", 0.85, "Apt/Suite/Floor number"))
+        
+        # In Care Of field
+        elif any(p in all_text for p in ['care of', 'careof', 'in care', 'incare', 'c/o']):
+            if "information about you" in field.part.lower():
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryInCareOf", 0.85, "In care of name"))
+            elif "attorney" in field.part.lower() or "part 0" in field.part.lower():
+                suggestions.append(MappingSuggestion("attorney.attorneyInfo.inCareOf", 0.85, "Attorney in care of"))
+            elif "petitioner" in field.part.lower():
+                suggestions.append(MappingSuggestion("customer.inCareOf", 0.85, "Company in care of"))
+        
+        # Case/Petition specific mappings
+        elif any(p in all_text for p in ['petition', 'classification', 'category']):
             if "h1b" in all_text or "h-1b" in all_text:
-                suggestions.append(MappingSuggestion("customer.customer_total_h1b_employees", 0.85, "H1B employees"))
+                suggestions.append(MappingSuggestion("case.h1BPetitionType", 0.85, "H1B petition type"))
             else:
-                suggestions.append(MappingSuggestion("customer.customer_total_employees", 0.85, "Total employees"))
-        elif "established" in all_text or "year" in all_text and "business" in all_text:
-            suggestions.append(MappingSuggestion("customer.customer_year_established", 0.85, "Year established"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("customer.signatory.signatory_mobile_phone", 0.8, "Signatory mobile"))
-            else:
-                suggestions.append(MappingSuggestion("customer.signatory.signatory_work_phone", 0.8, "Signatory work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("customer.signatory.signatory_email_id", 0.85, "Signatory email"))
-    
-    # Beneficiary mappings (usually Part 3, but also Part 1 when it's "Information About You")
-    elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower():
-        if any(p in all_text for p in ['lastname', 'last_name', 'family_name', 'apellido']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "Beneficiary last name"))
-        elif any(p in all_text for p in ['firstname', 'first_name', 'given_name', 'nombre']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "Beneficiary first name"))
-        elif any(p in all_text for p in ['middlename', 'middle_name', 'middle_initial']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "Beneficiary middle name"))
-        elif any(p in all_text for p in ['alien', 'a-number', 'anumber', 'uscis']) and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.95, "Alien number"))
-        elif "ssn" in all_text or ("social" in all_text and "security" in all_text):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiarySsn", 0.95, "Social Security Number"))
-        elif any(p in all_text for p in ['birth', 'nacimiento']) and any(p in all_text for p in ['date', 'fecha']):
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryDateOfBirth", 0.95, "Date of birth"))
-        elif "gender" in all_text or "sex" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryGender", 0.9, "Gender"))
-        elif "country" in all_text and "birth" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCountryOfBirth", 0.9, "Country of birth"))
-        elif "marital" in all_text and "status" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.maritalStatus", 0.9, "Marital status"))
-        elif "passport" in all_text and any(p in all_text for p in ['number', 'no', '#']):
-            suggestions.append(MappingSuggestion("beneficiary.PassportDetails.Passport.passportNumber", 0.9, "Passport number"))
-        elif "i-94" in all_text or "i94" in all_text:
-            if any(p in all_text for p in ['number', 'no', '#']):
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94Number", 0.9, "I-94 number"))
-            elif "arrival" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.I94Details.I94.i94ArrivalDate", 0.85, "I-94 arrival date"))
-        elif any(p in all_text for p in ['phone', 'telephone']):
-            if "mobile" in all_text or "cell" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryCellNumber", 0.85, "Mobile phone"))
-            elif "home" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryHomeNumber", 0.85, "Home phone"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryWorkNumber", 0.85, "Work phone"))
-        elif "email" in all_text:
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryPrimaryEmailAddress", 0.9, "Email address"))
-    
-    # Address mappings (check field context)
-    if any(p in all_text for p in ['street', 'address', 'calle']) and not any(p in all_text for p in ['email']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            if "firm" in all_text:
-                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressStreet", 0.85, "Law firm street"))
-            else:
-                suggestions.append(MappingSuggestion("attorney.address.addressStreet", 0.85, "Attorney street"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_street", 0.85, "Company street"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Foreign address street"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressStreet", 0.85, "Work address street"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressStreet", 0.85, "Physical address street"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressStreet", 0.85, "Home/Mailing address street"))
-    
-    elif any(p in all_text for p in ['city', 'ciudad']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressCity", 0.85, "Attorney city"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_city", 0.85, "Company city"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Foreign address city"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressCity", 0.85, "Work address city"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressCity", 0.85, "Physical address city"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressCity", 0.85, "City"))
-    
-    elif any(p in all_text for p in ['state', 'province', 'estado']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressState", 0.85, "Attorney state"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_state", 0.85, "Company state"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Foreign address state"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressState", 0.85, "Work address state"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressState", 0.85, "Physical address state"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressState", 0.85, "State"))
-    
-    elif any(p in all_text for p in ['zip', 'postal', 'codigo']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.address.addressZip", 0.85, "Attorney ZIP"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_zip", 0.85, "Company ZIP"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Foreign address ZIP"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressZip", 0.85, "Work address ZIP"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressZip", 0.85, "Physical address ZIP"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressZip", 0.85, "ZIP code"))
-    
-    # Apartment/Suite/Floor handling
-    elif any(p in all_text for p in ['apt', 'apartment', 'ste', 'suite', 'flr', 'floor']):
-        if "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            if "firm" in all_text:
-                suggestions.append(MappingSuggestion("attorneyLawfirmDetails.address.addressNumber", 0.85, "Law firm apt/suite"))
-            else:
-                suggestions.append(MappingSuggestion("attorney.address.addressNumber", 0.85, "Attorney apt/suite"))
-        elif "petitioner" in field.part.lower() or ("part 1" in field.part.lower() and "information about you" not in field.part.lower()):
-            suggestions.append(MappingSuggestion("customer.address.address_number", 0.85, "Company suite"))
-        elif "beneficiary" in field.part.lower() or "part 3" in field.part.lower() or "information about you" in field.part.lower():
-            if "foreign" in all_text or "abroad" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Foreign address apt/suite"))
-            elif "work" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.WorkAddress.addressNumber", 0.85, "Work address suite"))
-            elif "physical" in all_text:
-                suggestions.append(MappingSuggestion("beneficiary.ForeignAddress.addressNumber", 0.85, "Physical address apt/suite"))
-            else:
-                suggestions.append(MappingSuggestion("beneficiary.HomeAddress.addressNumber", 0.85, "Apt/Suite/Floor number"))
-    
-    # In Care Of field
-    elif any(p in all_text for p in ['care of', 'careof', 'in care', 'incare', 'c/o']):
-        if "information about you" in field.part.lower():
-            suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryInCareOf", 0.85, "In care of name"))
-        elif "attorney" in field.part.lower() or "part 0" in field.part.lower():
-            suggestions.append(MappingSuggestion("attorney.attorneyInfo.inCareOf", 0.85, "Attorney in care of"))
-        elif "petitioner" in field.part.lower():
-            suggestions.append(MappingSuggestion("customer.inCareOf", 0.85, "Company in care of"))
-    
-    # Case/Petition specific mappings
-    elif any(p in all_text for p in ['petition', 'classification', 'category']):
-        if "h1b" in all_text or "h-1b" in all_text:
-            suggestions.append(MappingSuggestion("case.h1BPetitionType", 0.85, "H1B petition type"))
-        else:
-            suggestions.append(MappingSuggestion("case.caseType", 0.85, "Case type"))
-    
-    # Sort by confidence and return top suggestions
-    suggestions.sort(key=lambda x: x.confidence, reverse=True)
-    return suggestions[:3]  # Return top 3 suggestions for better coverage
+                suggestions.append(MappingSuggestion("case.caseType", 0.85, "Case type"))
+        
+        suggestions.sort(key=lambda x: x.confidence, reverse=True)
+        return suggestions[:3]
     
     def _get_g28_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions specific to G-28 form"""
@@ -1488,14 +1409,11 @@ class UniversalUSCISMapper:
         desc_lower = field.description.lower()
         all_text = f"{field_name} {clean_name} {desc_lower}"
         
-        # Debug special cases
         if "attorneystatebarnumber" in field_name.replace(" ", "").lower():
             suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.98, "Attorney state bar number"))
-            return suggestions  # Return immediately for this specific case
+            return suggestions
         
-        # Part 0/1 - Attorney Information
         if "part 0" in field.part.lower() or ("part 1" in field.part.lower() and "attorney" in field.part.lower()):
-            # Name fields
             if any(p in desc_lower for p in ['last name', 'family name', 'apellido']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.lastName", 0.95, "Attorney last name"))
             elif any(p in desc_lower for p in ['first name', 'given name', 'nombre']):
@@ -1503,7 +1421,6 @@ class UniversalUSCISMapper:
             elif any(p in desc_lower for p in ['middle name', 'middle initial']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.middleName", 0.9, "Attorney middle name"))
             
-            # Bar and licensing - check all text
             elif any(p in all_text for p in ['bar', 'state bar', 'statebar', 'bar number', 'barnumber']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.stateBarNumber", 0.95, "State bar number"))
             elif "licensing" in all_text and "authority" in all_text:
@@ -1514,7 +1431,6 @@ class UniversalUSCISMapper:
                 else:
                     suggestions.append(MappingSuggestion("attorney.attorneyInfo.nameOfHighestCourt", 0.9, "Name of highest court"))
             
-            # Contact information
             elif any(p in all_text for p in ['phone', 'telephone', 'daytime']):
                 if any(p in all_text for p in ['mobile', 'cell']):
                     suggestions.append(MappingSuggestion("attorney.attorneyInfo.mobilePhone", 0.9, "Attorney mobile phone"))
@@ -1525,28 +1441,23 @@ class UniversalUSCISMapper:
             elif "fax" in all_text:
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.faxNumber", 0.85, "Attorney fax"))
             
-            # USCIS account
             elif "uscis" in all_text and any(p in all_text for p in ['account', 'online']):
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.uscisOnlineAccountNumber", 0.9, "USCIS account number"))
             
-            # Signature
             elif "signature" in all_text:
                 suggestions.append(MappingSuggestion("attorney.attorneyInfo.signature", 0.9, "Attorney signature"))
             
-            # Law firm fields in Part 0/1
             elif any(p in all_text for p in ['firm', 'organization', 'office', 'company']) and "name" in all_text:
                 suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
             elif "fein" in all_text or ("tax" in all_text and "id" in all_text) or "ein" in all_text:
                 suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
         
-        # Part 2 - Law Firm Information (if exists)
         elif "part 2" in field.part.lower() or "firm" in field.part.lower():
             if any(p in all_text for p in ['firm', 'organization']) and "name" in all_text:
                 suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmName", 0.9, "Law firm name"))
             elif "fein" in all_text or ("tax" in all_text and "id" in all_text):
                 suggestions.append(MappingSuggestion("attorneyLawfirmDetails.lawfirmDetails.lawFirmFein", 0.9, "Law firm FEIN"))
         
-        # Part 3 - Client Information
         elif "part 3" in field.part.lower() or "client" in field.part.lower() or "appearance" in field.part.lower():
             if any(p in all_text for p in ['petitioner', 'client', 'applicant', 'company', 'organization']) and "name" in all_text:
                 suggestions.append(MappingSuggestion("customer.customer_name", 0.85, "Client/Company name"))
@@ -1557,7 +1468,6 @@ class UniversalUSCISMapper:
             elif any(p in desc_lower for p in ['first name', 'given name', 'nombre']):
                 suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.85, "Client first name"))
         
-        # Address fields (check context) - more specific matching
         if any(p in all_text for p in ['street', 'address', 'calle']) and not any(p in all_text for p in ['city', 'state', 'zip', 'country']):
             if "attorney" in field.part.lower() or "part 0" in field.part.lower() or "part 1" in field.part.lower():
                 if "firm" in all_text or "office" in all_text:
@@ -1595,14 +1505,12 @@ class UniversalUSCISMapper:
         suggestions = []
         field_name = field.raw_name.lower()
         
-        # Part 1 - Petitioner Information
         if "part 1" in field.part.lower():
             if "company" in field_name or "organization" in field_name:
                 suggestions.append(MappingSuggestion("customer.customer_name", 0.9, "I-129 company name"))
             elif "fein" in field_name or "tax" in field_name:
                 suggestions.append(MappingSuggestion("customer.customer_tax_id", 0.9, "I-129 tax ID"))
         
-        # Part 3 - Beneficiary Information  
         elif "part 3" in field.part.lower():
             if "alien" in field_name:
                 suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.9, "I-129 alien number"))
@@ -1615,7 +1523,6 @@ class UniversalUSCISMapper:
         field_name = field.raw_name.lower()
         clean_name = field.clean_name
         
-        # Use clean name patterns from I-90.ts
         if clean_name == "P1_3a":
             suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "I-90 last name"))
         elif clean_name == "P1_3b":
@@ -1627,20 +1534,37 @@ class UniversalUSCISMapper:
         
         return suggestions
     
+    def _get_i539_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
+        """Get suggestions specific to I-539 form"""
+        suggestions = []
+        field_name = field.raw_name.lower()
+        desc_lower = field.description.lower()
+        all_text = f"{field_name} {desc_lower}"
+        
+        # I-539 Part 1 is "Information About You" which maps to beneficiary
+        if "part 1" in field.part.lower() or "information about you" in field.part.lower():
+            if any(p in all_text for p in ['lastname', 'last_name', 'family_name']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryLastName", 0.95, "I-539 applicant last name"))
+            elif any(p in all_text for p in ['firstname', 'first_name', 'given_name']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryFirstName", 0.95, "I-539 applicant first name"))
+            elif any(p in all_text for p in ['middlename', 'middle_name']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.beneficiaryMiddleName", 0.9, "I-539 applicant middle name"))
+            elif "alien" in all_text and any(p in all_text for p in ['number', 'registration']):
+                suggestions.append(MappingSuggestion("beneficiary.Beneficiary.alienNumber", 0.9, "I-539 alien number"))
+        
+        return suggestions
+    
     def _display_extraction_summary(self, fields: List[PDFField], form_type: str):
         """Display detailed extraction summary organized by parts"""
         st.write("### 📊 Extraction Summary")
         st.write(f"**Form**: {form_type}")
         st.write(f"**Total fields extracted**: {len(fields)}")
         
-        # Group fields by part
         fields_by_part = defaultdict(list)
         for field in fields:
             fields_by_part[field.part].append(field)
         
-        # Sort parts naturally
         def natural_sort_key(part):
-            # Extract numbers from part name for natural sorting
             numbers = re.findall(r'\d+', part)
             if numbers:
                 return (0, int(numbers[0]))
@@ -1648,22 +1572,18 @@ class UniversalUSCISMapper:
         
         sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
-        # Display part-by-part breakdown
         st.write("**Part-by-Part Field Breakdown:**")
         
         for part in sorted_parts:
             part_fields = fields_by_part[part]
             
-            # Count field types
             type_counts = defaultdict(int)
             for field in part_fields:
                 type_counts[field.field_type] += 1
             
-            # Create summary string
             type_summary = ", ".join([f"{count} {ftype}{'s' if count > 1 else ''}" 
                                      for ftype, count in sorted(type_counts.items())])
             
-            # Display with appropriate icon
             if "part 0" in part.lower() or "attorney" in part.lower():
                 icon = "⚖️"
             elif "part" in part.lower():
@@ -1673,7 +1593,6 @@ class UniversalUSCISMapper:
             
             st.write(f"{icon} **{part}**: {len(part_fields)} fields ({type_summary})")
             
-            # Show sample fields in expander
             with st.expander(f"View fields in {part}"):
                 sample_fields = part_fields[:10]
                 for field in sample_fields:
@@ -1687,11 +1606,9 @@ class UniversalUSCISMapper:
                 if len(part_fields) > 10:
                     st.write(f"... and {len(part_fields) - 10} more fields")
         
-        # Show debug info for part detection
         with st.expander("🔍 Part Detection Debug Info"):
             st.write("**Sample field names and their detected parts:**")
             
-            # Show fields from Part 0 first if they exist
             part_0_fields = [f for f in fields if "part 0" in f.part.lower()]
             if part_0_fields:
                 st.write("**Part 0 (Attorney) Fields:**")
@@ -1710,7 +1627,6 @@ class UniversalUSCISMapper:
                 st.dataframe(debug_df_p0, use_container_width=True, hide_index=True)
                 st.write("---")
             
-            # Show other fields
             st.write("**Other Sample Fields:**")
             debug_fields = [f for f in fields if "part 0" not in f.part.lower()][:20]
             debug_data = []
@@ -1734,7 +1650,6 @@ class UniversalUSCISMapper:
             st.write("5. ✅ Smoothed part assignments")
             st.write("6. ✅ Special handling for attorney fields (Part 0)")
         
-        # Show mapping statistics
         st.write("**Mapping Statistics:**")
         col1, col2, col3, col4 = st.columns(4)
         
@@ -1754,7 +1669,6 @@ class UniversalUSCISMapper:
             score = self.calculate_mapping_score(fields)
             st.metric("Overall Score", f"{score}%")
         
-        # Show database paths debug info
         with st.expander("🗄️ Database Paths Debug Info"):
             st.write(f"**Total database paths available**: {len(self.db_paths_cache)}")
             st.write("**Sample paths:**")
@@ -1787,13 +1701,11 @@ class UniversalUSCISMapper:
         elif mapping_type == "questionnaire":
             field.is_questionnaire = True
             field.is_mapped = False
-            # Don't clear db_mapping for questionnaire fields, keep suggestions
     
     def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
         """Generate TypeScript mapping file in the correct format"""
         form_name = form_type.replace("-", "").replace(" ", "").split(" - ")[0]
         
-        # Group mappings by category
         categories = {
             "customerData": {},
             "beneficiaryData": {},
@@ -1805,17 +1717,13 @@ class UniversalUSCISMapper:
             "conditionalData": {}
         }
         
-        # Process fields
         for field in fields:
-            # Use clean name instead of raw name
             field_key = field.clean_name or field.raw_name
             
             if field.is_mapped and field.db_mapping and not field.db_mapping.startswith("Default:"):
-                # Add type suffix
                 mapping_value = f"{field.db_mapping}{field.field_type_suffix}"
                 
                 if field.mapping_type == "direct":
-                    # Determine category based on path
                     if field.db_mapping.startswith('customer'):
                         categories['customerData'][field_key] = mapping_value
                     elif field.db_mapping.startswith('beneficiary'):
@@ -1829,17 +1737,14 @@ class UniversalUSCISMapper:
                 elif field.mapping_type == "conditional":
                     categories['conditionalData'][field_key] = field.mapping_config
             elif field.db_mapping and field.db_mapping.startswith("Default:"):
-                # Extract default value
                 default_value = field.db_mapping.replace("Default: ", "")
                 if default_value.lower() in ['true', 'false']:
                     categories['defaultData'][field_key] = field.field_type_suffix
                 else:
                     categories['defaultData'][field_key] = f"{default_value}{field.field_type_suffix}"
             elif field.is_questionnaire or (not field.is_mapped and not field.db_mapping):
-                # Use clean name for questionnaire
                 categories['questionnaireData'][field_key] = f"{field.item or field_key}{field.field_type_suffix}"
         
-        # Build TypeScript content
         ts_lines = []
         ts_lines.append(f'export const {form_name} = {{')
         ts_lines.append(f'    "formname": "{form_name.lower()}",')
@@ -1863,7 +1768,6 @@ class UniversalUSCISMapper:
         
         lines = []
         for key, value in data.items():
-            # Escape quotes in key and value
             key_escaped = key.replace('"', '\\"')
             value_escaped = value.replace('"', '\\"')
             lines.append(f'        "{key_escaped}": "{value_escaped}"')
@@ -1885,13 +1789,11 @@ class UniversalUSCISMapper:
         """Generate questionnaire JSON in the correct format"""
         controls = []
         
-        # Group fields by part for better organization
         fields_by_part = defaultdict(list)
         for field in fields:
             if field.is_questionnaire or (not field.is_mapped and not field.db_mapping):
                 fields_by_part[field.part].append(field)
         
-        # Sort parts naturally
         def natural_sort_key(part):
             numbers = re.findall(r'\d+', part)
             if numbers:
@@ -1900,13 +1802,10 @@ class UniversalUSCISMapper:
         
         sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
-        # Add controls for each part
         for part in sorted_parts:
-            # Extract part number
             part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
             part_number = part_match.group(1) if part_match else "1"
             
-            # Add part title
             part_id = f"p{part_number}_title"
             controls.append({
                 "name": part_id,
@@ -1919,12 +1818,9 @@ class UniversalUSCISMapper:
                 }
             })
             
-            # Add fields for this part
             for field in fields_by_part[part]:
-                # Use clean name
                 control_name = field.clean_name.lower() if field.clean_name else f"q_{field.index}"
                 
-                # Generate label
                 label = field.description
                 
                 control = {
@@ -1937,7 +1833,6 @@ class UniversalUSCISMapper:
                     }
                 }
                 
-                # Add specific properties based on field type
                 if field.field_type == "radio":
                     control["type"] = "radio"
                     control["value"] = ""
@@ -1947,7 +1842,6 @@ class UniversalUSCISMapper:
                     control["style"]["success"] = True
                     control["className"] = "custom-control-success"
                 elif field.field_type == "text" and "address" in field.description.lower():
-                    # Check for address type fields
                     if any(t in field.description.lower() for t in ['apt', 'ste', 'flr']):
                         control["type"] = "radio"
                         control["style"]["radio"] = True
@@ -1955,7 +1849,6 @@ class UniversalUSCISMapper:
                 
                 controls.append(control)
                 
-                # Add line break if needed
                 if field.field_type == "radio" and "address" in field.description.lower():
                     controls.append({
                         "name": "",
@@ -1995,7 +1888,6 @@ class UniversalUSCISMapper:
         mapped = sum(1 for f in fields if f.is_mapped)
         questionnaire = sum(1 for f in fields if f.is_questionnaire)
         
-        # Mapped fields get 100%, questionnaire fields get 50%
         score = ((mapped * 100) + (questionnaire * 50)) / total
         return round(score, 1)
 
@@ -2066,14 +1958,12 @@ def render_upload_section(mapper: UniversalUSCISMapper):
     col1, col2 = st.columns(2)
     
     with col1:
-        # Form type input
         form_type = st.text_input(
             "Form Type/Number",
             placeholder="e.g., I-129, I-485, N-400",
             help="Enter the USCIS form number or select from common forms"
         )
         
-        # Common forms dropdown
         common_forms = [
             "Custom/Other",
             "G-28 - Notice of Entry of Appearance",
@@ -2117,11 +2007,9 @@ def render_upload_section(mapper: UniversalUSCISMapper):
             for key, value in file_details.items():
                 st.write(f"- {key}: {value}")
     
-    # Extract button
     if uploaded_file and form_type:
         if st.button("🔍 Extract & Analyze Fields", type="primary", use_container_width=True):
             with st.spinner("Extracting PDF fields and analyzing form structure..."):
-                # Extract fields
                 fields = mapper.extract_pdf_fields(uploaded_file, form_type)
                 
                 if fields:
@@ -2138,15 +2026,12 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     st.header("🗺️ Field Mapping Configuration")
     
-    # Info box
     st.info("ℹ️ **Note**: All unmapped fields are automatically added to the questionnaire. You can change this by selecting a different mapping type.")
     
-    # Add custom field section
     with st.expander("➕ Add Custom Field"):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            # Get available parts
             parts = list(set(f.part for f in st.session_state.pdf_fields))
             def natural_sort_key(part):
                 numbers = re.findall(r'\d+', part)
@@ -2168,7 +2053,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         
         if st.button("➕ Add Field", use_container_width=True):
             if custom_desc:
-                # Add custom field
                 custom_field = mapper.add_custom_field(custom_part, custom_item, custom_desc, custom_type)
                 st.session_state.pdf_fields.append(custom_field)
                 st.success(f"Added custom field: {custom_field.clean_name} - {custom_desc}")
@@ -2176,12 +2060,10 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
             else:
                 st.error("Please provide a field description")
     
-    # Filters
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         parts = list(set(f.part for f in st.session_state.pdf_fields))
-        # Sort parts naturally
         def natural_sort_key(part):
             numbers = re.findall(r'\d+', part)
             if numbers:
@@ -2201,7 +2083,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     with col4:  
         search_term = st.text_input("Search fields", placeholder="Enter keyword...")
     
-    # Quick actions
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
     
@@ -2231,17 +2112,15 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     with col3:
         if st.button("🔄 Reset All Mappings", use_container_width=True):
             for field in st.session_state.pdf_fields:
-                if not field.is_custom_field:  # Don't reset custom fields
+                if not field.is_custom_field:
                     field.is_mapped = False
                     field.is_questionnaire = False
                     field.mapping_type = "direct"
                     field.mapping_config = None
             st.rerun()
     
-    # Filter fields
     filtered_fields = []
     for field in st.session_state.pdf_fields:
-        # Apply filters
         if selected_part != "All" and field.part != selected_part:
             continue
         
@@ -2268,15 +2147,12 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         
         filtered_fields.append(field)
     
-    # Display fields
     st.write(f"Showing **{len(filtered_fields)}** of **{len(st.session_state.pdf_fields)}** fields")
     
-    # Group by parts
     fields_by_part = defaultdict(list)
     for field in filtered_fields:
         fields_by_part[field.part].append(field)
     
-    # Sort parts
     def natural_sort_key(part):
         numbers = re.findall(r'\d+', part)
         if numbers:
@@ -2285,7 +2161,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     
     sorted_parts_display = sorted(fields_by_part.keys(), key=natural_sort_key)
     
-    # If no parts found, show debug info
     if not sorted_parts_display:
         st.warning("No fields to display with current filters.")
         return
@@ -2293,7 +2168,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
     for part in sorted_parts_display:
         fields = fields_by_part[part]
         
-        # Count field types
         type_counts = defaultdict(int)
         for field in fields:
             type_counts[field.field_type] += 1
@@ -2301,7 +2175,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         type_summary = ", ".join([f"{count} {ftype}{'s' if count > 1 else ''}" 
                                  for ftype, count in sorted(type_counts.items())])
         
-        # Icon based on part
         if "part 0" in part.lower() or "attorney" in part.lower():
             icon = "⚖️"
         elif "part" in part.lower():
@@ -2309,15 +2182,13 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
         else:
             icon = "📄"
         
-        expanded = "Part 1" in part or "Part 0" in part  # Expand Part 0 and 1 by default
+        expanded = "Part 1" in part or "Part 0" in part
         
         with st.expander(f"{icon} {part} ({len(fields)} fields: {type_summary})", expanded=expanded):
-            # Add a quick summary of fields in this part
             st.markdown("**Fields in this part:**")
             
-            # Create a preview table
             preview_data = []
-            for field in fields[:5]:  # Show first 5 fields
+            for field in fields[:5]:
                 preview_data.append({
                     "Clean Name": field.clean_name,
                     "Description": field.description,
@@ -2335,7 +2206,6 @@ def render_mapping_section(mapper: UniversalUSCISMapper):
             
             st.markdown("---")
             
-            # Now show the detailed field cards
             for field in fields:
                 render_field_mapping_card(field, mapper)
 
@@ -2347,7 +2217,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
         col1, col2, col3 = st.columns([5, 4, 1])
         
         with col1:
-            # Field info - Use clean name as primary display
             field_label = f"**{field.clean_name}** - {field.description}"
             if field.item:
                 field_label += f" (Item {field.item})"
@@ -2355,10 +2224,8 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 field_label += " ✨ *Custom*"
             st.markdown(field_label)
             
-            # Show raw name in caption for debugging
             st.caption(f"Raw: `{field.raw_name}` | Type: {field.field_type} | Page: {field.page}")
             
-            # Current mapping status
             if field.is_mapped and field.db_mapping:
                 st.markdown(f'<span class="mapping-badge mapped">✅ Mapped to: {field.db_mapping}</span>', unsafe_allow_html=True)
             elif field.db_mapping and field.confidence_score > 0 and not field.is_questionnaire:
@@ -2370,14 +2237,11 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 st.markdown('<span class="mapping-badge unmapped">❌ Not mapped</span>', unsafe_allow_html=True)
         
         with col2:
-            # Mapping controls
             mapping_options = ["Keep Current", "Direct Mapping", "Default Value", "Add to Questionnaire", "Custom Path", "Skip Field"]
             
-            # Add delete option for custom fields
             if field.is_custom_field:
                 mapping_options.append("Delete Field")
             
-            # Default selection based on current status
             if field.is_mapped:
                 default_option = "Keep Current"
             elif field.is_questionnaire:
@@ -2395,17 +2259,13 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 label_visibility="collapsed"
             )
             
-            # Show appropriate controls based on selection
             custom_path = None
             
             if mapping_type == "Direct Mapping":
-                # Get all database paths
                 db_paths = mapper.get_all_database_paths()
                 
-                # Show database object selector prominently
                 st.markdown("**📂 Select Database Object:**")
                 
-                # Show ALL database objects in a dropdown first
                 db_objects = list(DB_OBJECTS.keys())
                 selected_object = st.selectbox(
                     "Database Category",
@@ -2414,17 +2274,13 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     help="Choose a database object category to filter available fields"
                 )
                 
-                # Clean up the selection
                 if selected_object.startswith("📁 "):
-                    selected_object = selected_object[3:]  # Remove emoji prefix
+                    selected_object = selected_object[3:]
                 
-                # Filter paths based on selection or context
                 if selected_object and selected_object != "🔍 Auto-detect based on context":
-                    # User selected specific object
                     filtered_paths = [p for p in db_paths if p.startswith(selected_object)]
                     st.caption(f"📊 Showing {len(filtered_paths)} fields from {selected_object}")
                 else:
-                    # Auto-detect based on part
                     part_lower = field.part.lower()
                     
                     if "attorney" in part_lower or "part 0" in part_lower or "representative" in part_lower:
@@ -2443,28 +2299,23 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                         filtered_paths = [p for p in db_paths if p.startswith("lca")]
                         st.caption("🔍 Auto-detected: LCA fields")
                     else:
-                        # Show all paths if no specific context
                         filtered_paths = db_paths
                         st.caption(f"📊 Showing all {len(db_paths)} database fields")
                 
-                # Show suggested mappings if available
                 if field.db_mapping and not field.is_mapped:
                     st.info(f"💡 **Suggested**: {field.db_mapping}")
                     
-                    # Quick accept button for suggestion
                     if st.button(f"✅ Use suggestion", key=f"use_sugg_{field.index}", type="primary"):
                         field.is_mapped = True
                         field.is_questionnaire = False
                         mapper.create_mapping(field, "direct", {"path": field.db_mapping})
                         st.rerun()
                 
-                # Create dropdown options
                 if filtered_paths:
                     dropdown_options = ["-- Select a database field --"] + filtered_paths
                 else:
                     dropdown_options = ["-- Select a database field --"] + db_paths
                 
-                # Try to find current mapping in options
                 default_index = 0
                 if field.db_mapping and field.db_mapping in dropdown_options:
                     default_index = dropdown_options.index(field.db_mapping)
@@ -2479,7 +2330,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     label_visibility="collapsed"
                 )
                 
-                # Handle selection
                 if custom_path and custom_path != "-- Select a database field --":
                     st.success(f"✅ Selected: `{custom_path}`")
                 else:
@@ -2489,7 +2339,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 st.markdown("**✏️ Enter Custom Database Path:**")
                 st.caption("Use this option to manually enter a database path not in the dropdown")
                 
-                # Text input for custom path
                 custom_path = st.text_input(
                     "Database path",
                     value=field.db_mapping if field.db_mapping and not field.db_mapping.startswith("Default:") else "",
@@ -2499,14 +2348,11 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     label_visibility="collapsed"
                 )
                 
-                # Show autocomplete suggestions
                 if custom_path:
                     db_paths = mapper.get_all_database_paths()
-                    # Find matching paths
                     search_term = custom_path.lower()
                     suggestions = [p for p in db_paths if search_term in p.lower()]
                     
-                    # Smart ordering
                     exact_matches = [p for p in suggestions if p.lower() == search_term]
                     starts_with = [p for p in suggestions if p.lower().startswith(search_term) and p not in exact_matches]
                     contains = [p for p in suggestions if p not in exact_matches and p not in starts_with]
@@ -2517,7 +2363,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     if ordered_suggestions:
                         st.caption(f"📍 Found {len(suggestions)} matches. Click to select:")
                         
-                        # Create columns for suggestions
                         cols = st.columns(2)
                         for idx, sugg in enumerate(ordered_suggestions):
                             with cols[idx % 2]:
@@ -2540,7 +2385,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                 )
         
         with col3:
-            # Action buttons
             if mapping_type == "Delete Field" and field.is_custom_field:
                 if st.button("🗑️", key=f"delete_{field.index}", help="Delete custom field", type="secondary"):
                     st.session_state.pdf_fields.remove(field)
@@ -2606,7 +2450,6 @@ def render_field_mapping_card(field: PDFField, mapper: UniversalUSCISMapper):
                     if saved:
                         st.rerun()
             
-            # Quick accept button for suggestions
             if field.db_mapping and not field.is_mapped and not field.is_questionnaire:
                 if st.button("✅", key=f"accept_{field.index}", help="Accept suggestion"):
                     field.is_mapped = True
@@ -2626,7 +2469,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
     
     fields = st.session_state.pdf_fields
     
-    # Summary metrics
     col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
@@ -2644,7 +2486,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
         custom_count = sum(1 for f in fields if f.is_custom_field)
         st.metric("Custom", custom_count)
     
-    # Filters
     st.markdown("### 🔍 Filter Options")
     col1, col2, col3, col4 = st.columns(4)
     
@@ -2673,10 +2514,8 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
     with col4:
         search_all = st.text_input("Search", placeholder="Search all fields...", key="all_fields_search")
     
-    # Filter fields
     filtered_fields = fields.copy()
     
-    # Apply view filter
     if view_filter == "Mapped Only":
         filtered_fields = [f for f in filtered_fields if f.is_mapped]
     elif view_filter == "Questionnaire Only":
@@ -2686,15 +2525,12 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
     elif view_filter == "Custom Only":
         filtered_fields = [f for f in filtered_fields if f.is_custom_field]
     
-    # Apply part filter
     if part_filter != "All Parts":
         filtered_fields = [f for f in filtered_fields if f.part == part_filter]
     
-    # Apply type filter
     if type_filter != "All Types":
         filtered_fields = [f for f in filtered_fields if f.field_type == type_filter]
     
-    # Apply search
     if search_all:
         search_lower = search_all.lower()
         filtered_fields = [f for f in filtered_fields if 
@@ -2704,7 +2540,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
                           search_lower in f.clean_name.lower() or
                           search_lower in f.part.lower()]
     
-    # Display options
     col1, col2 = st.columns(2)
     with col1:
         display_mode = st.radio(
@@ -2725,9 +2560,7 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
     
     st.write(f"**Showing {len(filtered_fields)} of {len(fields)} fields**")
     
-    # Display based on mode
     if display_mode == "Table View":
-        # Create dataframe
         data = []
         for field in filtered_fields:
             row = {}
@@ -2773,7 +2606,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
             df = pd.DataFrame(data)
             st.dataframe(df, use_container_width=True, hide_index=True)
             
-            # Export option
             csv = df.to_csv(index=False)
             st.download_button(
                 "📥 Download as CSV",
@@ -2784,7 +2616,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
             )
     
     elif display_mode == "Card View":
-        # Display as cards
         for field in filtered_fields:
             with st.container():
                 st.markdown('<div class="field-card">', unsafe_allow_html=True)
@@ -2812,12 +2643,10 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
                 st.markdown('</div>', unsafe_allow_html=True)
     
     elif display_mode == "Grouped by Part":
-        # Group by part
         fields_by_part = defaultdict(list)
         for field in filtered_fields:
             fields_by_part[field.part].append(field)
         
-        # Sort parts
         def natural_sort_key(part):
             numbers = re.findall(r'\d+', part)
             if numbers:
@@ -2829,7 +2658,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
         for part in sorted_parts_display:
             part_fields = fields_by_part[part]
             
-            # Count statuses
             mapped = sum(1 for f in part_fields if f.is_mapped)
             quest = sum(1 for f in part_fields if f.is_questionnaire)
             unmapped = sum(1 for f in part_fields if not f.is_mapped and not f.is_questionnaire)
@@ -2837,7 +2665,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
             icon = "⚖️" if "attorney" in part.lower() or "part 0" in part.lower() else "📑"
             
             with st.expander(f"{icon} **{part}** - {len(part_fields)} fields (✅ {mapped} | 📋 {quest} | ❌ {unmapped})", expanded=False):
-                # Create table for this part
                 data = []
                 for field in part_fields:
                     data.append({
@@ -2855,7 +2682,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
                     st.dataframe(df, use_container_width=True, hide_index=True)
     
     else:  # Grouped by Status
-        # Group by status
         status_groups = {
             "✅ Mapped": [f for f in filtered_fields if f.is_mapped],
             "📋 Questionnaire": [f for f in filtered_fields if f.is_questionnaire],
@@ -2883,7 +2709,6 @@ def render_all_fields_view(mapper: UniversalUSCISMapper):
                         df = pd.DataFrame(data)
                         st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # Bulk actions
     if filtered_fields:
         st.markdown("---")
         st.markdown("### ⚡ Bulk Actions")
@@ -2928,7 +2753,6 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     
     fields = st.session_state.pdf_fields
     
-    # Get only mapped fields
     mapped_fields = [f for f in fields if f.is_mapped and f.db_mapping]
     
     if not mapped_fields:
@@ -2937,14 +2761,12 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     
     st.write(f"**Total mapped fields**: {len(mapped_fields)}")
     
-    # Group by database object
     grouped_mappings = defaultdict(list)
     for field in mapped_fields:
         if field.db_mapping:
             obj_name = field.db_mapping.split('.')[0]
             grouped_mappings[obj_name].append(field)
     
-    # Display options
     col1, col2, col3 = st.columns(3)
     with col1:
         view_mode = st.selectbox("View Mode", ["By Database Object", "By Form Part", "All Fields"])
@@ -2953,7 +2775,6 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     with col3:
         search_mapped = st.text_input("Search mapped fields", placeholder="Enter keyword...")
     
-    # Filter mapped fields based on search
     if search_mapped:
         search_lower = search_mapped.lower()
         filtered_mapped = [f for f in mapped_fields if 
@@ -2964,7 +2785,6 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     else:
         filtered_mapped = mapped_fields
     
-    # Sort fields
     if sort_by == "Field Name":
         filtered_mapped.sort(key=lambda x: x.clean_name)
     elif sort_by == "Description":
@@ -2974,23 +2794,19 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     elif sort_by == "Confidence":
         filtered_mapped.sort(key=lambda x: x.confidence_score, reverse=True)
     
-    # Display based on view mode
     if view_mode == "By Database Object":
         st.markdown("### 🗃️ Mappings by Database Object")
         
-        # Re-group filtered fields
         filtered_grouped = defaultdict(list)
         for field in filtered_mapped:
             if field.db_mapping:
                 obj_name = field.db_mapping.split('.')[0]
                 filtered_grouped[obj_name].append(field)
         
-        # Display each object's mappings
         for obj_name in sorted(filtered_grouped.keys()):
             obj_fields = filtered_grouped[obj_name]
             
             with st.expander(f"**{obj_name}** ({len(obj_fields)} fields)", expanded=True):
-                # Create a dataframe for better display
                 data = []
                 for field in obj_fields:
                     data.append({
@@ -3009,12 +2825,10 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     elif view_mode == "By Form Part":
         st.markdown("### 📑 Mappings by Form Part")
         
-        # Group by part
         part_grouped = defaultdict(list)
         for field in filtered_mapped:
             part_grouped[field.part].append(field)
         
-        # Sort parts
         def natural_sort_key(part):
             numbers = re.findall(r'\d+', part)
             if numbers:
@@ -3046,7 +2860,6 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
     else:  # All Fields view
         st.markdown("### 📋 All Mapped Fields")
         
-        # Create comprehensive dataframe
         data = []
         for field in filtered_mapped:
             data.append({
@@ -3065,7 +2878,6 @@ def render_mapped_fields_reference(mapper: UniversalUSCISMapper):
         
         df = pd.DataFrame(data)
         
-        # Display
         st.write(f"Showing {len(df)} mapped fields")
         st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -3080,7 +2892,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
     fields = st.session_state.pdf_fields
     form_type = st.session_state.form_type
     
-    # Summary statistics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Fields", len(fields))
@@ -3093,7 +2904,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
     
     st.markdown("---")
     
-    # Export options
     col1, col2 = st.columns(2)
     
     with col1:
@@ -3102,7 +2912,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
         
         ts_content = mapper.generate_typescript_export(form_type, fields)
         
-        # Clean form name for filename
         form_name = form_type.split(' - ')[0].replace(' ', '').replace('-', '')
         
         st.download_button(
@@ -3133,14 +2942,12 @@ def render_export_section(mapper: UniversalUSCISMapper):
         with st.expander("Preview JSON"):
             st.code(json_content, language="json")
     
-    # Additional exports
     st.markdown("---")
     st.subheader("📊 Additional Export Options")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Export mapping summary
         if st.button("📈 Export Mapping Summary", use_container_width=True):
             summary_data = []
             for field in fields:
@@ -3169,7 +2976,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
             )
     
     with col2:
-        # Documentation
         if st.button("📝 Generate Documentation", use_container_width=True):
             doc_content = f"""# {form_type} Field Mapping Documentation
 
@@ -3198,7 +3004,6 @@ def render_export_section(mapper: UniversalUSCISMapper):
             )
     
     with col3:
-        # Help text
         st.info("💡 Use the TypeScript file in your application to map form fields to your database structure.")
 
 def main():
@@ -3210,34 +3015,28 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    # Initialize mapper
     mapper = UniversalUSCISMapper()
     
-    # Render header
     render_header()
     
-    # Sidebar
     with st.sidebar:
         st.header("📊 Mapping Overview")
         
         if 'pdf_fields' in st.session_state and st.session_state.pdf_fields:
             fields = st.session_state.pdf_fields
             
-            # Progress metrics
             total = len(fields)
             mapped = sum(1 for f in fields if f.is_mapped)
             suggested = sum(1 for f in fields if f.db_mapping and not f.is_mapped and not f.is_questionnaire)
             questionnaire = sum(1 for f in fields if f.is_questionnaire or (not f.is_mapped and not f.db_mapping))
             custom = sum(1 for f in fields if f.is_custom_field)
             
-            # Display metrics
             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
             st.metric("Total Fields", total)
             if custom > 0:
                 st.caption(f"Including {custom} custom fields")
             st.markdown('</div>', unsafe_allow_html=True)
             
-            # Progress bars
             st.write("**Mapping Progress**")
             st.progress(mapped / total if total > 0 else 0)
             st.caption(f"Mapped: {mapped} ({mapped/total*100:.1f}%)")
@@ -3248,13 +3047,11 @@ def main():
             st.progress(questionnaire / total if total > 0 else 0)
             st.caption(f"Questionnaire: {questionnaire} ({questionnaire/total*100:.1f}%)")
             
-            # Part breakdown
             st.write("**Fields by Part**")
             parts_count = defaultdict(int)
             for field in fields:
                 parts_count[field.part] += 1
             
-            # Sort parts
             def natural_sort_key(part):
                 numbers = re.findall(r'\d+', part)
                 if numbers:
@@ -3269,7 +3066,6 @@ def main():
                 else:
                     st.write(f"- {part}: {count}")
             
-            # Field types
             st.write("**Field Types**")
             type_counts = defaultdict(int)
             for field in fields:
@@ -3285,7 +3081,6 @@ def main():
         st.markdown("[USCIS Forms](https://www.uscis.gov/forms/all-forms)")
         st.markdown("[Form Instructions](https://www.uscis.gov/forms)")
         
-        # Mapping tips
         st.markdown("---")
         st.markdown("### ℹ️ Mapping Tips")
         st.markdown("- **G-28**: Part 0 is Attorney info")
@@ -3295,7 +3090,6 @@ def main():
         st.markdown("- **Unmapped**: Auto-added to questionnaire")
         st.markdown("- **Custom Fields**: Add missing fields manually")
     
-    # Main content tabs
     tabs = st.tabs([
         "📤 Upload & Extract", 
         "🗺️ Field Mapping", 
@@ -3324,13 +3118,11 @@ def main():
         st.header("⚙️ Settings")
         st.write("Configure mapping preferences and defaults")
         
-        # View database schema
         st.subheader("📋 Database Schema")
         
         with st.expander("View Complete Database Schema", expanded=False):
             st.json(DB_OBJECTS)
         
-        # Export/Import settings
         st.subheader("💾 Configuration Management")
         
         col1, col2 = st.columns(2)
@@ -3385,16 +3177,13 @@ def main():
                 if st.button("📤 Apply Configuration", use_container_width=True):
                     try:
                         config = json.load(uploaded_config)
-                        # Apply configuration logic here
                         st.success("Configuration applied successfully!")
                     except Exception as e:
                         st.error(f"Error applying configuration: {str(e)}")
         
-        # Database connection settings
         st.subheader("🔌 Database Connection")
         st.info("Database connection settings would be configured here in a production environment.")
         
-        # Advanced options
         st.subheader("🔧 Advanced Options")
         
         col1, col2 = st.columns(2)
@@ -3416,7 +3205,6 @@ def main():
                 help="Display additional debug information during field extraction"
             )
         
-        # Clear cache
         st.subheader("🗑️ Clear Data")
         
         col1, col2 = st.columns(2)
