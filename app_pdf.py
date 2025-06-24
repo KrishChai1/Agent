@@ -1900,7 +1900,7 @@ def render_header():
     st.markdown("""
     <style>
         .main-header {
-            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            background: linear-gradient(#135deg, #1e3c72, #2a5298);
             color: white;
             padding: 25px;
             border-radius: 10px;
