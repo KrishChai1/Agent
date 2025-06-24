@@ -9,7 +9,125 @@ import pandas as pd
 from dataclasses import dataclass, field
 import difflib
 
-# Enhanced Database Object Structure with Better Organization
+# Comprehensive USCIS Forms Database
+USCIS_FORMS_DATABASE = {
+    "I-90": {
+        "title": "Application to Replace Permanent Resident Card",
+        "keywords": ["permanent resident card", "green card", "replace", "renew"],
+        "identifier_patterns": ["Form I-90", "I-90", "OMB No. 1615-0052"],
+        "has_g28": True
+    },
+    "I-129": {
+        "title": "Petition for a Nonimmigrant Worker",
+        "keywords": ["nonimmigrant worker", "h1b", "l1", "petition"],
+        "identifier_patterns": ["Form I-129", "I-129", "OMB No. 1615-0009"],
+        "has_g28": True
+    },
+    "I-130": {
+        "title": "Petition for Alien Relative",
+        "keywords": ["alien relative", "family", "petition"],
+        "identifier_patterns": ["Form I-130", "I-130", "OMB No. 1615-0012"],
+        "has_g28": True
+    },
+    "I-131": {
+        "title": "Application for Travel Document",
+        "keywords": ["travel document", "reentry permit", "refugee travel"],
+        "identifier_patterns": ["Form I-131", "I-131", "OMB No. 1615-0013"],
+        "has_g28": True
+    },
+    "I-140": {
+        "title": "Immigrant Petition for Alien Workers",
+        "keywords": ["immigrant petition", "alien worker", "employment based"],
+        "identifier_patterns": ["Form I-140", "I-140", "OMB No. 1615-0015"],
+        "has_g28": True
+    },
+    "I-485": {
+        "title": "Application to Register Permanent Residence or Adjust Status",
+        "keywords": ["adjust status", "permanent residence", "green card application"],
+        "identifier_patterns": ["Form I-485", "I-485", "OMB No. 1615-0023"],
+        "has_g28": True
+    },
+    "I-539": {
+        "title": "Application To Extend/Change Nonimmigrant Status",
+        "keywords": ["extend status", "change status", "nonimmigrant"],
+        "identifier_patterns": ["Form I-539", "I-539", "OMB No. 1615-0003"],
+        "has_g28": True
+    },
+    "I-765": {
+        "title": "Application for Employment Authorization",
+        "keywords": ["employment authorization", "work permit", "ead"],
+        "identifier_patterns": ["Form I-765", "I-765", "OMB No. 1615-0040"],
+        "has_g28": True
+    },
+    "N-400": {
+        "title": "Application for Naturalization",
+        "keywords": ["naturalization", "citizenship", "citizen"],
+        "identifier_patterns": ["Form N-400", "N-400", "OMB No. 1615-0052"],
+        "has_g28": True
+    },
+    "N-600": {
+        "title": "Application for Certificate of Citizenship",
+        "keywords": ["certificate of citizenship", "citizenship certificate"],
+        "identifier_patterns": ["Form N-600", "N-600", "OMB No. 1615-0057"],
+        "has_g28": True
+    },
+    "I-751": {
+        "title": "Petition to Remove Conditions on Residence",
+        "keywords": ["remove conditions", "conditional residence"],
+        "identifier_patterns": ["Form I-751", "I-751", "OMB No. 1615-0038"],
+        "has_g28": True
+    },
+    "I-526": {
+        "title": "Immigrant Petition by Alien Investor",
+        "keywords": ["investor", "eb-5", "investment"],
+        "identifier_patterns": ["Form I-526", "I-526", "OMB No. 1615-0026"],
+        "has_g28": True
+    },
+    "I-601": {
+        "title": "Application for Waiver of Grounds of Inadmissibility",
+        "keywords": ["waiver", "inadmissibility", "grounds"],
+        "identifier_patterns": ["Form I-601", "I-601", "OMB No. 1615-0029"],
+        "has_g28": True
+    },
+    "I-821": {
+        "title": "Application for Temporary Protected Status",
+        "keywords": ["temporary protected status", "tps"],
+        "identifier_patterns": ["Form I-821", "I-821", "OMB No. 1615-0043"],
+        "has_g28": True
+    },
+    "I-914": {
+        "title": "Application for T Nonimmigrant Status",
+        "keywords": ["t visa", "trafficking victim"],
+        "identifier_patterns": ["Form I-914", "I-914", "OMB No. 1615-0099"],
+        "has_g28": True
+    },
+    "I-918": {
+        "title": "Petition for U Nonimmigrant Status",
+        "keywords": ["u visa", "crime victim"],
+        "identifier_patterns": ["Form I-918", "I-918", "OMB No. 1615-0104"],
+        "has_g28": True
+    },
+    "G-28": {
+        "title": "Notice of Entry of Appearance as Attorney or Accredited Representative",
+        "keywords": ["attorney", "representative", "appearance"],
+        "identifier_patterns": ["Form G-28", "G-28", "OMB No. 1615-0105"],
+        "has_g28": False
+    },
+    "G-325A": {
+        "title": "Biographic Information",
+        "keywords": ["biographic", "information"],
+        "identifier_patterns": ["Form G-325A", "G-325A"],
+        "has_g28": False
+    },
+    "AR-11": {
+        "title": "Alien's Change of Address",
+        "keywords": ["change of address", "address change"],
+        "identifier_patterns": ["Form AR-11", "AR-11", "OMB No. 1615-0007"],
+        "has_g28": False
+    }
+}
+
+# Enhanced Database Object Structure
 DB_OBJECTS = {
     "attorney": {
         "attorneyInfo": [
@@ -233,7 +351,7 @@ FIELD_TYPE_SUFFIX_MAP = {
     "number": ":NumberBox"
 }
 
-# Enhanced form structures with Part 0 understanding
+# Enhanced form structures
 ENHANCED_FORM_STRUCTURES = {
     "G-28": {
         "Part 1": "Information About Attorney or Accredited Representative",
@@ -245,7 +363,7 @@ ENHANCED_FORM_STRUCTURES = {
     },
     "I-90": {
         "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
-        "Part 1": "Information About You",  # This is BENEFICIARY
+        "Part 1": "Information About You",
         "Part 2": "Application Type",
         "Part 3": "Processing Information",
         "Part 4": "Applicant's Statement",
@@ -255,7 +373,7 @@ ENHANCED_FORM_STRUCTURES = {
     },
     "I-539": {
         "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
-        "Part 1": "Information About You",  # This is BENEFICIARY
+        "Part 1": "Information About You",
         "Part 2": "Application Type",
         "Part 3": "Processing Information",
         "Part 4": "Additional Information About You",
@@ -266,14 +384,82 @@ ENHANCED_FORM_STRUCTURES = {
     },
     "I-129": {
         "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
-        "Part 1": "Petitioner Information",  # This is CUSTOMER/COMPANY
+        "Part 1": "Petitioner Information",
         "Part 2": "Information About This Petition",
-        "Part 3": "Beneficiary Information",  # This is BENEFICIARY
+        "Part 3": "Beneficiary Information",
         "Part 4": "Processing Information",
         "Part 5": "Basic Information About Employment",
         "Part 6": "Export Control Certification",
         "Part 7": "Petitioner Declaration",
         "Part 8": "Preparer Information",
+        "Part 9": "Additional Information"
+    },
+    "I-485": {
+        "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+        "Part 1": "Information About You",
+        "Part 2": "Application Type",
+        "Part 3": "Additional Information About You",
+        "Part 4": "Address History",
+        "Part 5": "Marital History",
+        "Part 6": "Information About Your Children",
+        "Part 7": "Biographic Information",
+        "Part 8": "General Eligibility and Inadmissibility Grounds",
+        "Part 9": "Accommodations for Individuals With Disabilities",
+        "Part 10": "Applicant's Statement and Signature",
+        "Part 11": "Interpreter's Information",
+        "Part 12": "Contact Information of Preparer",
+        "Part 13": "Additional Information"
+    },
+    "I-765": {
+        "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+        "Part 1": "Information About You",
+        "Part 2": "Information About Your Eligibility",
+        "Part 3": "Applicant's Statement and Signature",
+        "Part 4": "Interpreter's Information",
+        "Part 5": "Contact Information of Preparer",
+        "Part 6": "Additional Information"
+    },
+    "N-400": {
+        "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+        "Part 1": "Information About Your Eligibility",
+        "Part 2": "Information About You",
+        "Part 3": "Accommodations for Individuals With Disabilities",
+        "Part 4": "Information to Contact You",
+        "Part 5": "Information About Your Residence",
+        "Part 6": "Information About Your Parents",
+        "Part 7": "Biographic Information",
+        "Part 8": "Information About Your Employment and Schools",
+        "Part 9": "Time Outside the United States",
+        "Part 10": "Information About Your Marital History",
+        "Part 11": "Information About Your Children",
+        "Part 12": "Additional Information About You",
+        "Part 13": "Applicant's Statement and Signature",
+        "Part 14": "Interpreter's Information",
+        "Part 15": "Contact Information of Preparer",
+        "Part 16": "Additional Information"
+    },
+    "I-130": {
+        "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+        "Part 1": "Relationship",
+        "Part 2": "Information About You (Petitioner)",
+        "Part 3": "Biographic Information (Petitioner)",
+        "Part 4": "Information About Your Relative",
+        "Part 5": "Other Information",
+        "Part 6": "Petitioner's Statement and Signature",
+        "Part 7": "Interpreter's Information",
+        "Part 8": "Contact Information of Preparer",
+        "Part 9": "Additional Information"
+    },
+    "I-140": {
+        "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+        "Part 1": "Information About You (Petitioner)",
+        "Part 2": "Petition Type",
+        "Part 3": "Information About the Person for Whom You Are Filing",
+        "Part 4": "Processing Information",
+        "Part 5": "Additional Information About Petitioner",
+        "Part 6": "Petitioner's Statement and Signature",
+        "Part 7": "Interpreter's Information",
+        "Part 8": "Contact Information of Preparer",
         "Part 9": "Additional Information"
     }
 }
@@ -298,8 +484,8 @@ class PDFField:
     field_type_suffix: str = ":TextBox"
     clean_name: str = ""
     is_custom_field: bool = False
-    form_context: Dict[str, Any] = field(default_factory=dict)  # Store form-specific context
-    ai_suggestions: List[str] = field(default_factory=list)  # AI-powered suggestions
+    form_context: Dict[str, Any] = field(default_factory=dict)
+    ai_suggestions: List[str] = field(default_factory=list)
 
 @dataclass
 class MappingSuggestion:
@@ -308,7 +494,7 @@ class MappingSuggestion:
     confidence: float
     reason: str
     field_type: str = "direct"
-    context_based: bool = False  # Was this suggestion based on form context?
+    context_based: bool = False
 
 class EnhancedUSCISMapper:
     """Enhanced Universal USCIS Form Mapping System with AI-like intelligence"""
@@ -317,6 +503,7 @@ class EnhancedUSCISMapper:
         self.db_objects = DB_OBJECTS
         self.form_intelligence = FORM_INTELLIGENCE
         self.enhanced_structures = ENHANCED_FORM_STRUCTURES
+        self.uscis_forms = USCIS_FORMS_DATABASE
         self.init_session_state()
         self._build_database_paths_cache()
         self._initialize_intelligence_engine()
@@ -337,11 +524,14 @@ class EnhancedUSCISMapper:
             st.session_state.mapping_history = []
         if 'ai_confidence_threshold' not in st.session_state:
             st.session_state.ai_confidence_threshold = 0.8
+        if 'detected_form_type' not in st.session_state:
+            st.session_state.detected_form_type = None
+        if 'detection_confidence' not in st.session_state:
+            st.session_state.detection_confidence = 0.0
     
     def _initialize_intelligence_engine(self):
         """Initialize the AI-like intelligence for better mapping"""
         self.context_patterns = {
-            # Enhanced context understanding
             "form_has_attorney": False,
             "beneficiary_parts": [],
             "petitioner_parts": [],
@@ -388,6 +578,78 @@ class EnhancedUSCISMapper:
         
         self.db_paths_cache = sorted(list(set(self.db_paths_cache)))
     
+    def detect_form_type(self, pdf_file) -> Tuple[Optional[str], float]:
+        """Automatically detect USCIS form type from PDF content"""
+        try:
+            pdf_bytes = pdf_file.read()
+            pdf_file.seek(0)  # Reset file pointer
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            # Extract text from first few pages
+            text_content = ""
+            for page_num in range(min(3, len(doc))):
+                page = doc[page_num]
+                text_content += page.get_text() + " "
+            
+            doc.close()
+            
+            # Clean text
+            text_lower = text_content.lower()
+            text_upper = text_content.upper()
+            
+            # Detection scores for each form
+            form_scores = {}
+            
+            for form_code, form_info in self.uscis_forms.items():
+                score = 0.0
+                matches = []
+                
+                # Check identifier patterns (highest weight)
+                for pattern in form_info["identifier_patterns"]:
+                    if pattern in text_content or pattern in text_upper:
+                        score += 0.5
+                        matches.append(f"Found identifier: {pattern}")
+                
+                # Check form code specifically
+                if form_code in text_upper or f"FORM {form_code}" in text_upper:
+                    score += 0.3
+                    matches.append(f"Found form code: {form_code}")
+                
+                # Check keywords
+                keyword_matches = sum(1 for keyword in form_info["keywords"] if keyword in text_lower)
+                if keyword_matches > 0:
+                    score += 0.2 * (keyword_matches / len(form_info["keywords"]))
+                    matches.append(f"Matched {keyword_matches} keywords")
+                
+                # Check title
+                if form_info["title"].lower() in text_lower:
+                    score += 0.3
+                    matches.append("Title match")
+                
+                form_scores[form_code] = {
+                    "score": min(score, 1.0),
+                    "matches": matches
+                }
+            
+            # Find best match
+            best_form = None
+            best_score = 0.0
+            
+            for form_code, data in form_scores.items():
+                if data["score"] > best_score:
+                    best_score = data["score"]
+                    best_form = form_code
+            
+            # Set threshold for confident detection
+            if best_score >= 0.5:
+                return best_form, best_score
+            else:
+                return None, 0.0
+                
+        except Exception as e:
+            st.error(f"Error detecting form type: {str(e)}")
+            return None, 0.0
+    
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         """Enhanced extraction with intelligent part detection"""
         fields = []
@@ -398,7 +660,7 @@ class EnhancedUSCISMapper:
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
             # Clean form type
-            base_form_type = form_type.split(' - ')[0].strip()
+            base_form_type = form_type
             
             # Detect if form has attorney section (G-28 attachment)
             st.session_state.has_attorney_section = self._detect_attorney_section(doc, base_form_type)
@@ -526,6 +788,21 @@ class EnhancedUSCISMapper:
                         attorney_field_count += 1
         
         return attorney_field_count >= 3
+    
+    def _get_field_type(self, widget) -> str:
+        """Determine field type from widget"""
+        if widget.field_type == 2:  # Button/checkbox
+            return "checkbox"
+        elif widget.field_type == 3:  # Radio
+            return "radio"
+        elif widget.field_type == 4:  # Text
+            return "text"
+        elif widget.field_type == 5:  # Choice/dropdown
+            return "select"
+        elif widget.field_type == 7:  # Signature
+            return "signature"
+        else:
+            return "text"
     
     def _intelligent_part_detection(self, all_field_data: List[Dict], form_type: str, 
                                   form_structure: Dict[str, str]) -> Dict[int, str]:
@@ -831,7 +1108,7 @@ class EnhancedUSCISMapper:
                             elif pattern_type == "first":
                                 suggestions.append(MappingSuggestion(f"{base_path}.{'firstName' if 'attorney' in base_path else 'beneficiaryFirstName' if 'beneficiary' in base_path else 'signatory_first_name'}", 
                                                                    0.85, f"Pattern match: {pattern}"))
-                        
+        
         return suggestions
     
     def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
@@ -1019,7 +1296,7 @@ class EnhancedUSCISMapper:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("📄 Form Type", form_type.split(' - ')[0])
+            st.metric("📄 Form Type", form_type)
             if st.session_state.has_attorney_section:
                 st.caption("✅ G-28 Attached")
         
@@ -1168,6 +1445,154 @@ class EnhancedUSCISMapper:
             st.write("- 🎯 Accept high-confidence suggestions (>80%) for faster mapping")
             st.write("- 📋 Unmapped fields will automatically go to questionnaire")
             st.write("- 🔄 You can always adjust mappings manually")
+    
+    def calculate_mapping_score(self, fields: List[PDFField]) -> float:
+        """Calculate overall mapping quality score"""
+        if not fields:
+            return 0.0
+        
+        mapped = sum(1 for f in fields if f.is_mapped)
+        high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
+        suggested = sum(1 for f in fields if f.db_mapping)
+        
+        score = (
+            (mapped / len(fields)) * 40 +  # 40% weight for mapped fields
+            (high_conf / len(fields)) * 30 +  # 30% weight for high confidence
+            (suggested / len(fields)) * 30  # 30% weight for AI suggestions
+        )
+        
+        return min(score * 100, 100)
+    
+    def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
+        """Generate TypeScript export file"""
+        # Clean form name
+        form_name = form_type.replace('-', '')
+        
+        # Group fields by object type
+        customer_fields = []
+        beneficiary_fields = []
+        attorney_fields = []
+        questionnaire_fields = []
+        
+        for field in fields:
+            if field.is_questionnaire or not field.db_mapping:
+                questionnaire_fields.append(field)
+            elif field.db_mapping:
+                if field.db_mapping.startswith("customer"):
+                    customer_fields.append(field)
+                elif field.db_mapping.startswith("beneficiary"):
+                    beneficiary_fields.append(field)
+                elif field.db_mapping.startswith("attorney"):
+                    attorney_fields.append(field)
+                else:
+                    questionnaire_fields.append(field)
+        
+        # Generate TypeScript content
+        ts_content = f"""// Auto-generated mapping for {form_type}
+// Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}
+// Total fields: {len(fields)}
+
+export const {form_name} = {{
+    formType: "{form_type}",
+    hasAttorneySection: {str(st.session_state.has_attorney_section).lower()},
+    
+"""
+        
+        # Add customer data if present
+        if customer_fields:
+            ts_content += "    customerData: {\n"
+            for field in customer_fields:
+                db_path = field.db_mapping.replace("customer.", "")
+                ts_content += f'        "{field.clean_name}{field.field_type_suffix}": "{db_path}",\n'
+            ts_content += "    },\n\n"
+        
+        # Add beneficiary data if present
+        if beneficiary_fields:
+            ts_content += "    beneficiaryData: {\n"
+            for field in beneficiary_fields:
+                db_path = field.db_mapping.replace("beneficiary.", "")
+                ts_content += f'        "{field.clean_name}{field.field_type_suffix}": "{db_path}",\n'
+            ts_content += "    },\n\n"
+        
+        # Add attorney data if present
+        if attorney_fields:
+            ts_content += "    attorneyData: {\n"
+            for field in attorney_fields:
+                db_path = field.db_mapping.replace("attorney.", "").replace("attorneyLawfirmDetails.", "")
+                ts_content += f'        "{field.clean_name}{field.field_type_suffix}": "{db_path}",\n'
+            ts_content += "    },\n\n"
+        
+        # Add questionnaire data
+        if questionnaire_fields:
+            ts_content += "    questionnaireData: {\n"
+            for field in questionnaire_fields:
+                ts_content += f'        "{field.clean_name}": {{\n'
+                ts_content += f'            description: "{field.description}",\n'
+                ts_content += f'            fieldType: "{field.field_type}",\n'
+                ts_content += f'            part: "{field.part}",\n'
+                if field.item:
+                    ts_content += f'            item: "{field.item}",\n'
+                ts_content += f'            required: true\n'
+                ts_content += "        },\n"
+            ts_content += "    }\n"
+        
+        ts_content += "};\n"
+        
+        return ts_content
+    
+    def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
+        """Generate questionnaire JSON for manual entry fields"""
+        questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
+        
+        # Group by part
+        fields_by_part = defaultdict(list)
+        for field in questionnaire_fields:
+            fields_by_part[field.part].append(field)
+        
+        # Build JSON structure
+        questionnaire = {
+            "formType": st.session_state.form_type,
+            "generatedAt": datetime.now().isoformat(),
+            "totalQuestions": len(questionnaire_fields),
+            "sections": []
+        }
+        
+        # Sort parts naturally
+        def natural_sort_key(part):
+            match = re.search(r'Part\s*(\d+)', part)
+            if match:
+                return (0, int(match.group(1)))
+            return (1, part)
+        
+        sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+        
+        for part in sorted_parts:
+            section = {
+                "name": part,
+                "questions": []
+            }
+            
+            for field in fields_by_part[part]:
+                question = {
+                    "id": field.clean_name,
+                    "description": field.description,
+                    "type": field.field_type,
+                    "required": True,
+                    "page": field.page
+                }
+                
+                if field.item:
+                    question["item"] = field.item
+                
+                section["questions"].append(question)
+            
+            questionnaire["sections"].append(section)
+        
+        return json.dumps(questionnaire, indent=2)
+    
+    def get_all_database_paths(self) -> List[str]:
+        """Get all available database paths"""
+        return self.db_paths_cache
 
 def render_enhanced_header():
     """Render enhanced header with modern design"""
@@ -1310,15 +1735,37 @@ def render_enhanced_header():
             border-radius: 8px;
             margin: 10px 0;
         }
+        .form-detection-card {
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            position: relative;
+        }
+        .form-detection-card.detected {
+            border-color: #10b981;
+            background: #f0fdf4;
+        }
+        .detection-confidence {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+        }
     </style>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="main-header">
         <h1 class="header-title">🧠 Intelligent USCIS Form Mapper</h1>
-        <p class="header-subtitle">AI-Powered Form Analysis & Database Mapping</p>
+        <p class="header-subtitle">AI-Powered Form Detection & Database Mapping</p>
         <div style="margin-top: 20px;">
-            <span class="feature-badge">✨ Auto-Detection</span>
+            <span class="feature-badge">🔍 Auto-Detection</span>
             <span class="feature-badge">🎯 Smart Mapping</span>
             <span class="feature-badge">📊 Part Analysis</span>
             <span class="feature-badge">🤖 AI Suggestions</span>
@@ -1327,105 +1774,49 @@ def render_enhanced_header():
     """, unsafe_allow_html=True)
 
 def render_enhanced_upload_section(mapper: EnhancedUSCISMapper):
-    """Render enhanced upload section with intelligence"""
-    st.markdown("## 📤 Smart Form Upload & Analysis")
+    """Render enhanced upload section with auto-detection"""
+    st.markdown("## 📤 Smart Form Upload & Auto-Detection")
     
-    col1, col2 = st.columns([1, 1])
+    # Instructions
+    st.markdown("""
+    <div class="ai-insight">
+        <strong>🤖 How it works:</strong> Simply upload any USCIS form PDF and our AI will automatically detect the form type. 
+        No need to select the form manually - we support all major USCIS forms from <a href="https://www.uscis.gov/forms/all-forms" target="_blank">uscis.gov</a>.
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # File upload section
+    col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.markdown("### 📋 Select Form Type")
-        
-        # Enhanced form selection with categories
-        form_categories = {
-            "Employment-Based": [
-                "I-129 - Petition for Nonimmigrant Worker",
-                "I-140 - Immigrant Petition for Alien Worker",
-                "I-765 - Application for Employment Authorization"
-            ],
-            "Adjustment/Extension": [
-                "I-485 - Application to Adjust Status",
-                "I-539 - Application to Extend/Change Status",
-                "I-90 - Application to Replace Green Card"
-            ],
-            "Family-Based": [
-                "I-130 - Petition for Alien Relative",
-                "I-751 - Remove Conditions on Residence"
-            ],
-            "Citizenship": [
-                "N-400 - Application for Naturalization",
-                "N-600 - Application for Certificate of Citizenship"
-            ],
-            "Travel": [
-                "I-131 - Application for Travel Document"
-            ],
-            "Attorney": [
-                "G-28 - Notice of Entry of Appearance"
-            ]
-        }
-        
-        # Category selection
-        category = st.selectbox(
-            "Form Category",
-            ["Select Category"] + list(form_categories.keys()),
-            help="Choose the category that best fits your form"
-        )
-        
-        if category != "Select Category":
-            form_type = st.selectbox(
-                "Form Type",
-                ["Select Form"] + form_categories[category],
-                help="Select the specific USCIS form"
-            )
-            
-            if form_type != "Select Form":
-                st.session_state.form_type = form_type
-                
-                # Show form intelligence
-                st.markdown("### 🧠 Form Intelligence")
-                
-                base_form = form_type.split(' - ')[0]
-                
-                # Display what the AI knows about this form
-                with st.container():
-                    if base_form in mapper.enhanced_structures:
-                        st.success(f"✅ AI has enhanced understanding of {base_form}")
-                        
-                        # Show structure preview
-                        with st.expander("View AI Form Understanding", expanded=False):
-                            for part, desc in mapper.enhanced_structures[base_form].items():
-                                if "Part 0" in part:
-                                    st.info(f"⚖️ {part}: {desc}")
-                                else:
-                                    st.write(f"• {part}: {desc}")
-                    else:
-                        st.info(f"ℹ️ AI will analyze {base_form} structure dynamically")
-    
-    with col2:
-        st.markdown("### 📄 Upload PDF Form")
-        
-        # Enhanced file uploader
         uploaded_file = st.file_uploader(
-            "Drop your PDF here or browse",
+            "Drop your USCIS PDF form here or browse",
             type=['pdf'],
-            help="Upload the fillable USCIS PDF form",
-            label_visibility="collapsed"
+            help="Upload any fillable USCIS form - we'll automatically detect which form it is",
+            key="pdf_uploader"
         )
         
         if uploaded_file:
-            # File preview
-            st.markdown("### 📎 File Information")
-            
+            # File info
+            st.markdown("### 📎 Uploaded File")
             file_info = {
                 "📄 Filename": uploaded_file.name,
                 "📦 Size": f"{uploaded_file.size / 1024:.1f} KB",
                 "🏷️ Type": uploaded_file.type
             }
             
-            for key, value in file_info.items():
-                st.write(f"**{key}:** {value}")
-            
+            col_info1, col_info2, col_info3 = st.columns(3)
+            with col_info1:
+                st.metric("Filename", uploaded_file.name)
+            with col_info2:
+                st.metric("Size", f"{uploaded_file.size / 1024:.1f} KB")
+            with col_info3:
+                st.metric("Type", "PDF")
+    
+    with col2:
+        if uploaded_file:
             # G-28 attachment check
-            st.markdown("### 🔍 Quick Check")
+            st.markdown("### ⚖️ Attorney Representation")
             has_g28 = st.checkbox(
                 "Is Form G-28 or G-28I attached?",
                 help="Check this if you have attorney representation",
@@ -1433,55 +1824,130 @@ def render_enhanced_upload_section(mapper: EnhancedUSCISMapper):
             )
             
             if has_g28:
-                st.info("⚖️ **Attorney Section (Part 0)** will be detected and mapped appropriately")
+                st.success("✅ Part 0 will be detected for attorney")
+        else:
+            # Show supported forms
+            with st.expander("📋 View Supported Forms"):
+                forms_list = list(USCIS_FORMS_DATABASE.keys())
+                # Display in columns
+                cols = st.columns(3)
+                for i, form in enumerate(forms_list):
+                    with cols[i % 3]:
+                        st.write(f"• {form}")
     
-    # Extract button with loading animation
-    if uploaded_file and st.session_state.form_type and st.session_state.form_type != "Select Form":
+    # Auto-detect and extract button
+    if uploaded_file:
         st.markdown("---")
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col2:
-            if st.button(
-                "🚀 Start Intelligent Analysis",
-                type="primary",
-                use_container_width=True,
-                help="AI will analyze your form structure and suggest mappings"
-            ):
-                with st.spinner("🧠 AI is analyzing your form..."):
-                    # Simulate AI thinking with progress
-                    progress_text = st.empty()
-                    progress_bar = st.progress(0)
+        if st.button(
+            "🚀 Auto-Detect Form & Extract Fields",
+            type="primary",
+            use_container_width=True,
+            help="AI will automatically detect the form type and extract all fields"
+        ):
+            with st.spinner("🔍 Detecting form type..."):
+                # Progress display
+                progress_text = st.empty()
+                progress_bar = st.progress(0)
+                
+                # Step 1: Detect form type
+                progress_text.text("📄 Reading PDF content...")
+                progress_bar.progress(0.2)
+                
+                form_type, confidence = mapper.detect_form_type(uploaded_file)
+                
+                progress_text.text("🧠 Analyzing form structure...")
+                progress_bar.progress(0.4)
+                
+                if form_type and confidence >= 0.5:
+                    st.session_state.detected_form_type = form_type
+                    st.session_state.detection_confidence = confidence
+                    st.session_state.form_type = form_type
                     
-                    steps = [
-                        "📄 Reading PDF structure...",
-                        "🔍 Detecting form parts...",
-                        "⚖️ Checking for attorney section...",
-                        "🎯 Analyzing field patterns...",
-                        "🤖 Generating AI mappings...",
-                        "✅ Analysis complete!"
-                    ]
+                    # Show detection result
+                    progress_text.empty()
+                    progress_bar.empty()
                     
-                    for i, step in enumerate(steps[:-1]):
-                        progress_text.text(step)
-                        progress_bar.progress((i + 1) / len(steps))
-                        import time
-                        time.sleep(0.3)
+                    # Detection result card
+                    st.markdown(f"""
+                    <div class="form-detection-card detected">
+                        <div class="detection-confidence">{confidence:.0%} Confidence</div>
+                        <h3>✅ Form Detected: {form_type}</h3>
+                        <p>{USCIS_FORMS_DATABASE[form_type]['title']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
                     # Extract fields
-                    fields = mapper.extract_pdf_fields(uploaded_file, st.session_state.form_type)
-                    
-                    if fields:
-                        st.session_state.pdf_fields = fields
-                        st.session_state.field_mappings = {f.raw_name: f for f in fields}
-                        progress_text.text(steps[-1])
-                        progress_bar.progress(1.0)
+                    with st.spinner(f"🧠 Extracting fields from {form_type}..."):
+                        progress_text = st.empty()
+                        progress_bar = st.progress(0)
                         
-                        # Show success animation
-                        st.balloons()
-                        st.success(f"🎉 Successfully analyzed {len(fields)} fields with AI intelligence!")
-                    else:
-                        st.error("❌ No fields found. Please ensure it's a fillable PDF form.")
+                        steps = [
+                            "📄 Reading form structure...",
+                            "🔍 Detecting form parts...",
+                            "⚖️ Checking for attorney section...",
+                            "🎯 Analyzing field patterns...",
+                            "🤖 Generating AI mappings...",
+                            "✅ Analysis complete!"
+                        ]
+                        
+                        for i, step in enumerate(steps[:-1]):
+                            progress_text.text(step)
+                            progress_bar.progress((i + 1) / len(steps))
+                            import time
+                            time.sleep(0.3)
+                        
+                        # Extract fields
+                        fields = mapper.extract_pdf_fields(uploaded_file, form_type)
+                        
+                        if fields:
+                            st.session_state.pdf_fields = fields
+                            st.session_state.field_mappings = {f.raw_name: f for f in fields}
+                            progress_text.text(steps[-1])
+                            progress_bar.progress(1.0)
+                            
+                            # Show success
+                            st.balloons()
+                            st.success(f"🎉 Successfully analyzed {len(fields)} fields from {form_type}!")
+                        else:
+                            st.error("❌ No fields found. Please ensure it's a fillable PDF form.")
+                
+                else:
+                    # Could not detect form
+                    progress_text.empty()
+                    progress_bar.empty()
+                    
+                    st.markdown("""
+                    <div class="form-detection-card">
+                        <h3>❓ Unable to Auto-Detect Form Type</h3>
+                        <p>The AI couldn't confidently identify this form. This might happen if:</p>
+                        <ul>
+                            <li>The PDF is scanned or not fillable</li>
+                            <li>It's not a standard USCIS form</li>
+                            <li>The form is damaged or incomplete</li>
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Manual selection fallback
+                    st.markdown("### 📋 Manual Form Selection")
+                    
+                    form_type = st.selectbox(
+                        "Please select the form type manually:",
+                        [""] + list(USCIS_FORMS_DATABASE.keys()),
+                        help="Select the USCIS form type"
+                    )
+                    
+                    if form_type:
+                        if st.button("Extract with Manual Selection", type="secondary"):
+                            st.session_state.form_type = form_type
+                            fields = mapper.extract_pdf_fields(uploaded_file, form_type)
+                            
+                            if fields:
+                                st.session_state.pdf_fields = fields
+                                st.session_state.field_mappings = {f.raw_name: f for f in fields}
+                                st.success(f"✅ Extracted {len(fields)} fields!")
+                                st.rerun()
 
 def render_intelligent_mapping_section(mapper: EnhancedUSCISMapper):
     """Render intelligent mapping section with AI features"""
@@ -1847,6 +2313,61 @@ def render_intelligent_field_card(field: PDFField, mapper: EnhancedUSCISMapper):
         
         st.markdown('</div>', unsafe_allow_html=True)
 
+def render_all_fields_view(mapper: EnhancedUSCISMapper):
+    """Render all fields view with bulk actions"""
+    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
+        st.info("👆 Please upload a PDF form first")
+        return
+    
+    st.markdown("## 📊 All Fields Overview")
+    
+    fields = st.session_state.pdf_fields
+    
+    # Create DataFrame
+    data = []
+    for field in fields:
+        status = "Mapped" if field.is_mapped else "Questionnaire" if field.is_questionnaire else "AI Suggested" if field.db_mapping else "Unmapped"
+        
+        data.append({
+            "Index": field.index,
+            "Field": field.description,
+            "Part": field.part.split(' - ')[0] if ' - ' in field.part else field.part,
+            "Type": field.field_type,
+            "Status": status,
+            "AI Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
+            "Database Path": field.db_mapping if field.db_mapping else "-",
+            "Page": field.page
+        })
+    
+    df = pd.DataFrame(data)
+    
+    # Display with color coding
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Status": st.column_config.TextColumn(
+                "Status",
+                help="Current mapping status"
+            ),
+            "AI Confidence": st.column_config.TextColumn(
+                "AI Confidence",
+                help="AI confidence score"
+            ),
+            "Field": st.column_config.TextColumn(
+                "Field",
+                help="Field description",
+                width="large"
+            ),
+            "Database Path": st.column_config.TextColumn(
+                "Database Path",
+                help="Mapped database path",
+                width="large"
+            )
+        }
+    )
+
 def render_export_dashboard(mapper: EnhancedUSCISMapper):
     """Render enhanced export dashboard"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
@@ -1916,7 +2437,7 @@ def render_export_dashboard(mapper: EnhancedUSCISMapper):
             ts_content = mapper.generate_typescript_export(form_type, fields)
             
             # Clean form name
-            form_name = form_type.split(' - ')[0].replace('-', '')
+            form_name = form_type.replace('-', '')
             
             st.download_button(
                 "📥 Download TypeScript File",
@@ -1942,7 +2463,7 @@ def render_export_dashboard(mapper: EnhancedUSCISMapper):
             st.download_button(
                 "📥 Download Questionnaire JSON",
                 json_content,
-                f"{form_type.split(' - ')[0].lower()}-questionnaire.json",
+                f"{form_type.lower()}-questionnaire.json",
                 "application/json",
                 use_container_width=True
             )
@@ -1971,6 +2492,11 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 - High Confidence (>80%): {sum(1 for f in fields if f.confidence_score > 0.8)}
 - Medium Confidence (60-80%): {sum(1 for f in fields if 0.6 <= f.confidence_score <= 0.8)}
 - Low Confidence (<60%): {sum(1 for f in fields if 0 < f.confidence_score < 0.6)}
+
+## Form Detection
+- Form Type: {form_type}
+- Detection Confidence: {st.session_state.get('detection_confidence', 0):.0%}
+- Has Attorney Section: {'Yes' if st.session_state.has_attorney_section else 'No'}
 
 ## Detailed Mappings
 """
@@ -2018,10 +2544,10 @@ Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
             # Show API integration code
             api_code = f"""
 // Integration example for {form_type}
-import {{ {form_type.split(' - ')[0].replace('-', '')} }} from './{form_type.split(' - ')[0].replace('-', '')}.ts';
+import {{ {form_type.replace('-', '')} }} from './{form_type.replace('-', '')}.ts';
 
 // Initialize form mapping
-const formMapping = {form_type.split(' - ')[0].replace('-', '')};
+const formMapping = {form_type.replace('-', '')};
 
 // Map PDF fields to database
 async function mapFormData(pdfData) {{
@@ -2037,10 +2563,27 @@ async function mapFormData(pdfData) {{
         mappedData.beneficiary = mapFieldsToObject(pdfData, formMapping.beneficiaryData);
     }}
     
+    // Process attorney data (if G-28 attached)
+    if (formMapping.attorneyData) {{
+        mappedData.attorney = mapFieldsToObject(pdfData, formMapping.attorneyData);
+    }}
+    
     // Handle questionnaire fields
     const questionnaireData = await promptForQuestionnaireData(formMapping.questionnaireData);
     
     return {{ ...mappedData, ...questionnaireData }};
+}}
+
+// Helper function to map fields
+function mapFieldsToObject(pdfData, fieldMapping) {{
+    const result = {{}};
+    
+    for (const [pdfField, dbPath] of Object.entries(fieldMapping)) {{
+        const value = pdfData[pdfField];
+        setNestedProperty(result, dbPath, value);
+    }}
+    
+    return result;
 }}
 """
             st.code(api_code, language="javascript")
@@ -2054,6 +2597,18 @@ def render_ai_insights_dashboard(mapper: EnhancedUSCISMapper):
     st.markdown("## 🧠 AI Insights & Analytics")
     
     fields = st.session_state.pdf_fields
+    
+    # Form Detection Insights
+    if st.session_state.get('detected_form_type'):
+        st.markdown("### 🔍 Form Detection Results")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Detected Form", st.session_state.detected_form_type)
+        with col2:
+            st.metric("Detection Confidence", f"{st.session_state.get('detection_confidence', 0):.0%}")
+        with col3:
+            st.metric("Form Title", USCIS_FORMS_DATABASE[st.session_state.detected_form_type]['title'])
     
     # AI Performance Metrics
     st.markdown("### 📊 AI Performance Metrics")
@@ -2297,6 +2852,9 @@ def main():
             st.markdown("### 📄 Form Context")
             st.write(f"**Form:** {st.session_state.form_type}")
             
+            if st.session_state.get('detected_form_type'):
+                st.write(f"**Auto-detected:** Yes ({st.session_state.get('detection_confidence', 0):.0%})")
+            
             # Part breakdown
             parts = list(set(f.part for f in fields))
             st.write(f"**Parts:** {len(parts)}")
@@ -2319,12 +2877,13 @@ def main():
         st.markdown("### ❓ Need Help?")
         with st.expander("Quick Guide"):
             st.markdown("""
-            1. **Upload Form**: Select form type and upload PDF
-            2. **AI Analysis**: AI detects parts and suggests mappings
+            1. **Upload Form**: Upload any USCIS PDF - auto-detection!
+            2. **AI Analysis**: AI detects form type & suggests mappings
             3. **Review & Map**: Accept AI suggestions or customize
             4. **Export**: Generate TypeScript and JSON files
             
             **Tips:**
+            - 🔍 No need to select form type
             - 🎯 High confidence = >80% accuracy
             - 📋 Unmapped fields → questionnaire
             - ⚖️ Part 0 = Attorney (if G-28 attached)
@@ -2403,6 +2962,13 @@ def main():
         with st.expander("View Form Understanding Rules"):
             st.json(FORM_INTELLIGENCE)
         
+        with st.expander("View Supported Forms"):
+            forms_df = pd.DataFrame([
+                {"Form": code, "Title": info["title"]}
+                for code, info in USCIS_FORMS_DATABASE.items()
+            ])
+            st.dataframe(forms_df, use_container_width=True, hide_index=True)
+        
         # Clear data
         st.markdown("### 🗑️ Clear Data")
         
@@ -2410,7 +2976,8 @@ def main():
         
         with col1:
             if st.button("Clear Current Form", type="secondary", use_container_width=True):
-                for key in ['pdf_fields', 'form_type', 'field_mappings', 'has_attorney_section']:
+                for key in ['pdf_fields', 'form_type', 'field_mappings', 'has_attorney_section', 
+                           'detected_form_type', 'detection_confidence']:
                     if key in st.session_state:
                         del st.session_state[key]
                 st.success("Form data cleared!")
