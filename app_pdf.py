@@ -1897,10 +1897,10 @@ class UniversalUSCISMapper:
 # Streamlit UI Components
 def render_header():
     """Render application header"""
-    st.markdown("""
+    css_style = '''
     <style>
         .main-header {
-            background: linear-gradient(#135deg, #1e3c72, #2a5298);
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
             color: white;
             padding: 25px;
             border-radius: 10px;
@@ -1949,8 +1949,9 @@ def render_header():
             font-weight: bold;
         }
     </style>
-    """, unsafe_allow_html=True)
+    '''
     
+    st.markdown(css_style, unsafe_allow_html=True)
     st.markdown('<div class="main-header"><h1>🏛️ Universal USCIS Form Mapper</h1><p>Intelligent mapping for any USCIS form</p></div>', unsafe_allow_html=True)
 
 def render_upload_section(mapper: UniversalUSCISMapper):
