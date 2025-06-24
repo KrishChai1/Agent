@@ -340,7 +340,7 @@ class UniversalUSCISMapper:
         """Get all available database paths from cache"""
         return self.db_paths_cache.copy()
     
- def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
+def _clean_field_name_for_export(self, field_name: str, part: str, item: str = "") -> str:
         """Clean field name to match I-90.ts format (e.g., P1_3a)"""
         # Extract part number from the assigned part
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
@@ -478,41 +478,6 @@ class UniversalUSCISMapper:
         
         # Construct the clean name
         return f"P{part_num}_{field_id}"
-    
-    def add_custom_field(self, part: str, item: str, description: str, field_type: str = "text") -> PDFField:
-        """Add a custom field to the form"""
-        # Generate unique index
-        custom_index = st.session_state.custom_field_counter
-        st.session_state.custom_field_counter += 1
-        
-        # Extract part number for clean name
-        part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
-        part_num = part_match.group(1) if part_match else "1"
-        
-        # Generate clean name
-        clean_name = f"P{part_num}_{item}" if item else f"P{part_num}_custom{custom_index}"
-        
-        # Determine field type suffix
-        field_type_suffix = FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
-        
-        # Create custom field
-        custom_field = PDFField(
-            index=custom_index,
-            raw_name=f"custom_field_{custom_index}",
-            field_type=field_type,
-            value="",
-            page=1,
-            part=part,
-            item=item,
-            description=description,
-            field_type_suffix=field_type_suffix,
-            clean_name=clean_name,
-            is_custom_field=True,
-            is_questionnaire=True  # Default to questionnaire
-        )
-        
-        return custom_field
-    
     def _clean_field_name_for_analysis(self, field_name: str) -> str:
         """Clean field name for better pattern analysis"""
         # Remove common noise patterns
