@@ -1735,21 +1735,22 @@ class UniversalUSCISMapper:
                 # Use clean name for questionnaire
                 categories['questionnaireData'][field_key] = f"{field.item or field_key}{field.field_type_suffix}"
         
-        # Generate TypeScript content
-        ts_content = f"""export const {form_name} = {{
-    "formname": "{form_name.lower()}",
-    "pdfName": "{form_type.split(' - ')[0]}",
-    "customerData": {self._format_data_section(categories['customerData'])},
-    "beneficiaryData": {self._format_data_section(categories['beneficiaryData'])},
-    "attorneyData": {self._format_data_section(categories['attorneyData'])},
-    "questionnaireData": {self._format_data_section(categories['questionnaireData'])},
-    "defaultData": {self._format_data_section(categories['defaultData'])},
-    "conditionalData": {self._format_conditional_section(categories['conditionalData'])},
-    "caseData": {self._format_data_section(categories['caseData'])},
-    "lcaData": {self._format_data_section(categories['lcaData'])}
-}}"
+        # Build TypeScript content
+        ts_lines = []
+        ts_lines.append(f'export const {form_name} = {{')
+        ts_lines.append(f'    "formname": "{form_name.lower()}",')
+        ts_lines.append(f'    "pdfName": "{form_type.split(" - ")[0]}",')
+        ts_lines.append(f'    "customerData": {self._format_data_section(categories["customerData"])},')
+        ts_lines.append(f'    "beneficiaryData": {self._format_data_section(categories["beneficiaryData"])},')
+        ts_lines.append(f'    "attorneyData": {self._format_data_section(categories["attorneyData"])},')
+        ts_lines.append(f'    "questionnaireData": {self._format_data_section(categories["questionnaireData"])},')
+        ts_lines.append(f'    "defaultData": {self._format_data_section(categories["defaultData"])},')
+        ts_lines.append(f'    "conditionalData": {self._format_conditional_section(categories["conditionalData"])},')
+        ts_lines.append(f'    "caseData": {self._format_data_section(categories["caseData"])},')
+        ts_lines.append(f'    "lcaData": {self._format_data_section(categories["lcaData"])}')
+        ts_lines.append('}')
         
-        return ts_content
+        return '\n'.join(ts_lines)
     
     def _format_data_section(self, data: Dict[str, str]) -> str:
         """Format data section for TypeScript"""
@@ -1897,7 +1898,7 @@ class UniversalUSCISMapper:
 # Streamlit UI Components
 def render_header():
     """Render application header"""
-    css_style = '''
+    css_style = """
     <style>
         .main-header {
             background: linear-gradient(135deg, #1e3c72, #2a5298);
@@ -1949,7 +1950,7 @@ def render_header():
             font-weight: bold;
         }
     </style>
-    '''
+    """
     
     st.markdown(css_style, unsafe_allow_html=True)
     st.markdown('<div class="main-header"><h1>🏛️ Universal USCIS Form Mapper</h1><p>Intelligent mapping for any USCIS form</p></div>', unsafe_allow_html=True)
@@ -3097,7 +3098,7 @@ def render_export_section(mapper: UniversalUSCISMapper):
         st.info("💡 Use the TypeScript file in your application to map form fields to your database structure.")
 
 def main():
-    """Main application entry point"""
+    """Main application entry point."""
     st.set_page_config(
         page_title="Universal USCIS Form Mapper",
         page_icon="🏛️",
@@ -3191,7 +3192,14 @@ def main():
         st.markdown("- **Custom Fields**: Add missing fields manually")
     
     # Main content tabs
-    tabs = st.tabs(["📤 Upload & Extract", "🗺️ Field Mapping", "📊 All Fields", "📚 Mapped Reference", "📥 Export", "⚙️ Settings"])
+    tabs = st.tabs([
+        "📤 Upload & Extract", 
+        "🗺️ Field Mapping", 
+        "📊 All Fields", 
+        "📚 Mapped Reference", 
+        "📥 Export", 
+        "⚙️ Settings"
+    ])
     
     with tabs[0]:
         render_upload_section(mapper)
