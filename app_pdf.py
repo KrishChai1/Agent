@@ -1215,6 +1215,7 @@ class UniversalUSCISMapper:
                 desc = "Field"
         
         return desc
+        
     def _get_mapping_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
     """Get intelligent mapping suggestions for a field"""
     suggestions = []
@@ -1480,6 +1481,7 @@ class UniversalUSCISMapper:
     # Sort by confidence and return top suggestions
     suggestions.sort(key=lambda x: x.confidence, reverse=True)
     return suggestions[:3]  # Return top 3 suggestions for better coverage
+        
     def _get_g28_suggestions(self, field: PDFField) -> List[MappingSuggestion]:
         """Get suggestions specific to G-28 form"""
         suggestions = []
