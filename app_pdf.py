@@ -813,9 +813,9 @@ def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_
                                            form_structure: Dict[str, str], page_text_content: Dict[int, str],
                                            has_attorney_section: bool) -> Dict[int, str]:
                                                
-      """Enhanced intelligent part detection with better Part 0 handling"""
+        """Enhanced intelligent part detection with better Part 0 handling"""
         part_mapping = {}
-        
+    
         # Phase 1: Look for explicit part indicators in field names
         for field_data in all_field_data:
             # Clean field name
