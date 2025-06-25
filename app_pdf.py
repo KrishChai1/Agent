@@ -1436,8 +1436,8 @@ class EnhancedUSCISMapper:
                     st.caption(f"... and {len(part_fields) - 8} more fields")
         
         # AI Insights - Special attention to Part 0
-        with st.expander("🤖 AI Intelligence Report", expanded=False):
-            st.markdown("### 🧠 Form Understanding")
+        with st.expander(" AI Intelligence Report", expanded=False):
+            st.markdown("### Form Understanding")
             
             # Form structure understanding
             st.write("**✅ Detected Form Structure:**")
@@ -1952,7 +1952,7 @@ def render_enhanced_upload_section(mapper: EnhancedUSCISMapper):
                             
                             # Show success
                             st.balloons()
-                            st.success(f"🎉 Successfully analyzed {len(fields)} fields from {form_type}!")
+                            st.success(f" Successfully analyzed {len(fields)} fields from {form_type}!")
                             
                             # Show special note if attorney section found
                             if st.session_state.has_attorney_section:
