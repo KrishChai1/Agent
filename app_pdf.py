@@ -1805,7 +1805,7 @@ def render_enhanced_header():
     
     st.markdown("""
     <div class="main-header">
-        <h1 class="header-title">🧠 Intelligent USCIS Form Mapper</h1>
+        <h1 class="header-title">Intelligent USCIS Form Mapper</h1>
         <p class="header-subtitle">AI-Powered Form Detection & Database Mapping</p>
         <div style="margin-top: 20px;">
             <span class="feature-badge">🔍 Auto-Detection</span>
@@ -2657,7 +2657,7 @@ def render_ai_insights_dashboard(mapper: EnhancedUSCISMapper):
         st.info("👆 Please complete field mapping first")
         return
     
-    st.markdown("## 🧠 AI Insights & Analytics")
+    st.markdown("## AI Insights & Analytics")
     
     fields = st.session_state.pdf_fields
     
