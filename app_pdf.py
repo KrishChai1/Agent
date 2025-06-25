@@ -730,9 +730,10 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
                         all_field_data.append(field_data)
                         field_index += 1
             
-            # Enhanced part mapping
-           part_mapping = self._intelligent_part_detection_enhanced(
-                all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section)  
+          # Enhanced part mapping 
+            part_mapping = self._intelligent_part_detection_enhanced(
+                all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section
+            )  
             
             # Store Part 0 fields for reference
             part0_fields = [idx for idx, part in part_mapping.items() if "Part 0" in part]
