@@ -662,7 +662,6 @@ class EnhancedUSCISMapper:
             return None, 0.0
     
     def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
-    """Enhanced extraction with intelligent part detection"""
     fields = []
     self.field_counter = 1
     
