@@ -731,7 +731,7 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
                         field_index += 1
             
             # Enhanced part mapping
-            part_mapping = self._intelligent_part_detection_enhanced(
+            part_mapping = self.intelligent_part_detection_enhanced(
                 all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section
             )
             
@@ -807,7 +807,7 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         
         return fields
 
-   def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str, 
+   def intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str, 
                                            form_structure: Dict[str, str], page_text_content: Dict[int, str],
                                            has_attorney_section: bool) -> Dict[int, str]:
         """Enhanced intelligent part detection with better Part 0 handling"""
