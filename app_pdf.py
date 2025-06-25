@@ -1000,6 +1000,7 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
                     part_mapping[field_data['index']] = default_part
         
         return part_mapping
+
 def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[int, str], 
                              form_structure: Dict[str, str], has_attorney_section: bool):
         """Debug helper to show part detection details"""
@@ -1079,7 +1080,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         self._part_counters[part] += 1
         
         return f"P{part_num}_{self._part_counters[part]}"
-        
+
     
     def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
