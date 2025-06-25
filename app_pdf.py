@@ -807,10 +807,9 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         
         return fields
 
-       def intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str, 
+   def    intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str, 
                                            form_structure: Dict[str, str], page_text_content: Dict[int, str],
                                            has_attorney_section: bool) -> Dict[int, str]:
-        """Enhanced intelligent part detection with better Part 0 handling"""
         part_mapping = {}
         
         # Phase 1: Look for explicit part indicators in field names
