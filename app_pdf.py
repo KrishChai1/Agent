@@ -661,382 +661,382 @@ class EnhancedUSCISMapper:
             st.error(f"Error detecting form type: {str(e)}")
             return None, 0.0
     
-    def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
-    fields = []
-    self.field_counter = 1
-    
-    try:
-        pdf_bytes = pdf_file.read()
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
+        """Enhanced extraction with intelligent part detection"""
+        fields = []
+        self.field_counter = 1
         
-        # Clean form type
-        base_form_type = form_type
-        
-        # Get form-specific structure
-        form_structure = self.enhanced_structures.get(base_form_type, {})
-        
-        # Collect all field data with enhanced metadata
-        all_field_data = []
-        field_index = 0
-        seen_fields = set()
-        
-        # First, scan all pages to understand structure
-        page_text_content = {}
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            page_text_content[page_num] = page.get_text()
-        
-        # Check if form has attorney section
-        has_attorney_section = False
-        attorney_trigger_found = False
-        
-        # Look for attorney triggers in first few pages
-        for page_num in range(min(3, len(doc))):
-            page_text_lower = page_text_content.get(page_num, "").lower()
-            for trigger in self.form_intelligence["part_detection_rules"]["attorney_section_triggers"]:
-                if trigger in page_text_lower:
-                    has_attorney_section = True
-                    attorney_trigger_found = True
-                    st.session_state.has_attorney_section = True
+        try:
+            pdf_bytes = pdf_file.read()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            # Clean form type
+            base_form_type = form_type
+            
+            # Get form-specific structure
+            form_structure = self.enhanced_structures.get(base_form_type, {})
+            
+            # Collect all field data with enhanced metadata
+            all_field_data = []
+            field_index = 0
+            seen_fields = set()
+            
+            # First, scan all pages to understand structure
+            page_text_content = {}
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                page_text_content[page_num] = page.get_text()
+            
+            # Check if form has attorney section
+            has_attorney_section = False
+            attorney_trigger_found = False
+            
+            # Look for attorney triggers in first few pages
+            for page_num in range(min(3, len(doc))):
+                page_text_lower = page_text_content.get(page_num, "").lower()
+                for trigger in self.form_intelligence["part_detection_rules"]["attorney_section_triggers"]:
+                    if trigger in page_text_lower:
+                        has_attorney_section = True
+                        attorney_trigger_found = True
+                        st.session_state.has_attorney_section = True
+                        break
+                if attorney_trigger_found:
                     break
-            if attorney_trigger_found:
-                break
-        
-        # If form should have Part 0 but doesn't in structure, add it
-        if has_attorney_section and "Part 0" not in form_structure:
-            form_structure = {
-                "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
-                **form_structure
-            }
-        
-        # Collect all fields
-        for page_num in range(len(doc)):
-            page = doc[page_num]
             
-            for widget in page.widgets():
-                if widget.field_name and widget.field_name not in seen_fields:
-                    seen_fields.add(widget.field_name)
-                    
-                    field_data = {
-                        'name': widget.field_name,
-                        'page': page_num + 1,
-                        'widget': widget,
-                        'index': field_index,
-                        'display': widget.field_display or "",
-                        'value': widget.field_value or ""
-                    }
-                    
-                    all_field_data.append(field_data)
-                    field_index += 1
-        
-        # Enhanced part mapping
-        part_mapping = self._intelligent_part_detection_enhanced(
-            all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section
-        )
-        
-        # Store Part 0 fields for reference
-        part0_fields = [idx for idx, part in part_mapping.items() if "Part 0" in part]
-        st.session_state.part0_fields = part0_fields
-        
-        # Debug information (enable with checkbox in sidebar)
-        if st.session_state.get('debug_mode', False):
-            self._debug_part_detection(all_field_data, part_mapping, form_structure, has_attorney_section)
-        
-        # Create field objects
-        for field_data in all_field_data:
-            widget = field_data['widget']
+            # If form should have Part 0 but doesn't in structure, add it
+            if has_attorney_section and "Part 0" not in form_structure:
+                form_structure = {
+                    "Part 0": "To be completed by attorney or BIA-accredited representative (if Form G-28 is attached)",
+                    **form_structure
+                }
             
-            # Extract field information
-            field_type = self._get_field_type(widget)
-            part = part_mapping.get(field_data['index'], f"Page {field_data['page']}")
-            item = self._extract_item_intelligent(widget.field_name, field_data['display'])
-            description = self._generate_intelligent_description(widget.field_name, widget.field_display, part)
-            field_type_suffix = self._get_intelligent_field_suffix(widget.field_name, field_type, description)
-            clean_name = self._generate_clean_name_enhanced(widget.field_name, part, item, field_data['index'])
+            # Collect all fields
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                for widget in page.widgets():
+                    if widget.field_name and widget.field_name not in seen_fields:
+                        seen_fields.add(widget.field_name)
+                        
+                        field_data = {
+                            'name': widget.field_name,
+                            'page': page_num + 1,
+                            'widget': widget,
+                            'index': field_index,
+                            'display': widget.field_display or "",
+                            'value': widget.field_value or ""
+                        }
+                        
+                        all_field_data.append(field_data)
+                        field_index += 1
             
-            # Store form context
-            form_context = {
-                "form_type": base_form_type,
-                "has_attorney": has_attorney_section,
-                "part_context": self._get_part_context(part),
-                "page": field_data['page'],
-                "is_attorney_field": field_data['index'] in part0_fields
-            }
-            
-            # Create field object
-            pdf_field = PDFField(
-                index=field_data['index'],
-                raw_name=widget.field_name,
-                field_type=field_type,
-                value=widget.field_value or '',
-                page=field_data['page'],
-                part=part,
-                item=item,
-                description=description,
-                field_type_suffix=field_type_suffix,
-                clean_name=clean_name,
-                form_context=form_context,
-                position_in_part=field_data['index'] - min([idx for idx, p in part_mapping.items() if p == part], default=0)
+            # Enhanced part mapping
+            part_mapping = self._intelligent_part_detection_enhanced(
+                all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section
             )
             
-            # Get intelligent mapping suggestions
-            suggestions = self._get_intelligent_suggestions(pdf_field, base_form_type)
-            if suggestions:
-                best_suggestion = suggestions[0]
-                pdf_field.db_mapping = best_suggestion.db_path
-                pdf_field.confidence_score = best_suggestion.confidence
-                pdf_field.mapping_type = best_suggestion.field_type
-                pdf_field.ai_suggestions = [s.db_path for s in suggestions[:3]]
-            else:
-                # Default to questionnaire for unmapped fields
-                pdf_field.is_questionnaire = True
+            # Store Part 0 fields for reference
+            part0_fields = [idx for idx, part in part_mapping.items() if "Part 0" in part]
+            st.session_state.part0_fields = part0_fields
             
-            fields.append(pdf_field)
+            # Debug information (enable with checkbox in sidebar)
+            if st.session_state.get('debug_mode', False):
+                self._debug_part_detection(all_field_data, part_mapping, form_structure, has_attorney_section)
+            
+            # Create field objects
+            for field_data in all_field_data:
+                widget = field_data['widget']
+                
+                # Extract field information
+                field_type = self._get_field_type(widget)
+                part = part_mapping.get(field_data['index'], f"Page {field_data['page']}")
+                item = self._extract_item_intelligent(widget.field_name, field_data['display'])
+                description = self._generate_intelligent_description(widget.field_name, widget.field_display, part)
+                field_type_suffix = self._get_intelligent_field_suffix(widget.field_name, field_type, description)
+                clean_name = self._generate_clean_name_enhanced(widget.field_name, part, item, field_data['index'])
+                
+                # Store form context
+                form_context = {
+                    "form_type": base_form_type,
+                    "has_attorney": has_attorney_section,
+                    "part_context": self._get_part_context(part),
+                    "page": field_data['page'],
+                    "is_attorney_field": field_data['index'] in part0_fields
+                }
+                
+                # Create field object
+                pdf_field = PDFField(
+                    index=field_data['index'],
+                    raw_name=widget.field_name,
+                    field_type=field_type,
+                    value=widget.field_value or '',
+                    page=field_data['page'],
+                    part=part,
+                    item=item,
+                    description=description,
+                    field_type_suffix=field_type_suffix,
+                    clean_name=clean_name,
+                    form_context=form_context,
+                    position_in_part=field_data['index'] - min([idx for idx, p in part_mapping.items() if p == part], default=0)
+                )
+                
+                # Get intelligent mapping suggestions
+                suggestions = self._get_intelligent_suggestions(pdf_field, base_form_type)
+                if suggestions:
+                    best_suggestion = suggestions[0]
+                    pdf_field.db_mapping = best_suggestion.db_path
+                    pdf_field.confidence_score = best_suggestion.confidence
+                    pdf_field.mapping_type = best_suggestion.field_type
+                    pdf_field.ai_suggestions = [s.db_path for s in suggestions[:3]]
+                else:
+                    # Default to questionnaire for unmapped fields
+                    pdf_field.is_questionnaire = True
+                
+                fields.append(pdf_field)
+            
+            doc.close()
+            
+            # Display intelligent extraction summary
+            self._display_intelligent_summary(fields, form_type)
+            
+        except Exception as e:
+            st.error(f"Error extracting PDF: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+            return []
         
-        doc.close()
-        
-        # Display intelligent extraction summary
-        self._display_intelligent_summary(fields, form_type)
-        
-    except Exception as e:
-        st.error(f"Error extracting PDF: {str(e)}")
-        import traceback
-        st.error(traceback.format_exc())
-        return []
-    
-    return fields
+        return fields
 
    def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str, 
-                                       form_structure: Dict[str, str], page_text_content: Dict[int, str],
-                                       has_attorney_section: bool) -> Dict[int, str]:
-    """Enhanced intelligent part detection with better Part 0 handling"""
-    part_mapping = {}
-    
-    # Phase 1: Look for explicit part indicators in field names
-    for field_data in all_field_data:
-        # Clean field name
-        clean_name = self._clean_field_name(field_data['name'])
-        field_text_combined = f"{clean_name} {field_data.get('display', '')}".lower()
+                                           form_structure: Dict[str, str], page_text_content: Dict[int, str],
+                                           has_attorney_section: bool) -> Dict[int, str]:
+        """Enhanced intelligent part detection with better Part 0 handling"""
+        part_mapping = {}
         
-        # Check for explicit part numbers in field names
-        part_patterns = [
-            r'part[\s_\-]*(\d+)',
-            r'p(\d+)[\._]',
-            r'section[\s_\-]*(\d+)'
-        ]
-        
-        for pattern in part_patterns:
-            match = re.search(pattern, clean_name, re.IGNORECASE)
-            if match:
-                part_num = match.group(1)
-                part_key = f"Part {part_num}"
-                if part_key in form_structure:
-                    part_mapping[field_data['index']] = f"{part_key} - {form_structure[part_key]}"
-                    break
-    
-    # Phase 2: Attorney section detection for Part 0
-    if has_attorney_section and "Part 0" in form_structure:
-        # Find all potential attorney fields
-        attorney_field_indices = []
-        
-        # Look for fields that appear before the first "Part 1" field
-        first_part1_index = None
+        # Phase 1: Look for explicit part indicators in field names
         for field_data in all_field_data:
-            if field_data['index'] in part_mapping and "Part 1" in part_mapping[field_data['index']]:
-                first_part1_index = field_data['index']
-                break
+            # Clean field name
+            clean_name = self._clean_field_name(field_data['name'])
+            field_text_combined = f"{clean_name} {field_data.get('display', '')}".lower()
+            
+            # Check for explicit part numbers in field names
+            part_patterns = [
+                r'part[\s_\-]*(\d+)',
+                r'p(\d+)[\._]',
+                r'section[\s_\-]*(\d+)'
+            ]
+            
+            for pattern in part_patterns:
+                match = re.search(pattern, clean_name, re.IGNORECASE)
+                if match:
+                    part_num = match.group(1)
+                    part_key = f"Part {part_num}"
+                    if part_key in form_structure:
+                        part_mapping[field_data['index']] = f"{part_key} - {form_structure[part_key]}"
+                        break
         
-        # Attorney-specific keywords and patterns
-        attorney_keywords = [
-            "attorney", "representative", "bar", "law firm", "g-28", "g28", 
-            "appearance", "bia", "accredited", "fein", "ein", "licensing",
-            "state bar number", "uscis online account", "authorized", "preparer"
-        ]
+        # Phase 2: Attorney section detection for Part 0
+        if has_attorney_section and "Part 0" in form_structure:
+            # Find all potential attorney fields
+            attorney_field_indices = []
+            
+            # Look for fields that appear before the first "Part 1" field
+            first_part1_index = None
+            for field_data in all_field_data:
+                if field_data['index'] in part_mapping and "Part 1" in part_mapping[field_data['index']]:
+                    first_part1_index = field_data['index']
+                    break
+            
+            # Attorney-specific keywords and patterns
+            attorney_keywords = [
+                "attorney", "representative", "bar", "law firm", "g-28", "g28", 
+                "appearance", "bia", "accredited", "fein", "ein", "licensing",
+                "state bar number", "uscis online account", "authorized", "preparer"
+            ]
+            
+            # Check each field for attorney indicators
+            for field_data in all_field_data:
+                if field_data['index'] in part_mapping:
+                    continue
+                
+                field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
+                clean_name = self._clean_field_name(field_data['name']).lower()
+                
+                # Strong indicators for attorney fields
+                is_attorney_field = False
+                
+                # Check if field appears before Part 1 (if found)
+                before_part1 = first_part1_index is None or field_data['index'] < first_part1_index
+                
+                # Method 1: Field contains attorney keywords
+                for keyword in attorney_keywords:
+                    if keyword in field_text or keyword in clean_name:
+                        is_attorney_field = True
+                        break
+                
+                # Method 2: Field is on first page with attorney trigger text
+                if not is_attorney_field and field_data['page'] == 1:
+                    page_text_lower = page_text_content.get(0, "").lower()
+                    has_page_trigger = any(trigger in page_text_lower for trigger in 
+                                         self.form_intelligence["part_detection_rules"]["attorney_section_triggers"])
+                    
+                    if has_page_trigger and before_part1:
+                        # Check position on page - attorney fields typically appear early
+                        if field_data['index'] < 15:  # First 15 fields
+                            is_attorney_field = True
+                
+                # Method 3: Check for G-28 specific patterns in field names
+                if not is_attorney_field:
+                    g28_patterns = [
+                        r'attorney.*name',
+                        r'representative.*name',
+                        r'bar.*number',
+                        r'firm.*name',
+                        r'attorney.*address',
+                        r'attorney.*phone',
+                        r'attorney.*email'
+                    ]
+                    
+                    for pattern in g28_patterns:
+                        if re.search(pattern, field_text):
+                            is_attorney_field = True
+                            break
+                
+                if is_attorney_field:
+                    part_mapping[field_data['index']] = f"Part 0 - {form_structure['Part 0']}"
+                    attorney_field_indices.append(field_data['index'])
+            
+            # Update session state with detected attorney fields
+            if attorney_field_indices:
+                st.session_state.part0_fields = attorney_field_indices
         
-        # Check each field for attorney indicators
+        # Phase 3: Context-based detection for common patterns
         for field_data in all_field_data:
             if field_data['index'] in part_mapping:
                 continue
             
             field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
-            clean_name = self._clean_field_name(field_data['name']).lower()
             
-            # Strong indicators for attorney fields
-            is_attorney_field = False
-            
-            # Check if field appears before Part 1 (if found)
-            before_part1 = first_part1_index is None or field_data['index'] < first_part1_index
-            
-            # Method 1: Field contains attorney keywords
-            for keyword in attorney_keywords:
-                if keyword in field_text or keyword in clean_name:
-                    is_attorney_field = True
-                    break
-            
-            # Method 2: Field is on first page with attorney trigger text
-            if not is_attorney_field and field_data['page'] == 1:
-                page_text_lower = page_text_content.get(0, "").lower()
-                has_page_trigger = any(trigger in page_text_lower for trigger in 
-                                     self.form_intelligence["part_detection_rules"]["attorney_section_triggers"])
+            # Check against known part patterns
+            for part_key, part_desc in form_structure.items():
+                part_desc_lower = part_desc.lower()
                 
-                if has_page_trigger and before_part1:
-                    # Check position on page - attorney fields typically appear early
-                    if field_data['index'] < 15:  # First 15 fields
-                        is_attorney_field = True
-            
-            # Method 3: Check for G-28 specific patterns in field names
-            if not is_attorney_field:
-                g28_patterns = [
-                    r'attorney.*name',
-                    r'representative.*name',
-                    r'bar.*number',
-                    r'firm.*name',
-                    r'attorney.*address',
-                    r'attorney.*phone',
-                    r'attorney.*email'
-                ]
+                # Skip Part 0 as it's handled above
+                if part_key == "Part 0":
+                    continue
                 
-                for pattern in g28_patterns:
-                    if re.search(pattern, field_text):
-                        is_attorney_field = True
+                # Beneficiary indicators
+                if any(indicator in field_text for indicator in ["your name", "your information", "about you"]):
+                    if "information about you" in part_desc_lower:
+                        part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
                         break
-            
-            if is_attorney_field:
-                part_mapping[field_data['index']] = f"Part 0 - {form_structure['Part 0']}"
-                attorney_field_indices.append(field_data['index'])
-        
-        # Update session state with detected attorney fields
-        if attorney_field_indices:
-            st.session_state.part0_fields = attorney_field_indices
-    
-    # Phase 3: Context-based detection for common patterns
-    for field_data in all_field_data:
-        if field_data['index'] in part_mapping:
-            continue
-        
-        field_text = f"{field_data['name']} {field_data.get('display', '')}".lower()
-        
-        # Check against known part patterns
-        for part_key, part_desc in form_structure.items():
-            part_desc_lower = part_desc.lower()
-            
-            # Skip Part 0 as it's handled above
-            if part_key == "Part 0":
-                continue
-            
-            # Beneficiary indicators
-            if any(indicator in field_text for indicator in ["your name", "your information", "about you"]):
-                if "information about you" in part_desc_lower:
+                
+                # Petitioner indicators
+                elif any(indicator in field_text for indicator in ["petitioner", "employer", "company", "organization"]):
+                    if any(term in part_desc_lower for term in ["petitioner", "employer", "company"]):
+                        part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
+                        break
+                
+                # Other specific patterns
+                elif "eligibility" in field_text and "eligibility" in part_desc_lower:
                     part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
                     break
-            
-            # Petitioner indicators
-            elif any(indicator in field_text for indicator in ["petitioner", "employer", "company", "organization"]):
-                if any(term in part_desc_lower for term in ["petitioner", "employer", "company"]):
+                elif "signature" in field_text and ("signature" in part_desc_lower or "statement" in part_desc_lower):
                     part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
                     break
-            
-            # Other specific patterns
-            elif "eligibility" in field_text and "eligibility" in part_desc_lower:
-                part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
-                break
-            elif "signature" in field_text and ("signature" in part_desc_lower or "statement" in part_desc_lower):
-                part_mapping[field_data['index']] = f"{part_key} - {part_desc}"
-                break
-    
-    # Phase 4: Page and position-based inference
-    # Group unmapped fields by page
-    unmapped_by_page = defaultdict(list)
-    for field_data in all_field_data:
-        if field_data['index'] not in part_mapping:
-            unmapped_by_page[field_data['page']].append(field_data)
-    
-    # Try to infer parts based on nearby mapped fields
-    for page, unmapped_fields in unmapped_by_page.items():
-        # Find mapped fields on the same page
-        mapped_on_page = []
+        
+        # Phase 4: Page and position-based inference
+        # Group unmapped fields by page
+        unmapped_by_page = defaultdict(list)
         for field_data in all_field_data:
-            if field_data['page'] == page and field_data['index'] in part_mapping:
-                mapped_on_page.append((field_data['index'], part_mapping[field_data['index']]))
+            if field_data['index'] not in part_mapping:
+                unmapped_by_page[field_data['page']].append(field_data)
         
-        if mapped_on_page:
-            # Use the most common part on this page
-            page_parts = [part for _, part in mapped_on_page]
-            most_common_part = max(set(page_parts), key=page_parts.count)
+        # Try to infer parts based on nearby mapped fields
+        for page, unmapped_fields in unmapped_by_page.items():
+            # Find mapped fields on the same page
+            mapped_on_page = []
+            for field_data in all_field_data:
+                if field_data['page'] == page and field_data['index'] in part_mapping:
+                    mapped_on_page.append((field_data['index'], part_mapping[field_data['index']]))
             
-            for field_data in unmapped_fields:
-                part_mapping[field_data['index']] = most_common_part
-        else:
-            # No mapped fields on this page - use intelligent guessing
-            # Estimate based on form structure and page number
-            if has_attorney_section and page == 1:
-                # First page with attorney section likely Part 0
-                default_part = f"Part 0 - {form_structure.get('Part 0', 'Attorney Information')}"
+            if mapped_on_page:
+                # Use the most common part on this page
+                page_parts = [part for _, part in mapped_on_page]
+                most_common_part = max(set(page_parts), key=page_parts.count)
+                
+                for field_data in unmapped_fields:
+                    part_mapping[field_data['index']] = most_common_part
             else:
-                # Try to find appropriate part based on page progression
-                part_keys = [k for k in form_structure.keys() if k.startswith("Part")]
-                part_nums = []
-                for pk in part_keys:
-                    match = re.search(r'Part\s*(\d+)', pk)
-                    if match:
-                        part_nums.append((int(match.group(1)), pk))
-                
-                part_nums.sort()
-                
-                # Estimate which part based on page number
-                if part_nums:
-                    # Rough estimate: 2-3 pages per part
-                    estimated_part_idx = min((page - 1) // 2, len(part_nums) - 1)
-                    if has_attorney_section and page > 1:
-                        estimated_part_idx = max(0, estimated_part_idx - 1)
-                    
-                    part_key = part_nums[estimated_part_idx][1]
-                    default_part = f"{part_key} - {form_structure[part_key]}"
+                # No mapped fields on this page - use intelligent guessing
+                # Estimate based on form structure and page number
+                if has_attorney_section and page == 1:
+                    # First page with attorney section likely Part 0
+                    default_part = f"Part 0 - {form_structure.get('Part 0', 'Attorney Information')}"
                 else:
-                    default_part = "General Information"
-            
-            for field_data in unmapped_fields:
-                part_mapping[field_data['index']] = default_part
-    
-    return part_mapping
-
- def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[int, str], 
-                         form_structure: Dict[str, str], has_attorney_section: bool):
-    """Debug helper to show part detection details"""
-    st.markdown("### 🔍 Part Detection Debug Info")
-    
-    # Show form structure
-    with st.expander("Form Structure", expanded=False):
-        for part_key, part_desc in form_structure.items():
-            st.write(f"**{part_key}**: {part_desc}")
-    
-    # Show attorney section detection
-    st.write(f"**Attorney Section Detected**: {has_attorney_section}")
-    st.write(f"**Part 0 Fields**: {len(st.session_state.get('part0_fields', []))}")
-    
-    # Show first few fields and their part assignments
-    with st.expander("First 20 Fields Detection", expanded=True):
-        for i, field_data in enumerate(all_field_data[:20]):
-            part = part_mapping.get(field_data['index'], "UNMAPPED")
-            field_text = f"{field_data['name']} {field_data.get('display', '')}"
-            
-            # Highlight Part 0 fields
-            if "Part 0" in part:
-                st.success(f"**Field {i}**: {field_text[:50]}... → **{part}**")
-            else:
-                st.write(f"**Field {i}**: {field_text[:50]}... → {part}")
-    
-    # Show part distribution
-    part_counts = defaultdict(int)
-    for part in part_mapping.values():
-        part_key = part.split(' - ')[0] if ' - ' in part else part
-        part_counts[part_key] += 1
-    
-    with st.expander("Part Distribution", expanded=False):
-        for part, count in sorted(part_counts.items()):
-            st.write(f"**{part}**: {count} fields")
-    
-    return
+                    # Try to find appropriate part based on page progression
+                    part_keys = [k for k in form_structure.keys() if k.startswith("Part")]
+                    part_nums = []
+                    for pk in part_keys:
+                        match = re.search(r'Part\s*(\d+)', pk)
+                        if match:
+                            part_nums.append((int(match.group(1)), pk))
+                    
+                    part_nums.sort()
+                    
+                    # Estimate which part based on page number
+                    if part_nums:
+                        # Rough estimate: 2-3 pages per part
+                        estimated_part_idx = min((page - 1) // 2, len(part_nums) - 1)
+                        if has_attorney_section and page > 1:
+                            estimated_part_idx = max(0, estimated_part_idx - 1)
+                        
+                        part_key = part_nums[estimated_part_idx][1]
+                        default_part = f"{part_key} - {form_structure[part_key]}"
+                    else:
+                        default_part = "General Information"
+                
+                for field_data in unmapped_fields:
+                    part_mapping[field_data['index']] = default_part
+        
+        return part_mapping
+def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[int, str], 
+                             form_structure: Dict[str, str], has_attorney_section: bool):
+        """Debug helper to show part detection details"""
+        st.markdown("### 🔍 Part Detection Debug Info")
+        
+        # Show form structure
+        with st.expander("Form Structure", expanded=False):
+            for part_key, part_desc in form_structure.items():
+                st.write(f"**{part_key}**: {part_desc}")
+        
+        # Show attorney section detection
+        st.write(f"**Attorney Section Detected**: {has_attorney_section}")
+        st.write(f"**Part 0 Fields**: {len(st.session_state.get('part0_fields', []))}")
+        
+        # Show first few fields and their part assignments
+        with st.expander("First 20 Fields Detection", expanded=True):
+            for i, field_data in enumerate(all_field_data[:20]):
+                part = part_mapping.get(field_data['index'], "UNMAPPED")
+                field_text = f"{field_data['name']} {field_data.get('display', '')}"
+                
+                # Highlight Part 0 fields
+                if "Part 0" in part:
+                    st.success(f"**Field {i}**: {field_text[:50]}... → **{part}**")
+                else:
+                    st.write(f"**Field {i}**: {field_text[:50]}... → {part}")
+        
+        # Show part distribution
+        part_counts = defaultdict(int)
+        for part in part_mapping.values():
+            part_key = part.split(' - ')[0] if ' - ' in part else part
+            part_counts[part_key] += 1
+        
+        with st.expander("Part Distribution", expanded=False):
+            for part, count in sorted(part_counts.items()):
+                st.write(f"**{part}**: {count} fields")
+        
+        return
  
     def _generate_clean_name_enhanced(self, field_name: str, part: str, item: str, field_index: int) -> str:
         """Generate clean field name with proper G-28 style formatting"""
@@ -1044,14 +1044,18 @@ class EnhancedUSCISMapper:
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
         part_num = part_match.group(1) if part_match else "1"
         
-        # Handle Part 0 specially
+        # Handle Part 0 specially for attorney fields
         if "part 0" in part.lower():
-            part_num = "0"
-            # For attorney fields, use special formatting
-            if field_index in st.session_state.get('part0_fields', []):
-                position = st.session_state.part0_fields.index(field_index)
-                # Format as G28 P1_3a style
-                return f"G28 P1_{position + 1}"
+            # For Part 0 (attorney) fields, use G28 naming convention
+            part0_fields = st.session_state.get('part0_fields', [])
+            if field_index in part0_fields:
+                # Get position within Part 0
+                position = part0_fields.index(field_index) + 1
+                # Format as G28_P1_1a, G28_P1_2a, etc.
+                return f"G28_P1_{position}a"
+            else:
+                # Still in Part 0 but not in the tracked list
+                return f"G28_P0_{field_index}"
         
         # Use item if available
         if item:
@@ -1065,13 +1069,17 @@ class EnhancedUSCISMapper:
         if num_match:
             return f"P{part_num}_{num_match.group(1)}"
         
-        # Use position within part
+        # Use position within part - reset counter for each part
         if not hasattr(self, '_part_counters'):
-            self._part_counters = defaultdict(int)
+            self._part_counters = {}
         
-        self._part_counters[part_num] += 1
+        if part not in self._part_counters:
+            self._part_counters[part] = 0
         
-        return f"P{part_num}_{self._part_counters[part_num]}"
+        self._part_counters[part] += 1
+        
+        return f"P{part_num}_{self._part_counters[part]}"
+        
     
     def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
@@ -1449,9 +1457,14 @@ class EnhancedUSCISMapper:
         else:
             return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
-    def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
+   def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
         """Display enhanced extraction summary with intelligence insights"""
         st.markdown("### 🧠 Intelligent Extraction Summary")
+        
+        # Add debug mode toggle
+        debug_col1, debug_col2 = st.columns([3, 1])
+        with debug_col2:
+            st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.get('debug_mode', False))
         
         # Key insights
         col1, col2, col3, col4 = st.columns(4)
@@ -1559,8 +1572,8 @@ class EnhancedUSCISMapper:
                     st.caption(f"... and {len(part_fields) - 8} more fields")
         
         # AI Insights - Special attention to Part 0
-        with st.expander(" AI Intelligence Report", expanded=False):
-            st.markdown("### Form Understanding")
+        with st.expander("🤖 AI Intelligence Report", expanded=False):
+            st.markdown("### 🧠 Form Understanding")
             
             # Form structure understanding
             st.write("**✅ Detected Form Structure:**")
