@@ -1040,13 +1040,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return
  
-        def _generate_clean_name_enhanced(
-        self,
-        field_name: str,
-        part: str,
-        item: str,
-        field_index: int) -> str:
-        
+        def _generate_clean_name_enhanced(self, field_name: str, part: str, item: str, field_index: int) -> str:        
         """Generate clean field name with proper G-28 style formatting"""
         # Extract part number
         part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
