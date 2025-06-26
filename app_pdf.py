@@ -1041,46 +1041,46 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         return
  
         def _generate_clean_name_enhanced(self, field_name: str, part: str, item: str, field_index: int) -> str:        
-        """Generate clean field name with proper G-28 style formatting"""
-        # Extract part number
-        part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
-        part_num = part_match.group(1) if part_match else "1"
-        
-        # Handle Part 0 specially for attorney fields
-        if "part 0" in part.lower():
-            # For Part 0 (attorney) fields, use G28 naming convention
-            part0_fields = st.session_state.get('part0_fields', [])
-            if field_index in part0_fields:
-                # Get position within Part 0
-                position = part0_fields.index(field_index) + 1
-                # Format as G28_P1_1a, G28_P1_2a, etc.
-                return f"G28_P1_{position}a"
-            else:
-                # Still in Part 0 but not in the tracked list
-                return f"G28_P0_{field_index}"
-        
-        # Use item if available
-        if item:
-            return f"P{part_num}_{item}"
-        
-        # Generate from field name
-        clean = self._clean_field_name(field_name)
-        
-        # Extract number from end
-        num_match = re.search(r'(\d+[a-zA-Z]?)$', clean)
-        if num_match:
-            return f"P{part_num}_{num_match.group(1)}"
-        
-        # Use position within part - reset counter for each part
-        if not hasattr(self, '_part_counters'):
-            self._part_counters = {}
-        
-        if part not in self._part_counters:
-            self._part_counters[part] = 0
-        
-        self._part_counters[part] += 1
-        
-        return f"P{part_num}_{self._part_counters[part]}"
+            """Generate clean field name with proper G-28 style formatting"""
+            # Extract part number
+            part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
+            part_num = part_match.group(1) if part_match else "1"
+            
+            # Handle Part 0 specially for attorney fields
+            if "part 0" in part.lower():
+                # For Part 0 (attorney) fields, use G28 naming convention
+                part0_fields = st.session_state.get('part0_fields', [])
+                if field_index in part0_fields:
+                    # Get position within Part 0
+                    position = part0_fields.index(field_index) + 1
+                    # Format as G28_P1_1a, G28_P1_2a, etc.
+                    return f"G28_P1_{position}a"
+                else:
+                    # Still in Part 0 but not in the tracked list
+                    return f"G28_P0_{field_index}"
+            
+            # Use item if available
+            if item:
+                return f"P{part_num}_{item}"
+            
+            # Generate from field name
+            clean = self._clean_field_name(field_name)
+            
+            # Extract number from end
+            num_match = re.search(r'(\d+[a-zA-Z]?)$', clean)
+            if num_match:
+                return f"P{part_num}_{num_match.group(1)}"
+            
+            # Use position within part - reset counter for each part
+            if not hasattr(self, '_part_counters'):
+                self._part_counters = {}
+            
+            if part not in self._part_counters:
+                self._part_counters[part] = 0
+            
+            self._part_counters[part] += 1
+            
+            return f"P{part_num}_{self._part_counters[part]}"
 
     
     def _get_field_type(self, widget) -> str:
