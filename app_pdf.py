@@ -1045,8 +1045,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         field_name: str,
         part: str,
         item: str,
-        field_index: int
-    ) -> str:
+        field_index: int) -> str:
         
         """Generate clean field name with proper G-28 style formatting"""
         # Extract part number
