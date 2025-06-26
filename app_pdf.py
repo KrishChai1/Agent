@@ -1083,19 +1083,19 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
             return f"P{part_num}_{self._part_counters[part]}"
 
     
-    def _get_field_type(self, widget) -> str:
-        """Determine field type from widget"""
-        if widget.field_type == 2:  # Button/checkbox
+     def _get_field_type(self, widget) -> str:
+         """Determine field type from widget"""
+         if widget.field_type == 2:  # Button/checkbox
             return "checkbox"
-        elif widget.field_type == 3:  # Radio
-            return "radio"
-        elif widget.field_type == 4:  # Text
-            return "text"
-        elif widget.field_type == 5:  # Choice/dropdown
-            return "select"
-        elif widget.field_type == 7:  # Signature
-            return "signature"
-        else:
+         elif widget.field_type == 3:  # Radio
+             return "radio"
+         elif widget.field_type == 4:  # Text
+             return "text"
+         elif widget.field_type == 5:  # Choice/dropdown
+             return "select"
+         elif widget.field_type == 7:  # Signature
+             return "signature"
+         else:
             return "text"
     
     def _get_part_context(self, part: str) -> str:
