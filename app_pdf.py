@@ -1082,9 +1082,8 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
             
             return f"P{part_num}_{self._part_counters[part]}"
 
-    
-     def _get_field_type(self, widget) -> str:
-         """Determine field type from widget"""
+    def _get_field_type(self, widget) -> str:
+        """Determine field type from widget"""
          if widget.field_type == 2:  # Button/checkbox
             return "checkbox"
          elif widget.field_type == 3:  # Radio
