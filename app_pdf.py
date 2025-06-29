@@ -1082,7 +1082,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
             
             return f"P{part_num}_{self._part_counters[part]}"
 
-    def _get_field_type(self, widget) -> str:
+def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
         
         if widget.field_type == 2:  # Button/checkbox
@@ -1098,7 +1098,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         else:
              return "text"
     
-    def _get_part_context(self, part: str) -> str:
+def _get_part_context(self, part: str) -> str:
         """Get context for a part (attorney, beneficiary, petitioner, etc.)"""
         part_lower = part.lower()
         
@@ -1113,7 +1113,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         else:
             return "general"
     
-    def _get_intelligent_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
+def _get_intelligent_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
         """AI-powered intelligent mapping suggestions"""
         suggestions = []
         
@@ -1148,7 +1148,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return final_suggestions[:5]  # Return top 5 suggestions
     
-    def _get_attorney_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+def _get_attorney_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get attorney-specific suggestions"""
         suggestions = []
         
@@ -1197,7 +1197,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return suggestions
     
-    def _get_beneficiary_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+def _get_beneficiary_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get beneficiary-specific suggestions"""
         suggestions = []
         
@@ -1263,7 +1263,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return suggestions
     
-    def _get_petitioner_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+def _get_petitioner_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get petitioner/company suggestions"""
         suggestions = []
         
@@ -1283,7 +1283,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return suggestions
     
-    def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get pattern-based suggestions using intelligent patterns"""
         suggestions = []
         
@@ -1346,7 +1346,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return suggestions
     
-    def _clean_field_name(self, field_name: str) -> str:
+def _clean_field_name(self, field_name: str) -> str:
         """Clean field name for analysis"""
         patterns_to_remove = [
             r'form\d*\[\d+\]\.',
@@ -1363,7 +1363,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return clean_name
     
-    def _extract_item_intelligent(self, field_name: str, field_display: str = "") -> str:
+def _extract_item_intelligent(self, field_name: str, field_display: str = "") -> str:
         """Intelligently extract item number"""
         clean_name = self._clean_field_name(field_name)
         
@@ -1386,7 +1386,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return ""
     
-    def _generate_intelligent_description(self, field_name: str, field_display: str, part: str) -> str:
+def _generate_intelligent_description(self, field_name: str, field_display: str, part: str) -> str:
         """Generate intelligent human-readable descriptions"""
         # Use display name if meaningful
         if field_display and not field_display.startswith('form'):
@@ -1435,7 +1435,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return desc.strip()
     
-    def _get_intelligent_field_suffix(self, field_name: str, field_type: str, description: str) -> str:
+def _get_intelligent_field_suffix(self, field_name: str, field_type: str, description: str) -> str:
         """Get intelligent TypeScript field suffix"""
         combined_text = f"{field_name} {description}".lower()
         
@@ -1459,7 +1459,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         else:
             return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
-   def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
+def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
         """Display enhanced extraction summary with intelligence insights"""
         st.markdown("### 🧠 Intelligent Extraction Summary")
         
@@ -1500,7 +1500,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
             fields_by_part[field.part].append(field)
         
         # Sort parts
-        def natural_sort_key(part):
+def natural_sort_key(part):
             match = re.search(r'Part\s*(\d+)', part)
             if match:
                 return (0, int(match.group(1)))
@@ -1509,7 +1509,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
         # Create visual part analysis
-        for part in sorted_parts:
+for part in sorted_parts:
             part_fields = fields_by_part[part]
             context = self._get_part_context(part)
             
@@ -1574,7 +1574,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
                     st.caption(f"... and {len(part_fields) - 8} more fields")
         
         # AI Insights - Special attention to Part 0
-        with st.expander("🤖 AI Intelligence Report", expanded=False):
+with st.expander("🤖 AI Intelligence Report", expanded=False):
             st.markdown("### 🧠 Form Understanding")
             
             # Form structure understanding
@@ -1622,7 +1622,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
             st.write("- 📋 Unmapped fields will automatically go to questionnaire")
             st.write("- 🔄 You can always adjust mappings manually")
     
-    def calculate_mapping_score(self, fields: List[PDFField]) -> float:
+def calculate_mapping_score(self, fields: List[PDFField]) -> float:
         """Calculate overall mapping quality score"""
         if not fields:
             return 0.0
@@ -1639,7 +1639,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return min(score * 100, 100)
     
-    def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
+def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
         """Generate TypeScript export file in the required format"""
         # Clean form name
         form_name = form_type.replace('-', '')
@@ -1714,7 +1714,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return ts_content
     
-    def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
+def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
         """Generate questionnaire JSON for manual entry fields"""
         questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
         
@@ -1732,7 +1732,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         }
         
         # Sort parts naturally
-        def natural_sort_key(part):
+def natural_sort_key(part):
             match = re.search(r'Part\s*(\d+)', part)
             if match:
                 return (0, int(match.group(1)))
@@ -1740,7 +1740,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
-        for part in sorted_parts:
+for part in sorted_parts:
             section = {
                 "name": part,
                 "questions": []
@@ -1764,7 +1764,7 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return json.dumps(questionnaire, indent=2)
     
-    def get_all_database_paths(self) -> List[str]:
+def get_all_database_paths(self) -> List[str]:
         """Get all available database paths"""
         return self.db_paths_cache
 
