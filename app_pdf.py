@@ -1313,7 +1313,7 @@ def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> Li
         
         return suggestions
     
-    def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get fuzzy matching suggestions using AI-like matching"""
         suggestions = []
         
