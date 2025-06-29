@@ -1715,53 +1715,53 @@ def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> 
         return ts_content
     
 def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
-        """Generate questionnaire JSON for manual entry fields"""
-        questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
-        
-        # Group by part
-fields_by_part = defaultdict(list)
-for field in questionnaire_fields:
-            fields_by_part[field.part].append(field)
-        
-        # Build JSON structure
-questionnaire = {
-            "formType": st.session_state.form_type,
-            "generatedAt": datetime.now().isoformat(),
-            "totalQuestions": len(questionnaire_fields),
-            "sections": []
+    """Generate questionnaire JSON for manual entry fields"""
+    questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
+    
+    # Group by part
+    fields_by_part = defaultdict(list)
+    for field in questionnaire_fields:
+        fields_by_part[field.part].append(field)
+    
+    # Build JSON structure
+    questionnaire = {
+        "formType": st.session_state.form_type,
+        "generatedAt": datetime.now().isoformat(),
+        "totalQuestions": len(questionnaire_fields),
+        "sections": []
+    }
+    
+    # Sort parts naturally
+    def natural_sort_key(part):
+        match = re.search(r'Part\s*(\d+)', part)
+        if match:
+            return (0, int(match.group(1)))
+        return (1, part)
+    
+    sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+    
+    for part in sorted_parts:
+        section = {
+            "name": part,
+            "questions": []
         }
         
-        # Sort parts naturally
-def natural_sort_key(part):
-            match = re.search(r'Part\s*(\d+)', part)
-            if match:
-                return (0, int(match.group(1)))
-            return (1, part)
-        
-sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
-        
-for part in sorted_parts:
-            section = {
-                "name": part,
-                "questions": []
+        for field in fields_by_part[part]:
+            question = {
+                "id": field.clean_name,
+                "description": field.description,
+                "type": field.field_type,
+                "required": True,
+                "page": field.page
             }
             
-            for field in fields_by_part[part]:
-                question = {
-                    "id": field.clean_name,
-                    "description": field.description,
-                    "type": field.field_type,
-                    "required": True,
-                    "page": field.page
-                }
-                
-                if field.item:
-                    question["item"] = field.item
-                
-                section["questions"].append(question)
+            if field.item:
+                question["item"] = field.item
             
-            questionnaire["sections"].append(section)
+            section["questions"].append(question)
         
+        questionnaire["sections"].append(section)
+    
     return json.dumps(questionnaire, indent=2)
     
 def get_all_database_paths(self) -> List[str]:
