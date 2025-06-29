@@ -1460,167 +1460,167 @@ def _get_intelligent_field_suffix(self, field_name: str, field_type: str, descri
             return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
 def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
-        """Display enhanced extraction summary with intelligence insights"""
-        st.markdown("### 🧠 Intelligent Extraction Summary")
+    """Display enhanced extraction summary with intelligence insights"""
+    st.markdown("### 🧠 Intelligent Extraction Summary")
+    
+    # Add debug mode toggle
+    debug_col1, debug_col2 = st.columns([3, 1])
+    with debug_col2:
+        st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.get('debug_mode', False))
+    
+    # Key insights
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("📄 Form Type", form_type)
+        if st.session_state.has_attorney_section:
+            st.caption("✅ G-28 Attached")
+    
+    with col2:
+        st.metric("🔢 Total Fields", len(fields))
+        high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
+        st.caption(f"🎯 {high_conf} high confidence")
+    
+    with col3:
+        parts = list(set(f.part for f in fields))
+        st.metric("📑 Parts Detected", len(parts))
+        st.caption(f"📄 Across {max(f.page for f in fields)} pages")
+    
+    with col4:
+        auto_mapped = sum(1 for f in fields if f.db_mapping)
+        st.metric("🤖 Auto-Mapped", f"{auto_mapped} ({auto_mapped/len(fields)*100:.0f}%)")
+        st.caption("AI suggestions ready")
+    
+    # Part breakdown with context
+    st.markdown("### 📊 Intelligent Part Analysis")
+    
+    # Group by part
+    fields_by_part = defaultdict(list)
+    for field in fields:
+        fields_by_part[field.part].append(field)
+    
+    # Sort parts
+    def natural_sort_key(part):
+        match = re.search(r'Part\s*(\d+)', part)
+        if match:
+            return (0, int(match.group(1)))
+        return (1, part)
+    
+    sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+    
+    # Create visual part analysis
+    for part in sorted_parts:
+        part_fields = fields_by_part[part]
+        context = self._get_part_context(part)
         
-        # Add debug mode toggle
-        debug_col1, debug_col2 = st.columns([3, 1])
-        with debug_col2:
-            st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.get('debug_mode', False))
+        # Determine icon and color
+        if context == "attorney":
+            icon = "⚖️"
+            color = "blue"
+        elif context == "beneficiary":
+            icon = "👤"
+            color = "green"
+        elif context == "petitioner":
+            icon = "🏢"
+            color = "orange"
+        else:
+            icon = "📄"
+            color = "gray"
         
-        # Key insights
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("📄 Form Type", form_type)
-            if st.session_state.has_attorney_section:
-                st.caption("✅ G-28 Attached")
-        
-        with col2:
-            st.metric("🔢 Total Fields", len(fields))
-            high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
-            st.caption(f"🎯 {high_conf} high confidence")
-        
-        with col3:
-            parts = list(set(f.part for f in fields))
-            st.metric("📑 Parts Detected", len(parts))
-            st.caption(f"📄 Across {max(f.page for f in fields)} pages")
-        
-        with col4:
-            auto_mapped = sum(1 for f in fields if f.db_mapping)
-            st.metric("🤖 Auto-Mapped", f"{auto_mapped} ({auto_mapped/len(fields)*100:.0f}%)")
-            st.caption("AI suggestions ready")
-        
-        # Part breakdown with context
-        st.markdown("### 📊 Intelligent Part Analysis")
-        
-        # Group by part
-        fields_by_part = defaultdict(list)
-        for field in fields:
-            fields_by_part[field.part].append(field)
-        
-        # Sort parts
-def natural_sort_key(part):
-            match = re.search(r'Part\s*(\d+)', part)
-            if match:
-                return (0, int(match.group(1)))
-            return (1, part)
-        
-sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
-        
-        # Create visual part analysis
-for part in sorted_parts:
-            part_fields = fields_by_part[part]
-            context = self._get_part_context(part)
-            
-            # Determine icon and color
+        # Part summary
+        with st.expander(f"{icon} **{part}** ({len(part_fields)} fields)", expanded="Part 0" in part or "Part 1" in part):
+            # Context explanation
             if context == "attorney":
-                icon = "⚖️"
-                color = "blue"
+                st.info("🔍 **Attorney Section**: These fields are for the legal representative (G-28 attachment)")
             elif context == "beneficiary":
-                icon = "👤"
-                color = "green"
+                st.info("🔍 **Beneficiary Section**: These fields are about the applicant/beneficiary")
             elif context == "petitioner":
-                icon = "🏢"
-                color = "orange"
-            else:
-                icon = "📄"
-                color = "gray"
+                st.info("🔍 **Petitioner Section**: These fields are about the sponsoring company/employer")
             
-            # Part summary
-            with st.expander(f"{icon} **{part}** ({len(part_fields)} fields)", expanded="Part 0" in part or "Part 1" in part):
-                # Context explanation
-                if context == "attorney":
-                    st.info("🔍 **Attorney Section**: These fields are for the legal representative (G-28 attachment)")
-                elif context == "beneficiary":
-                    st.info("🔍 **Beneficiary Section**: These fields are about the applicant/beneficiary")
-                elif context == "petitioner":
-                    st.info("🔍 **Petitioner Section**: These fields are about the sponsoring company/employer")
-                
-                # Field type breakdown
-                type_counts = defaultdict(int)
-                for field in part_fields:
-                    type_counts[field.field_type] += 1
-                
-                # Quick stats
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Fields", len(part_fields))
-                with col2:
-                    mapped = sum(1 for f in part_fields if f.db_mapping)
-                    st.metric("Suggested", mapped)
-                with col3:
-                    avg_conf = sum(f.confidence_score for f in part_fields if f.confidence_score > 0) / len([f for f in part_fields if f.confidence_score > 0]) if any(f.confidence_score > 0 for f in part_fields) else 0
-                    st.metric("Avg Confidence", f"{avg_conf:.0%}")
-                
-                # Sample fields with AI insights
-                st.markdown("**🔍 AI-Detected Fields:**")
-                
-                sample_data = []
-                for field in part_fields[:8]:
-                    sample_data.append({
-                        "Field": field.description,
-                        "Type": field.field_type,
-                        "AI Suggestion": field.db_mapping if field.db_mapping else "To Questionnaire",
-                        "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
-                        "Context": "✓" if field.confidence_score > 0 and any(s for s in field.ai_suggestions) else ""
-                    })
-                
-                if sample_data:
-                    df = pd.DataFrame(sample_data)
-                    st.dataframe(df, use_container_width=True, hide_index=True)
-                
-                if len(part_fields) > 8:
-                    st.caption(f"... and {len(part_fields) - 8} more fields")
+            # Field type breakdown
+            type_counts = defaultdict(int)
+            for field in part_fields:
+                type_counts[field.field_type] += 1
+            
+            # Quick stats
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Fields", len(part_fields))
+            with col2:
+                mapped = sum(1 for f in part_fields if f.db_mapping)
+                st.metric("Suggested", mapped)
+            with col3:
+                avg_conf = sum(f.confidence_score for f in part_fields if f.confidence_score > 0) / len([f for f in part_fields if f.confidence_score > 0]) if any(f.confidence_score > 0 for f in part_fields) else 0
+                st.metric("Avg Confidence", f"{avg_conf:.0%}")
+            
+            # Sample fields with AI insights
+            st.markdown("**🔍 AI-Detected Fields:**")
+            
+            sample_data = []
+            for field in part_fields[:8]:
+                sample_data.append({
+                    "Field": field.description,
+                    "Type": field.field_type,
+                    "AI Suggestion": field.db_mapping if field.db_mapping else "To Questionnaire",
+                    "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
+                    "Context": "✓" if field.confidence_score > 0 and any(s for s in field.ai_suggestions) else ""
+                })
+            
+            if sample_data:
+                df = pd.DataFrame(sample_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            if len(part_fields) > 8:
+                st.caption(f"... and {len(part_fields) - 8} more fields")
+    
+    # AI Insights - Special attention to Part 0
+    with st.expander("🤖 AI Intelligence Report", expanded=False):
+        st.markdown("### 🧠 Form Understanding")
         
-        # AI Insights - Special attention to Part 0
-with st.expander("🤖 AI Intelligence Report", expanded=False):
-            st.markdown("### 🧠 Form Understanding")
-            
-            # Form structure understanding
-            st.write("**✅ Detected Form Structure:**")
-            if st.session_state.has_attorney_section:
-                st.write("- ⚖️ Attorney representation detected (G-28 attached)")
-                st.write(f"- 📝 Part 0 identified with {len(st.session_state.get('part0_fields', []))} attorney fields")
-            
-            # Beneficiary detection
-            beneficiary_parts = [p for p in sorted_parts if "information about you" in p.lower()]
-            if beneficiary_parts:
-                st.write(f"- 👤 Beneficiary information detected in: {', '.join(beneficiary_parts)}")
-            
-            # Mapping confidence
-            st.write("\n**📊 Mapping Confidence Analysis:**")
-            
-            confidence_ranges = {
-                "High (>80%)": sum(1 for f in fields if f.confidence_score > 0.8),
-                "Medium (60-80%)": sum(1 for f in fields if 0.6 <= f.confidence_score <= 0.8),
-                "Low (<60%)": sum(1 for f in fields if 0 < f.confidence_score < 0.6),
-                "No suggestion": sum(1 for f in fields if f.confidence_score == 0)
-            }
-            
-            conf_df = pd.DataFrame(confidence_ranges.items(), columns=["Confidence Level", "Field Count"])
-            st.dataframe(conf_df, use_container_width=True, hide_index=True)
-            
-            # Pattern detection
-            st.write("\n**🔍 Detected Patterns:**")
-            pattern_counts = defaultdict(int)
-            for field in fields:
-                if field.db_mapping:
-                    obj = field.db_mapping.split('.')[0]
-                    pattern_counts[obj] += 1
-            
-            if pattern_counts:
-                st.write("Primary data objects detected:")
-                for obj, count in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True):
-                    st.write(f"- {obj}: {count} fields")
-            
-            # Recommendations
-            st.write("\n**💡 AI Recommendations:**")
-            if st.session_state.has_attorney_section:
-                st.write("- ✅ Review Part 0 mappings for attorney information")
-            st.write("- 🎯 Accept high-confidence suggestions (>80%) for faster mapping")
-            st.write("- 📋 Unmapped fields will automatically go to questionnaire")
-            st.write("- 🔄 You can always adjust mappings manually")
+        # Form structure understanding
+        st.write("**✅ Detected Form Structure:**")
+        if st.session_state.has_attorney_section:
+            st.write("- ⚖️ Attorney representation detected (G-28 attached)")
+            st.write(f"- 📝 Part 0 identified with {len(st.session_state.get('part0_fields', []))} attorney fields")
+        
+        # Beneficiary detection
+        beneficiary_parts = [p for p in sorted_parts if "information about you" in p.lower()]
+        if beneficiary_parts:
+            st.write(f"- 👤 Beneficiary information detected in: {', '.join(beneficiary_parts)}")
+        
+        # Mapping confidence
+        st.write("\n**📊 Mapping Confidence Analysis:**")
+        
+        confidence_ranges = {
+            "High (>80%)": sum(1 for f in fields if f.confidence_score > 0.8),
+            "Medium (60-80%)": sum(1 for f in fields if 0.6 <= f.confidence_score <= 0.8),
+            "Low (<60%)": sum(1 for f in fields if 0 < f.confidence_score < 0.6),
+            "No suggestion": sum(1 for f in fields if f.confidence_score == 0)
+        }
+        
+        conf_df = pd.DataFrame(confidence_ranges.items(), columns=["Confidence Level", "Field Count"])
+        st.dataframe(conf_df, use_container_width=True, hide_index=True)
+        
+        # Pattern detection
+        st.write("\n**🔍 Detected Patterns:**")
+        pattern_counts = defaultdict(int)
+        for field in fields:
+            if field.db_mapping:
+                obj = field.db_mapping.split('.')[0]
+                pattern_counts[obj] += 1
+        
+        if pattern_counts:
+            st.write("Primary data objects detected:")
+            for obj, count in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True):
+                st.write(f"- {obj}: {count} fields")
+        
+        # Recommendations
+        st.write("\n**💡 AI Recommendations:**")
+        if st.session_state.has_attorney_section:
+            st.write("- ✅ Review Part 0 mappings for attorney information")
+        st.write("- 🎯 Accept high-confidence suggestions (>80%) for faster mapping")
+        st.write("- 📋 Unmapped fields will automatically go to questionnaire")
+        st.write("- 🔄 You can always adjust mappings manually")
     
 def calculate_mapping_score(self, fields: List[PDFField]) -> float:
         """Calculate overall mapping quality score"""
