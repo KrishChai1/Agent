@@ -1719,12 +1719,12 @@ def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
         questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
         
         # Group by part
-        fields_by_part = defaultdict(list)
-        for field in questionnaire_fields:
+fields_by_part = defaultdict(list)
+for field in questionnaire_fields:
             fields_by_part[field.part].append(field)
         
         # Build JSON structure
-        questionnaire = {
+questionnaire = {
             "formType": st.session_state.form_type,
             "generatedAt": datetime.now().isoformat(),
             "totalQuestions": len(questionnaire_fields),
@@ -1738,7 +1738,7 @@ def natural_sort_key(part):
                 return (0, int(match.group(1)))
             return (1, part)
         
-        sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
 for part in sorted_parts:
             section = {
@@ -1762,7 +1762,7 @@ for part in sorted_parts:
             
             questionnaire["sections"].append(section)
         
-        return json.dumps(questionnaire, indent=2)
+    return json.dumps(questionnaire, indent=2)
     
 def get_all_database_paths(self) -> List[str]:
         """Get all available database paths"""
