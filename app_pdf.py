@@ -1506,7 +1506,7 @@ def natural_sort_key(part):
                 return (0, int(match.group(1)))
             return (1, part)
         
-        sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
         
         # Create visual part analysis
 for part in sorted_parts:
