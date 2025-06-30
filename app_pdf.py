@@ -280,7 +280,7 @@ DB_OBJECTS = {
             "positionJobTitle", "inhouseProject", "endClientName", "jobLocation",
             "grossSalary", "swageUnit", "startDate", "endDate", "prevailingWageRate",
             "pwageUnit", "socOnetOesCode", "socOnetOesTitle", "fullTimePosition",
-            "wageLevel", "sourceYear", "lcaNumber"
+            "wageLevel", "lcaNumber"
         ],
         "Addresses": [
             "addressStreet", "addressCity", "addressState", "addressZip",
@@ -661,7 +661,7 @@ class EnhancedUSCISMapper:
             st.error(f"Error detecting form type: {str(e)}")
             return None, 0.0
     
-def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
+    def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         """Enhanced extraction with intelligent part detection"""
         fields = []
         self.field_counter = 1
@@ -730,7 +730,7 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
                         all_field_data.append(field_data)
                         field_index += 1
             
-          # Enhanced part mapping 
+            # Enhanced part mapping 
             part_mapping = self._intelligent_part_detection_enhanced(
                 all_field_data, base_form_type, form_structure, page_text_content, has_attorney_section
             )  
@@ -807,8 +807,7 @@ def extract_pdf_fields(self, pdf_file, form_type: str) -> List[PDFField]:
         
         return fields
 
-
-def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str,
+    def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_type: str,
                                            form_structure: Dict[str, str], page_text_content: Dict[int, str],
                                            has_attorney_section: bool) -> Dict[int, str]:
         """Enhanced intelligent part detection with better Part 0 handling"""
@@ -1002,7 +1001,7 @@ def _intelligent_part_detection_enhanced(self, all_field_data: List[Dict], form_
         
         return part_mapping
                                                
-def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[int, str], 
+    def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[int, str], 
                              form_structure: Dict[str, str], has_attorney_section: bool):
         """Debug helper to show part detection details"""
         st.markdown("### 🔍 Part Detection Debug Info")
@@ -1040,65 +1039,65 @@ def _debug_part_detection(self, all_field_data: List[Dict], part_mapping: Dict[i
         
         return
  
-        def _generate_clean_name_enhanced(self, field_name: str, part: str, item: str, field_index: int) -> str:        
-            """Generate clean field name with proper G-28 style formatting"""
-            # Extract part number
-            part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
-            part_num = part_match.group(1) if part_match else "1"
-            
-            # Handle Part 0 specially for attorney fields
-            if "part 0" in part.lower():
-                # For Part 0 (attorney) fields, use G28 naming convention
-                part0_fields = st.session_state.get('part0_fields', [])
-                if field_index in part0_fields:
-                    # Get position within Part 0
-                    position = part0_fields.index(field_index) + 1
-                    # Format as G28_P1_1a, G28_P1_2a, etc.
-                    return f"G28_P1_{position}a"
-                else:
-                    # Still in Part 0 but not in the tracked list
-                    return f"G28_P0_{field_index}"
-            
-            # Use item if available
-            if item:
-                return f"P{part_num}_{item}"
-            
-            # Generate from field name
-            clean = self._clean_field_name(field_name)
-            
-            # Extract number from end
-            num_match = re.search(r'(\d+[a-zA-Z]?)$', clean)
-            if num_match:
-                return f"P{part_num}_{num_match.group(1)}"
-            
-            # Use position within part - reset counter for each part
-            if not hasattr(self, '_part_counters'):
-                self._part_counters = {}
-            
-            if part not in self._part_counters:
-                self._part_counters[part] = 0
-            
-            self._part_counters[part] += 1
-            
-            return f"P{part_num}_{self._part_counters[part]}"
+    def _generate_clean_name_enhanced(self, field_name: str, part: str, item: str, field_index: int) -> str:        
+        """Generate clean field name with proper G-28 style formatting"""
+        # Extract part number
+        part_match = re.search(r'Part\s*(\d+)', part, re.IGNORECASE)
+        part_num = part_match.group(1) if part_match else "1"
+        
+        # Handle Part 0 specially for attorney fields
+        if "part 0" in part.lower():
+            # For Part 0 (attorney) fields, use G28 naming convention
+            part0_fields = st.session_state.get('part0_fields', [])
+            if field_index in part0_fields:
+                # Get position within Part 0
+                position = part0_fields.index(field_index) + 1
+                # Format as G28_P1_1a, G28_P1_2a, etc.
+                return f"G28_P1_{position}a"
+            else:
+                # Still in Part 0 but not in the tracked list
+                return f"G28_P0_{field_index}"
+        
+        # Use item if available
+        if item:
+            return f"P{part_num}_{item}"
+        
+        # Generate from field name
+        clean = self._clean_field_name(field_name)
+        
+        # Extract number from end
+        num_match = re.search(r'(\d+[a-zA-Z]?)$', clean)
+        if num_match:
+            return f"P{part_num}_{num_match.group(1)}"
+        
+        # Use position within part - reset counter for each part
+        if not hasattr(self, '_part_counters'):
+            self._part_counters = {}
+        
+        if part not in self._part_counters:
+            self._part_counters[part] = 0
+        
+        self._part_counters[part] += 1
+        
+        return f"P{part_num}_{self._part_counters[part]}"
 
-def _get_field_type(self, widget) -> str:
+    def _get_field_type(self, widget) -> str:
         """Determine field type from widget"""
         
         if widget.field_type == 2:  # Button/checkbox
             return "checkbox"
         elif widget.field_type == 3:  # Radio
-             return "radio"
+            return "radio"
         elif widget.field_type == 4:  # Text
-             return "text"
+            return "text"
         elif widget.field_type == 5:  # Choice/dropdown
-             return "select"
+            return "select"
         elif widget.field_type == 7:  # Signature
-             return "signature"
+            return "signature"
         else:
-             return "text"
+            return "text"
     
-def _get_part_context(self, part: str) -> str:
+    def _get_part_context(self, part: str) -> str:
         """Get context for a part (attorney, beneficiary, petitioner, etc.)"""
         part_lower = part.lower()
         
@@ -1113,7 +1112,7 @@ def _get_part_context(self, part: str) -> str:
         else:
             return "general"
     
-def _get_intelligent_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
+    def _get_intelligent_suggestions(self, field: PDFField, form_type: str) -> List[MappingSuggestion]:
         """AI-powered intelligent mapping suggestions"""
         suggestions = []
         
@@ -1148,7 +1147,7 @@ def _get_intelligent_suggestions(self, field: PDFField, form_type: str) -> List[
         
         return final_suggestions[:5]  # Return top 5 suggestions
     
-def _get_attorney_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+    def _get_attorney_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get attorney-specific suggestions"""
         suggestions = []
         
@@ -1197,7 +1196,7 @@ def _get_attorney_suggestions(self, field: PDFField, field_text: str) -> List[Ma
         
         return suggestions
     
-def _get_beneficiary_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+    def _get_beneficiary_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get beneficiary-specific suggestions"""
         suggestions = []
         
@@ -1263,7 +1262,7 @@ def _get_beneficiary_suggestions(self, field: PDFField, field_text: str) -> List
         
         return suggestions
     
-def _get_petitioner_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+    def _get_petitioner_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get petitioner/company suggestions"""
         suggestions = []
         
@@ -1283,7 +1282,7 @@ def _get_petitioner_suggestions(self, field: PDFField, field_text: str) -> List[
         
         return suggestions
     
-def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+    def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get pattern-based suggestions using intelligent patterns"""
         suggestions = []
         
@@ -1313,7 +1312,7 @@ def _get_pattern_based_suggestions(self, field: PDFField, field_text: str) -> Li
         
         return suggestions
     
-def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
+    def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[MappingSuggestion]:
         """Get fuzzy matching suggestions using AI-like matching"""
         suggestions = []
         
@@ -1346,7 +1345,7 @@ def _get_fuzzy_suggestions(self, field: PDFField, field_text: str) -> List[Mappi
         
         return suggestions
     
-def _clean_field_name(self, field_name: str) -> str:
+    def _clean_field_name(self, field_name: str) -> str:
         """Clean field name for analysis"""
         patterns_to_remove = [
             r'form\d*\[\d+\]\.',
@@ -1363,7 +1362,7 @@ def _clean_field_name(self, field_name: str) -> str:
         
         return clean_name
     
-def _extract_item_intelligent(self, field_name: str, field_display: str = "") -> str:
+    def _extract_item_intelligent(self, field_name: str, field_display: str = "") -> str:
         """Intelligently extract item number"""
         clean_name = self._clean_field_name(field_name)
         
@@ -1386,7 +1385,7 @@ def _extract_item_intelligent(self, field_name: str, field_display: str = "") ->
         
         return ""
     
-def _generate_intelligent_description(self, field_name: str, field_display: str, part: str) -> str:
+    def _generate_intelligent_description(self, field_name: str, field_display: str, part: str) -> str:
         """Generate intelligent human-readable descriptions"""
         # Use display name if meaningful
         if field_display and not field_display.startswith('form'):
@@ -1435,7 +1434,7 @@ def _generate_intelligent_description(self, field_name: str, field_display: str,
         
         return desc.strip()
     
-def _get_intelligent_field_suffix(self, field_name: str, field_type: str, description: str) -> str:
+    def _get_intelligent_field_suffix(self, field_name: str, field_type: str, description: str) -> str:
         """Get intelligent TypeScript field suffix"""
         combined_text = f"{field_name} {description}".lower()
         
@@ -1459,170 +1458,170 @@ def _get_intelligent_field_suffix(self, field_name: str, field_type: str, descri
         else:
             return FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
     
-def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
-    """Display enhanced extraction summary with intelligence insights"""
-    st.markdown("### 🧠 Intelligent Extraction Summary")
-    
-    # Add debug mode toggle
-    debug_col1, debug_col2 = st.columns([3, 1])
-    with debug_col2:
-        st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.get('debug_mode', False))
-    
-    # Key insights
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("📄 Form Type", form_type)
-        if st.session_state.has_attorney_section:
-            st.caption("✅ G-28 Attached")
-    
-    with col2:
-        st.metric("🔢 Total Fields", len(fields))
-        high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
-        st.caption(f"🎯 {high_conf} high confidence")
-    
-    with col3:
-        parts = list(set(f.part for f in fields))
-        st.metric("📑 Parts Detected", len(parts))
-        st.caption(f"📄 Across {max(f.page for f in fields)} pages")
-    
-    with col4:
-        auto_mapped = sum(1 for f in fields if f.db_mapping)
-        st.metric("🤖 Auto-Mapped", f"{auto_mapped} ({auto_mapped/len(fields)*100:.0f}%)")
-        st.caption("AI suggestions ready")
-    
-    # Part breakdown with context
-    st.markdown("### 📊 Intelligent Part Analysis")
-    
-    # Group by part
-    fields_by_part = defaultdict(list)
-    for field in fields:
-        fields_by_part[field.part].append(field)
-    
-    # Sort parts
-    def natural_sort_key(part):
-        match = re.search(r'Part\s*(\d+)', part)
-        if match:
-            return (0, int(match.group(1)))
-        return (1, part)
-    
-    sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
-    
-    # Create visual part analysis
-    for part in sorted_parts:
-        part_fields = fields_by_part[part]
-        context = self._get_part_context(part)
+    def _display_intelligent_summary(self, fields: List[PDFField], form_type: str):
+        """Display enhanced extraction summary with intelligence insights"""
+        st.markdown("### 🧠 Intelligent Extraction Summary")
         
-        # Determine icon and color
-        if context == "attorney":
-            icon = "⚖️"
-            color = "blue"
-        elif context == "beneficiary":
-            icon = "👤"
-            color = "green"
-        elif context == "petitioner":
-            icon = "🏢"
-            color = "orange"
-        else:
-            icon = "📄"
-            color = "gray"
+        # Add debug mode toggle
+        debug_col1, debug_col2 = st.columns([3, 1])
+        with debug_col2:
+            st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.get('debug_mode', False))
         
-        # Part summary
-        with st.expander(f"{icon} **{part}** ({len(part_fields)} fields)", expanded="Part 0" in part or "Part 1" in part):
-            # Context explanation
-            if context == "attorney":
-                st.info("🔍 **Attorney Section**: These fields are for the legal representative (G-28 attachment)")
-            elif context == "beneficiary":
-                st.info("🔍 **Beneficiary Section**: These fields are about the applicant/beneficiary")
-            elif context == "petitioner":
-                st.info("🔍 **Petitioner Section**: These fields are about the sponsoring company/employer")
-            
-            # Field type breakdown
-            type_counts = defaultdict(int)
-            for field in part_fields:
-                type_counts[field.field_type] += 1
-            
-            # Quick stats
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Fields", len(part_fields))
-            with col2:
-                mapped = sum(1 for f in part_fields if f.db_mapping)
-                st.metric("Suggested", mapped)
-            with col3:
-                avg_conf = sum(f.confidence_score for f in part_fields if f.confidence_score > 0) / len([f for f in part_fields if f.confidence_score > 0]) if any(f.confidence_score > 0 for f in part_fields) else 0
-                st.metric("Avg Confidence", f"{avg_conf:.0%}")
-            
-            # Sample fields with AI insights
-            st.markdown("**🔍 AI-Detected Fields:**")
-            
-            sample_data = []
-            for field in part_fields[:8]:
-                sample_data.append({
-                    "Field": field.description,
-                    "Type": field.field_type,
-                    "AI Suggestion": field.db_mapping if field.db_mapping else "To Questionnaire",
-                    "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
-                    "Context": "✓" if field.confidence_score > 0 and any(s for s in field.ai_suggestions) else ""
-                })
-            
-            if sample_data:
-                df = pd.DataFrame(sample_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            
-            if len(part_fields) > 8:
-                st.caption(f"... and {len(part_fields) - 8} more fields")
-    
-    # AI Insights - Special attention to Part 0
-    with st.expander("🤖 AI Intelligence Report", expanded=False):
-        st.markdown("### 🧠 Form Understanding")
+        # Key insights
+        col1, col2, col3, col4 = st.columns(4)
         
-        # Form structure understanding
-        st.write("**✅ Detected Form Structure:**")
-        if st.session_state.has_attorney_section:
-            st.write("- ⚖️ Attorney representation detected (G-28 attached)")
-            st.write(f"- 📝 Part 0 identified with {len(st.session_state.get('part0_fields', []))} attorney fields")
+        with col1:
+            st.metric("📄 Form Type", form_type)
+            if st.session_state.has_attorney_section:
+                st.caption("✅ G-28 Attached")
         
-        # Beneficiary detection
-        beneficiary_parts = [p for p in sorted_parts if "information about you" in p.lower()]
-        if beneficiary_parts:
-            st.write(f"- 👤 Beneficiary information detected in: {', '.join(beneficiary_parts)}")
+        with col2:
+            st.metric("🔢 Total Fields", len(fields))
+            high_conf = sum(1 for f in fields if f.confidence_score > 0.8)
+            st.caption(f"🎯 {high_conf} high confidence")
         
-        # Mapping confidence
-        st.write("\n**📊 Mapping Confidence Analysis:**")
+        with col3:
+            parts = list(set(f.part for f in fields))
+            st.metric("📑 Parts Detected", len(parts))
+            st.caption(f"📄 Across {max(f.page for f in fields)} pages")
         
-        confidence_ranges = {
-            "High (>80%)": sum(1 for f in fields if f.confidence_score > 0.8),
-            "Medium (60-80%)": sum(1 for f in fields if 0.6 <= f.confidence_score <= 0.8),
-            "Low (<60%)": sum(1 for f in fields if 0 < f.confidence_score < 0.6),
-            "No suggestion": sum(1 for f in fields if f.confidence_score == 0)
-        }
+        with col4:
+            auto_mapped = sum(1 for f in fields if f.db_mapping)
+            st.metric("🤖 Auto-Mapped", f"{auto_mapped} ({auto_mapped/len(fields)*100:.0f}%)")
+            st.caption("AI suggestions ready")
         
-        conf_df = pd.DataFrame(confidence_ranges.items(), columns=["Confidence Level", "Field Count"])
-        st.dataframe(conf_df, use_container_width=True, hide_index=True)
+        # Part breakdown with context
+        st.markdown("### 📊 Intelligent Part Analysis")
         
-        # Pattern detection
-        st.write("\n**🔍 Detected Patterns:**")
-        pattern_counts = defaultdict(int)
+        # Group by part
+        fields_by_part = defaultdict(list)
         for field in fields:
-            if field.db_mapping:
-                obj = field.db_mapping.split('.')[0]
-                pattern_counts[obj] += 1
+            fields_by_part[field.part].append(field)
         
-        if pattern_counts:
-            st.write("Primary data objects detected:")
-            for obj, count in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True):
-                st.write(f"- {obj}: {count} fields")
+        # Sort parts
+        def natural_sort_key(part):
+            match = re.search(r'Part\s*(\d+)', part)
+            if match:
+                return (0, int(match.group(1)))
+            return (1, part)
         
-        # Recommendations
-        st.write("\n**💡 AI Recommendations:**")
-        if st.session_state.has_attorney_section:
-            st.write("- ✅ Review Part 0 mappings for attorney information")
-        st.write("- 🎯 Accept high-confidence suggestions (>80%) for faster mapping")
-        st.write("- 📋 Unmapped fields will automatically go to questionnaire")
-        st.write("- 🔄 You can always adjust mappings manually")
+        sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+        
+        # Create visual part analysis
+        for part in sorted_parts:
+            part_fields = fields_by_part[part]
+            context = self._get_part_context(part)
+            
+            # Determine icon and color
+            if context == "attorney":
+                icon = "⚖️"
+                color = "blue"
+            elif context == "beneficiary":
+                icon = "👤"
+                color = "green"
+            elif context == "petitioner":
+                icon = "🏢"
+                color = "orange"
+            else:
+                icon = "📄"
+                color = "gray"
+            
+            # Part summary
+            with st.expander(f"{icon} **{part}** ({len(part_fields)} fields)", expanded="Part 0" in part or "Part 1" in part):
+                # Context explanation
+                if context == "attorney":
+                    st.info("🔍 **Attorney Section**: These fields are for the legal representative (G-28 attachment)")
+                elif context == "beneficiary":
+                    st.info("🔍 **Beneficiary Section**: These fields are about the applicant/beneficiary")
+                elif context == "petitioner":
+                    st.info("🔍 **Petitioner Section**: These fields are about the sponsoring company/employer")
+                
+                # Field type breakdown
+                type_counts = defaultdict(int)
+                for field in part_fields:
+                    type_counts[field.field_type] += 1
+                
+                # Quick stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Fields", len(part_fields))
+                with col2:
+                    mapped = sum(1 for f in part_fields if f.db_mapping)
+                    st.metric("Suggested", mapped)
+                with col3:
+                    avg_conf = sum(f.confidence_score for f in part_fields if f.confidence_score > 0) / len([f for f in part_fields if f.confidence_score > 0]) if any(f.confidence_score > 0 for f in part_fields) else 0
+                    st.metric("Avg Confidence", f"{avg_conf:.0%}")
+                
+                # Sample fields with AI insights
+                st.markdown("**🔍 AI-Detected Fields:**")
+                
+                sample_data = []
+                for field in part_fields[:8]:
+                    sample_data.append({
+                        "Field": field.description,
+                        "Type": field.field_type,
+                        "AI Suggestion": field.db_mapping if field.db_mapping else "To Questionnaire",
+                        "Confidence": f"{field.confidence_score:.0%}" if field.confidence_score > 0 else "-",
+                        "Context": "✓" if field.confidence_score > 0 and any(s for s in field.ai_suggestions) else ""
+                    })
+                
+                if sample_data:
+                    df = pd.DataFrame(sample_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                if len(part_fields) > 8:
+                    st.caption(f"... and {len(part_fields) - 8} more fields")
+        
+        # AI Insights - Special attention to Part 0
+        with st.expander("🤖 AI Intelligence Report", expanded=False):
+            st.markdown("### 🧠 Form Understanding")
+            
+            # Form structure understanding
+            st.write("**✅ Detected Form Structure:**")
+            if st.session_state.has_attorney_section:
+                st.write("- ⚖️ Attorney representation detected (G-28 attached)")
+                st.write(f"- 📝 Part 0 identified with {len(st.session_state.get('part0_fields', []))} attorney fields")
+            
+            # Beneficiary detection
+            beneficiary_parts = [p for p in sorted_parts if "information about you" in p.lower()]
+            if beneficiary_parts:
+                st.write(f"- 👤 Beneficiary information detected in: {', '.join(beneficiary_parts)}")
+            
+            # Mapping confidence
+            st.write("\n**📊 Mapping Confidence Analysis:**")
+            
+            confidence_ranges = {
+                "High (>80%)": sum(1 for f in fields if f.confidence_score > 0.8),
+                "Medium (60-80%)": sum(1 for f in fields if 0.6 <= f.confidence_score <= 0.8),
+                "Low (<60%)": sum(1 for f in fields if 0 < f.confidence_score < 0.6),
+                "No suggestion": sum(1 for f in fields if f.confidence_score == 0)
+            }
+            
+            conf_df = pd.DataFrame(confidence_ranges.items(), columns=["Confidence Level", "Field Count"])
+            st.dataframe(conf_df, use_container_width=True, hide_index=True)
+            
+            # Pattern detection
+            st.write("\n**🔍 Detected Patterns:**")
+            pattern_counts = defaultdict(int)
+            for field in fields:
+                if field.db_mapping:
+                    obj = field.db_mapping.split('.')[0]
+                    pattern_counts[obj] += 1
+            
+            if pattern_counts:
+                st.write("Primary data objects detected:")
+                for obj, count in sorted(pattern_counts.items(), key=lambda x: x[1], reverse=True):
+                    st.write(f"- {obj}: {count} fields")
+            
+            # Recommendations
+            st.write("\n**💡 AI Recommendations:**")
+            if st.session_state.has_attorney_section:
+                st.write("- ✅ Review Part 0 mappings for attorney information")
+            st.write("- 🎯 Accept high-confidence suggestions (>80%) for faster mapping")
+            st.write("- 📋 Unmapped fields will automatically go to questionnaire")
+            st.write("- 🔄 You can always adjust mappings manually")
     
-def calculate_mapping_score(self, fields: List[PDFField]) -> float:
+    def calculate_mapping_score(self, fields: List[PDFField]) -> float:
         """Calculate overall mapping quality score"""
         if not fields:
             return 0.0
@@ -1639,7 +1638,7 @@ def calculate_mapping_score(self, fields: List[PDFField]) -> float:
         
         return min(score * 100, 100)
     
-def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
+    def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> str:
         """Generate TypeScript export file in the required format"""
         # Clean form name
         form_name = form_type.replace('-', '')
@@ -1714,57 +1713,57 @@ def generate_typescript_export(self, form_type: str, fields: List[PDFField]) -> 
         
         return ts_content
     
-def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
-    """Generate questionnaire JSON for manual entry fields"""
-    questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
-    
-    # Group by part
-    fields_by_part = defaultdict(list)
-    for field in questionnaire_fields:
-        fields_by_part[field.part].append(field)
-    
-    # Build JSON structure
-    questionnaire = {
-        "formType": st.session_state.form_type,
-        "generatedAt": datetime.now().isoformat(),
-        "totalQuestions": len(questionnaire_fields),
-        "sections": []
-    }
-    
-    # Sort parts naturally
-    def natural_sort_key(part):
-        match = re.search(r'Part\s*(\d+)', part)
-        if match:
-            return (0, int(match.group(1)))
-        return (1, part)
-    
-    sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
-    
-    for part in sorted_parts:
-        section = {
-            "name": part,
-            "questions": []
+    def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
+        """Generate questionnaire JSON for manual entry fields"""
+        questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
+        
+        # Group by part
+        fields_by_part = defaultdict(list)
+        for field in questionnaire_fields:
+            fields_by_part[field.part].append(field)
+        
+        # Build JSON structure
+        questionnaire = {
+            "formType": st.session_state.form_type,
+            "generatedAt": datetime.now().isoformat(),
+            "totalQuestions": len(questionnaire_fields),
+            "sections": []
         }
         
-        for field in fields_by_part[part]:
-            question = {
-                "id": field.clean_name,
-                "description": field.description,
-                "type": field.field_type,
-                "required": True,
-                "page": field.page
+        # Sort parts naturally
+        def natural_sort_key(part):
+            match = re.search(r'Part\s*(\d+)', part)
+            if match:
+                return (0, int(match.group(1)))
+            return (1, part)
+        
+        sorted_parts = sorted(fields_by_part.keys(), key=natural_sort_key)
+        
+        for part in sorted_parts:
+            section = {
+                "name": part,
+                "questions": []
             }
             
-            if field.item:
-                question["item"] = field.item
+            for field in fields_by_part[part]:
+                question = {
+                    "id": field.clean_name,
+                    "description": field.description,
+                    "type": field.field_type,
+                    "required": True,
+                    "page": field.page
+                }
+                
+                if field.item:
+                    question["item"] = field.item
+                
+                section["questions"].append(question)
             
-            section["questions"].append(question)
+            questionnaire["sections"].append(section)
         
-        questionnaire["sections"].append(section)
+        return json.dumps(questionnaire, indent=2)
     
-    return json.dumps(questionnaire, indent=2)
-    
-def get_all_database_paths(self) -> List[str]:
+    def get_all_database_paths(self) -> List[str]:
         """Get all available database paths"""
         return self.db_paths_cache
 
@@ -2090,7 +2089,7 @@ def render_enhanced_upload_section(mapper: EnhancedUSCISMapper):
                             
                             # Show success
                             st.balloons()
-                            st.success(f" Successfully analyzed {len(fields)} fields from {form_type}!")
+                            st.success(f"✅ Successfully analyzed {len(fields)} fields from {form_type}!")
                             
                             # Show special note if attorney section found
                             if st.session_state.has_attorney_section:
@@ -2190,7 +2189,7 @@ def render_intelligent_mapping_section(mapper: EnhancedUSCISMapper):
     with col5:
         score = mapper.calculate_mapping_score(fields)
         st.markdown('<div class="metric-card-enhanced">', unsafe_allow_html=True)
-        st.metric("AI Score", f"{score}%")
+        st.metric("AI Score", f"{score:.0f}%")
         st.caption("Overall quality")
         st.markdown('</div>', unsafe_allow_html=True)
     
@@ -2795,7 +2794,7 @@ def render_ai_insights_dashboard(mapper: EnhancedUSCISMapper):
         st.info("👆 Please complete field mapping first")
         return
     
-    st.markdown("## AI Insights & Analytics")
+    st.markdown("## 🧠 AI Insights & Analytics")
     
     fields = st.session_state.pdf_fields
     
@@ -3122,7 +3121,7 @@ def main():
             - 👤 "Information About You" = Beneficiary
             
             **G-28 Format:**
-            - Part 0 fields use "G28 P1_" format
+            - Part 0 fields use "G28_P1_" format
             - Auto-detected from trigger text
             """)
     
