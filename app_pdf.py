@@ -58,11 +58,11 @@ class ExtractedField:
     field_name: str          # Original PDF field name
     field_id: str           # Clean ID like P1_1, P1_2
     part: str               # Part 1, Part 2, etc.
+    line: str               # Line number if available
     page: int               # Page number
     field_type: str         # text, checkbox, radio, etc.
     field_value: str        # Current value if any
     description: str        # Human-readable description
-    rect: tuple            # Position on page (x0, y0, x1, y1)
     db_mapping: Optional[str] = None  # Database path if mapped
     is_mapped: bool = False
     to_questionnaire: bool = False
@@ -73,6 +73,13 @@ class PDFFieldExtractor:
     def __init__(self):
         self.init_session_state()
         self.db_paths = self._build_database_paths()
+        
+        # Attorney field indicators to skip
+        self.attorney_indicators = [
+            "attorney", "lawyer", "representative", "bar number", "law firm",
+            "g-28", "g28", "bia", "accredited", "licensing", "preparer",
+            "ein", "fein", "firm name", "law office"
+        ]
     
     def init_session_state(self):
         """Initialize session state"""
@@ -103,7 +110,7 @@ class PDFFieldExtractor:
         
         return sorted(paths)
     
-    def extract_from_pdf(self, pdf_file) -> bool:
+    def extract_from_pdf(self, pdf_file, auto_checkboxes_to_json: bool = True) -> bool:
         """Extract all fields from uploaded PDF"""
         try:
             # Reset state
@@ -118,68 +125,61 @@ class PDFFieldExtractor:
             form_info = self._detect_form_type(doc)
             st.session_state.form_info = form_info
             
-            # Extract all fields with their parts
+            # Extract all fields
             all_fields = []
-            
-            # First, find where Part 1 starts
-            part1_page = 0
-            for page_num in range(len(doc)):
-                page_text = doc[page_num].get_text()
-                if re.search(r'Part\s+1\b', page_text, re.IGNORECASE):
-                    part1_page = page_num
-                    break
-            
-            # Extract fields starting from Part 1
-            current_part = None
             field_counter = defaultdict(int)
             
-            for page_num in range(part1_page, len(doc)):
+            for page_num in range(len(doc)):
                 page = doc[page_num]
-                page_text = page.get_text()
-                
-                # Detect current part from page
-                part_match = re.search(r'Part\s+(\d+)\b', page_text, re.IGNORECASE)
-                if part_match:
-                    current_part = f"Part {part_match.group(1)}"
-                
-                # Skip if we haven't found Part 1 yet
-                if not current_part:
-                    continue
-                
-                # Extract widgets from this page
                 widgets = page.widgets()
                 
                 for widget in widgets:
                     if not widget.field_name:
                         continue
                     
-                    # Clean field name
                     field_name = widget.field_name
+                    
+                    # Skip attorney/Part 0 fields
+                    if self._is_attorney_field(field_name):
+                        continue
+                    
+                    # Parse part and line from field name
+                    part_info = self._parse_part_from_field(field_name)
+                    
+                    # Skip if no valid part found or Part 0
+                    if not part_info['part'] or part_info['part'] == "Part 0":
+                        continue
                     
                     # Get field properties
                     field_type = self._get_field_type(widget.field_type)
                     field_value = widget.field_value or ""
-                    rect = widget.rect
                     
                     # Generate field ID
-                    part_num = re.search(r'(\d+)', current_part).group(1)
-                    field_counter[current_part] += 1
-                    field_id = f"P{part_num}_{field_counter[current_part]}"
+                    part_num = re.search(r'(\d+)', part_info['part'])
+                    if part_num:
+                        field_counter[part_info['part']] += 1
+                        field_id = f"P{part_num.group(1)}_{field_counter[part_info['part']]}"
+                    else:
+                        continue
                     
                     # Generate description
-                    description = self._generate_description(field_name, widget.field_display)
+                    description = self._generate_clean_description(field_name, widget.field_display, part_info)
                     
                     # Create field object
                     field = ExtractedField(
                         field_name=field_name,
                         field_id=field_id,
-                        part=current_part,
+                        part=part_info['part'],
+                        line=part_info['line'],
                         page=page_num + 1,
                         field_type=field_type,
                         field_value=field_value,
-                        description=description,
-                        rect=(rect.x0, rect.y0, rect.x1, rect.y1)
+                        description=description
                     )
+                    
+                    # Auto-move checkboxes to questionnaire if requested
+                    if auto_checkboxes_to_json and field_type == "checkbox":
+                        field.to_questionnaire = True
                     
                     all_fields.append(field)
             
@@ -196,7 +196,7 @@ class PDFFieldExtractor:
             
             # Sort parts naturally
             sorted_parts = sorted(st.session_state.fields_by_part.keys(), 
-                                key=lambda x: int(re.search(r'\d+', x).group()))
+                                key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 999)
             st.session_state.fields_by_part = OrderedDict(
                 (part, st.session_state.fields_by_part[part]) for part in sorted_parts
             )
@@ -206,6 +206,53 @@ class PDFFieldExtractor:
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
             return False
+    
+    def _is_attorney_field(self, field_name: str) -> bool:
+        """Check if field is attorney/Part 0 related"""
+        field_lower = field_name.lower()
+        
+        # Check for attorney indicators
+        for indicator in self.attorney_indicators:
+            if indicator in field_lower:
+                return True
+        
+        # Check for Part 0
+        if "pt0" in field_lower or "part0" in field_lower:
+            return True
+        
+        return False
+    
+    def _parse_part_from_field(self, field_name: str) -> dict:
+        """Parse part and line information from field name"""
+        result = {'part': None, 'line': None}
+        
+        # Look for patterns like Pt1Line2, Part1Line3, etc.
+        patterns = [
+            r'Pt(\d+)Line(\d+[a-zA-Z]?)',
+            r'Part(\d+)Line(\d+[a-zA-Z]?)',
+            r'Pt(\d+)_Line(\d+[a-zA-Z]?)',
+            r'Part\s*(\d+).*Line\s*(\d+[a-zA-Z]?)',
+            r'P(\d+)L(\d+[a-zA-Z]?)',
+            r'Pt(\d+)',
+            r'Part(\d+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, field_name, re.IGNORECASE)
+            if match:
+                part_num = match.group(1)
+                result['part'] = f"Part {part_num}"
+                if len(match.groups()) > 1:
+                    result['line'] = match.group(2)
+                break
+        
+        # If no part found, check if field belongs to a specific page range
+        if not result['part']:
+            # Default to Part 1 for fields without explicit part
+            if any(x in field_name.lower() for x in ['alien', 'uscis', 'information', 'name']):
+                result['part'] = "Part 1"
+        
+        return result
     
     def _detect_form_type(self, doc) -> dict:
         """Detect form type from PDF"""
@@ -249,32 +296,59 @@ class PDFFieldExtractor:
         }
         return types.get(widget_type, "text")
     
-    def _generate_description(self, field_name: str, display_name: str) -> str:
-        """Generate human-readable description"""
-        # Use display name if available
-        if display_name and display_name.strip():
+    def _generate_clean_description(self, field_name: str, display_name: str, part_info: dict) -> str:
+        """Generate clean human-readable description"""
+        # Use display name if available and meaningful
+        if display_name and display_name.strip() and not display_name.startswith('Check Box'):
             return display_name.strip()
         
-        # Otherwise clean up field name
-        # Remove common prefixes
+        # Clean up field name
         clean = field_name
-        prefixes = ['form[0].', '#subform[0].', 'Page1[0].', 'Part']
-        for prefix in prefixes:
-            if clean.startswith(prefix):
-                clean = clean[len(prefix):]
         
-        # Extract last component
+        # Remove common prefixes and patterns
+        patterns_to_remove = [
+            r'form\[\d+\]\.',
+            r'#subform\[\d+\]\.',
+            r'Page\d+\[\d+\]\.',
+            r'Pt\d+Line\d+[a-zA-Z]?',
+            r'Part\d+Line\d+[a-zA-Z]?',
+            r'CheckBox\d+',
+            r'Text\d+',
+            r'PDF417BarCode\d+',
+            r'\[\d+\]',
+            r'^#'
+        ]
+        
+        for pattern in patterns_to_remove:
+            clean = re.sub(pattern, '', clean, flags=re.IGNORECASE)
+        
+        # Extract last meaningful component
         if '.' in clean:
-            clean = clean.split('.')[-1]
+            parts = clean.split('.')
+            clean = parts[-1] if parts[-1] else parts[-2] if len(parts) > 1 else clean
         
-        # Remove brackets and numbers
-        clean = re.sub(r'\[\d+\]', '', clean)
+        # Handle specific field types
+        if 'alien' in clean.lower() and 'number' in clean.lower():
+            return "Alien Number (A-Number)"
+        elif 'uscis' in clean.lower() and 'online' in clean.lower():
+            return "USCIS Online Account Number"
+        elif 'checkbox' in field_name.lower():
+            if part_info['line']:
+                return f"Line {part_info['line']} Selection"
+            else:
+                return "Selection Box"
+        elif 'barcode' in clean.lower():
+            return "Barcode (System Use)"
         
         # Convert to readable format
         clean = clean.replace('_', ' ')
         clean = re.sub(r'([a-z])([A-Z])', r'\1 \2', clean)
         
-        return clean.strip()
+        # Add line info if available
+        if part_info['line'] and 'line' not in clean.lower():
+            clean = f"Line {part_info['line']} - {clean}"
+        
+        return clean.strip() if clean.strip() else "Field"
     
     def generate_typescript(self, fields: List[ExtractedField]) -> str:
         """Generate TypeScript export"""
@@ -314,6 +388,8 @@ class PDFFieldExtractor:
                 ts += f'      description: "{field.description}",\n'
                 ts += f'      fieldType: "{field.field_type}",\n'
                 ts += f'      part: "{field.part}",\n'
+                if field.line:
+                    ts += f'      line: "{field.line}",\n'
                 ts += f'      page: {field.page},\n'
                 ts += f'      required: true\n'
                 ts += "    },\n"
@@ -343,7 +419,7 @@ class PDFFieldExtractor:
             "sections": []
         }
         
-        for part in sorted(by_part.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
+        for part in sorted(by_part.keys(), key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 999):
             section = {
                 "part": part,
                 "fieldCount": len(by_part[part]),
@@ -351,17 +427,17 @@ class PDFFieldExtractor:
             }
             
             for field in by_part[part]:
-                section["fields"].append({
+                field_data = {
                     "id": field.field_id,
-                    "fieldName": field.field_name,
                     "description": field.description,
                     "type": field.field_type,
-                    "page": field.page,
-                    "position": {
-                        "x": field.rect[0],
-                        "y": field.rect[1]
-                    }
-                })
+                    "page": field.page
+                }
+                
+                if field.line:
+                    field_data["line"] = field.line
+                
+                section["fields"].append(field_data)
             
             data["sections"].append(section)
         
@@ -406,6 +482,13 @@ def render_header():
         .status-mapped { background: #d1fae5; color: #065f46; }
         .status-questionnaire { background: #fed7aa; color: #92400e; }
         .status-unmapped { background: #fee2e2; color: #991b1b; }
+        .checkbox-notice {
+            background: #fef3c7;
+            border-left: 4px solid #f59e0b;
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -431,11 +514,17 @@ def render_upload_tab(extractor: PDFFieldExtractor):
         with col1:
             st.info(f"📄 **File:** {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
         with col2:
-            if st.button("🔍 Extract Fields", type="primary"):
-                with st.spinner("Reading PDF and extracting fields..."):
-                    if extractor.extract_from_pdf(uploaded_file):
-                        st.success(f"✅ Successfully extracted {len(st.session_state.extracted_fields)} fields!")
-                        st.rerun()
+            auto_checkbox = st.checkbox("Auto-move checkboxes to JSON", value=True)
+        
+        if st.button("🔍 Extract Fields", type="primary", use_container_width=True):
+            with st.spinner("Reading PDF and extracting fields..."):
+                if extractor.extract_from_pdf(uploaded_file, auto_checkbox):
+                    st.success(f"✅ Successfully extracted {len(st.session_state.extracted_fields)} fields!")
+                    if auto_checkbox:
+                        checkbox_count = sum(1 for f in st.session_state.extracted_fields if f.field_type == "checkbox")
+                        if checkbox_count > 0:
+                            st.info(f"📋 Automatically moved {checkbox_count} checkboxes to questionnaire")
+                    st.rerun()
     
     # Display extracted fields
     if st.session_state.extracted_fields:
@@ -452,7 +541,17 @@ def render_upload_tab(extractor: PDFFieldExtractor):
         with col3:
             st.metric("Parts", len(st.session_state.fields_by_part))
         with col4:
-            st.metric("Pages", form_info.get('total_pages', 0))
+            checkbox_count = sum(1 for f in st.session_state.extracted_fields if f.field_type == "checkbox")
+            st.metric("Checkboxes", checkbox_count)
+        
+        # Notice about checkboxes
+        if any(f.field_type == "checkbox" for f in st.session_state.extracted_fields):
+            st.markdown("""
+            <div class="checkbox-notice">
+                <strong>📋 Note:</strong> All checkbox fields have been automatically moved to the questionnaire 
+                as they typically require manual selection based on the applicant's situation.
+            </div>
+            """, unsafe_allow_html=True)
         
         # Display fields by part
         for part, fields in st.session_state.fields_by_part.items():
@@ -468,12 +567,14 @@ def render_upload_tab(extractor: PDFFieldExtractor):
                 # Fields table
                 df_data = []
                 for field in fields:
+                    status = "Mapped" if field.is_mapped else "Questionnaire" if field.to_questionnaire else "Unmapped"
                     df_data.append({
                         "ID": field.field_id,
                         "Description": field.description,
                         "Type": field.field_type,
+                        "Line": field.line or "-",
                         "Page": field.page,
-                        "Status": "Mapped" if field.is_mapped else "Questionnaire" if field.to_questionnaire else "Unmapped"
+                        "Status": status
                     })
                 
                 df = pd.DataFrame(df_data)
@@ -514,6 +615,18 @@ def render_mapping_tab(extractor: PDFFieldExtractor):
             st.success(f"Moved {unmapped} fields to questionnaire")
             st.rerun()
     with col2:
+        if st.button("☑️ All Checkboxes → Questionnaire"):
+            count = 0
+            for field in fields:
+                if field.field_type == "checkbox" and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    field.db_mapping = None
+                    count += 1
+            if count > 0:
+                st.success(f"Moved {count} checkboxes to questionnaire")
+                st.rerun()
+    with col3:
         if st.button("🔄 Reset All Mappings"):
             for field in fields:
                 field.is_mapped = False
@@ -526,11 +639,19 @@ def render_mapping_tab(extractor: PDFFieldExtractor):
     parts = ["All Parts"] + list(st.session_state.fields_by_part.keys())
     selected_part = st.selectbox("Select Part", parts)
     
+    # Filter by field type
+    field_types = ["All Types"] + list(set(f.field_type for f in fields))
+    selected_type = st.selectbox("Filter by Type", field_types)
+    
     # Get fields to display
     if selected_part == "All Parts":
         display_fields = fields
     else:
         display_fields = st.session_state.fields_by_part[selected_part]
+    
+    # Apply type filter
+    if selected_type != "All Types":
+        display_fields = [f for f in display_fields if f.field_type == selected_type]
     
     # Display fields for mapping
     st.markdown(f"<div class='part-header'>Showing {len(display_fields)} fields</div>", unsafe_allow_html=True)
@@ -540,11 +661,14 @@ def render_mapping_tab(extractor: PDFFieldExtractor):
         
         with col1:
             st.markdown(f"**{field.field_id}**")
-            st.caption(f"{field.part}")
+            st.caption(f"{field.part} • {field.field_type}")
         
         with col2:
             st.markdown(f"**{field.description}**")
-            st.caption(f"Type: {field.field_type} | Page: {field.page}")
+            if field.line:
+                st.caption(f"Line: {field.line} | Page: {field.page}")
+            else:
+                st.caption(f"Page: {field.page}")
         
         with col3:
             if field.is_mapped:
@@ -707,14 +831,15 @@ def main():
         st.markdown("### ℹ️ Instructions")
         st.markdown("""
         1. **Upload** your USCIS PDF form
-        2. **Extract** fields (starts from Part 1)
+        2. **Extract** fields (skips attorney fields)
         3. **Map** fields to database or questionnaire
         4. **Export** TypeScript and JSON files
         
         **Notes:**
-        - Part 0 (attorney) is skipped
-        - Unmapped fields → JSON automatically
-        - Fields numbered as P1_1, P1_2, etc.
+        - Attorney/Part 0 fields are skipped
+        - Checkboxes auto-moved to JSON
+        - Fields parsed from actual PDF names
+        - Line numbers extracted when available
         """)
 
 if __name__ == "__main__":
