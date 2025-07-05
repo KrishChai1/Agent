@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional, Tuple, Union
 from collections import OrderedDict, defaultdict
 import pandas as pd
 from dataclasses import dataclass, field
+import difflib
 
 # Comprehensive USCIS Forms Database
 USCIS_FORMS_DATABASE = {
@@ -125,6 +126,63 @@ DB_OBJECTS = {
     }
 }
 
+# NLP Keywords for intelligent mapping
+NLP_KEYWORDS = {
+    "beneficiary": {
+        "identifiers": ["your", "applicant", "you", "personal", "individual"],
+        "fields": {
+            "beneficiaryFirstName": ["first name", "given name", "firstname", "nombre"],
+            "beneficiaryLastName": ["last name", "family name", "lastname", "surname", "apellido"],
+            "beneficiaryMiddleName": ["middle name", "middle initial", "middlename"],
+            "beneficiaryGender": ["gender", "sex", "male female"],
+            "beneficiaryDateOfBirth": ["date of birth", "birth date", "dob", "born"],
+            "beneficiarySsn": ["social security", "ssn", "ss#"],
+            "alienNumber": ["alien number", "a-number", "uscis number", "registration number"],
+            "beneficiaryCountryOfBirth": ["country of birth", "birth country", "born in"],
+            "beneficiaryCitizenOfCountry": ["citizenship", "citizen of", "nationality"],
+            "beneficiaryPrimaryEmailAddress": ["email", "e-mail", "electronic mail"],
+            "beneficiaryCellNumber": ["cell phone", "mobile", "cell number"],
+            "beneficiaryHomeNumber": ["home phone", "home number"],
+            "beneficiaryWorkNumber": ["work phone", "daytime phone", "business phone"],
+            "maritalStatus": ["marital status", "married", "single", "divorced"]
+        }
+    },
+    "customer": {
+        "identifiers": ["company", "employer", "organization", "petitioner", "business"],
+        "fields": {
+            "customer_name": ["company name", "employer name", "organization name", "business name"],
+            "customer_tax_id": ["ein", "fein", "tax id", "federal tax"],
+            "customer_naics_code": ["naics", "naics code"],
+            "signatory_first_name": ["signatory first", "authorized first"],
+            "signatory_last_name": ["signatory last", "authorized last"],
+            "signatory_job_title": ["title", "position", "job title"]
+        }
+    },
+    "address": {
+        "addressStreet": ["street", "address line", "street address", "mailing address"],
+        "addressCity": ["city", "town", "ciudad"],
+        "addressState": ["state", "province", "estado"],
+        "addressZip": ["zip", "postal code", "zip code"],
+        "addressCountry": ["country", "nation", "pais"]
+    },
+    "passport": {
+        "passportNumber": ["passport number", "passport no", "travel document number"],
+        "passportIssueCountry": ["passport country", "issued by country", "passport issued"],
+        "passportIssueDate": ["passport issue date", "date issued"],
+        "passportExpiryDate": ["passport expiry", "passport expires", "expiration date"]
+    },
+    "visa": {
+        "visaNumber": ["visa number", "visa no"],
+        "visaStatus": ["current status", "visa status", "immigration status"],
+        "visaExpiryDate": ["status expires", "visa expires", "expiration date"]
+    },
+    "i94": {
+        "i94Number": ["i-94 number", "i94 number", "arrival record"],
+        "i94ArrivalDate": ["arrival date", "date of arrival", "entered us"],
+        "i94ExpiryDate": ["i-94 expires", "authorized until"]
+    }
+}
+
 # Field type mappings
 FIELD_TYPE_SUFFIX_MAP = {
     "text": ":TextBox",
@@ -152,13 +210,23 @@ class PDFField:
     is_questionnaire: bool = False
     field_type_suffix: str = ":TextBox"
     clean_name: str = ""
+    ai_suggestions: List[str] = field(default_factory=list)
+    confidence_scores: List[float] = field(default_factory=list)
 
-class SimplifiedUSCISMapper:
-    """Simplified USCIS Form Mapping System"""
+@dataclass
+class MappingSuggestion:
+    """Mapping suggestion with confidence"""
+    db_path: str
+    confidence: float
+    reason: str
+
+class SmartUSCISMapper:
+    """Smart USCIS Form Mapping System with NLP"""
     
     def __init__(self):
         self.db_objects = DB_OBJECTS
         self.uscis_forms = USCIS_FORMS_DATABASE
+        self.nlp_keywords = NLP_KEYWORDS
         self.init_session_state()
         self._build_database_paths()
         
@@ -170,12 +238,15 @@ class SimplifiedUSCISMapper:
             st.session_state.pdf_fields = []
         if 'field_mappings' not in st.session_state:
             st.session_state.field_mappings = {}
-        if 'processed_fields' not in st.session_state:
-            st.session_state.processed_fields = set()
+        if 'current_field_index' not in st.session_state:
+            st.session_state.current_field_index = 0
+        if 'mapping_complete' not in st.session_state:
+            st.session_state.mapping_complete = False
     
     def _build_database_paths(self):
-        """Build flat list of all database paths for dropdown"""
+        """Build flat list of all database paths"""
         self.db_paths = []
+        self.path_descriptions = {}
         
         def extract_paths(obj_name, structure, prefix=""):
             if isinstance(structure, dict):
@@ -185,18 +256,25 @@ class SimplifiedUSCISMapper:
                             for field_name in value:
                                 path = f"{obj_name}.{field_name}"
                                 self.db_paths.append(path)
+                                # Create human-readable description
+                                desc = field_name.replace('_', ' ').replace('beneficiary', '').replace('customer', '')
+                                self.path_descriptions[path] = desc
                     else:
                         new_prefix = f"{obj_name}.{key}"
                         if isinstance(value, list):
                             for field_name in value:
                                 path = f"{new_prefix}.{field_name}"
                                 self.db_paths.append(path)
+                                desc = f"{key} - {field_name}".replace('_', ' ')
+                                self.path_descriptions[path] = desc
                         elif isinstance(value, dict):
                             for nested_key, nested_value in value.items():
                                 if isinstance(nested_value, list):
                                     for field_name in nested_value:
                                         path = f"{new_prefix}.{nested_key}.{field_name}"
                                         self.db_paths.append(path)
+                                        desc = f"{key} {nested_key} - {field_name}".replace('_', ' ')
+                                        self.path_descriptions[path] = desc
         
         for obj_name, obj_structure in self.db_objects.items():
             extract_paths(obj_name, obj_structure)
@@ -260,49 +338,65 @@ class SimplifiedUSCISMapper:
             
             field_index = 0
             seen_fields = set()
+            field_counter_by_part = defaultdict(int)
             
+            # First pass: collect all fields
+            all_widgets = []
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                
                 for widget in page.widgets():
                     if widget.field_name and widget.field_name not in seen_fields:
                         seen_fields.add(widget.field_name)
-                        
-                        # Extract part information
-                        part = self._extract_part(widget.field_name)
-                        
-                        # Skip Part 0 fields
-                        if "Part 0" in part:
-                            continue
-                        
-                        # Clean field name and extract details
-                        clean_name = self._clean_field_name(widget.field_name)
-                        field_type = self._get_field_type(widget)
-                        item = self._extract_item(clean_name)
-                        description = self._generate_description(clean_name, widget.field_display)
-                        field_type_suffix = FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
-                        
-                        # Create unique clean name
-                        if part:
-                            part_num = re.search(r'Part\s*(\d+)', part)
-                            if part_num:
-                                clean_name = f"P{part_num.group(1)}_{item if item else field_index}"
-                        
-                        pdf_field = PDFField(
-                            index=field_index,
-                            raw_name=widget.field_name,
-                            field_type=field_type,
-                            value=widget.field_value or '',
-                            page=page_num + 1,
-                            part=part,
-                            item=item,
-                            description=description,
-                            field_type_suffix=field_type_suffix,
-                            clean_name=clean_name
-                        )
-                        
-                        fields.append(pdf_field)
-                        field_index += 1
+                        all_widgets.append((page_num, widget))
+            
+            # Sort widgets to ensure proper order
+            all_widgets.sort(key=lambda x: (x[0], x[1].rect.y0, x[1].rect.x0))
+            
+            # Process widgets
+            for page_num, widget in all_widgets:
+                # Extract part information
+                part = self._extract_part(widget.field_name)
+                
+                # Skip Part 0 fields
+                if "Part 0" in part or "part 0" in part.lower():
+                    continue
+                
+                # Clean field name and extract details
+                clean_name = self._clean_field_name(widget.field_name)
+                field_type = self._get_field_type(widget)
+                description = self._generate_description(clean_name, widget.field_display)
+                field_type_suffix = FIELD_TYPE_SUFFIX_MAP.get(field_type, ":TextBox")
+                
+                # Generate proper clean name (P1_1, P1_2, etc.)
+                part_match = re.search(r'Part\s*(\d+)', part)
+                if part_match:
+                    part_num = part_match.group(1)
+                    field_counter_by_part[part_num] += 1
+                    clean_name = f"P{part_num}_{field_counter_by_part[part_num]}"
+                else:
+                    field_index += 1
+                    clean_name = f"Field_{field_index}"
+                
+                # Get AI suggestions using NLP
+                suggestions = self._get_nlp_suggestions(description, part)
+                
+                pdf_field = PDFField(
+                    index=field_index,
+                    raw_name=widget.field_name,
+                    field_type=field_type,
+                    value=widget.field_value or '',
+                    page=page_num + 1,
+                    part=part,
+                    item=clean_name.split('_')[1] if '_' in clean_name else '',
+                    description=description,
+                    field_type_suffix=field_type_suffix,
+                    clean_name=clean_name,
+                    ai_suggestions=[s.db_path for s in suggestions[:3]],
+                    confidence_scores=[s.confidence for s in suggestions[:3]]
+                )
+                
+                fields.append(pdf_field)
+                field_index += 1
             
             doc.close()
             
@@ -311,6 +405,132 @@ class SimplifiedUSCISMapper:
             return []
         
         return fields
+    
+    def _get_nlp_suggestions(self, description: str, part: str) -> List[MappingSuggestion]:
+        """Get NLP-based mapping suggestions"""
+        suggestions = []
+        desc_lower = description.lower()
+        
+        # Determine context from part
+        context = self._get_part_context(part, desc_lower)
+        
+        # Check for exact keyword matches
+        for category, keywords_dict in self.nlp_keywords.items():
+            if category in ['beneficiary', 'customer']:
+                # Check if this is the right context
+                if category == 'beneficiary' and context != 'beneficiary':
+                    continue
+                if category == 'customer' and context not in ['customer', 'petitioner']:
+                    continue
+                
+                # Check field-specific keywords
+                for field_path, keywords in keywords_dict.get('fields', {}).items():
+                    for keyword in keywords:
+                        if keyword in desc_lower:
+                            # Build full path
+                            if category == 'beneficiary':
+                                if '.' in field_path:
+                                    full_path = f"beneficiary.{field_path}"
+                                else:
+                                    full_path = f"beneficiary.Beneficiary.{field_path}"
+                            elif category == 'customer':
+                                full_path = f"customer.{field_path}"
+                            else:
+                                full_path = field_path
+                            
+                            confidence = 0.9 if keyword == desc_lower else 0.8
+                            suggestions.append(MappingSuggestion(
+                                full_path, confidence, f"Keyword match: {keyword}"
+                            ))
+                            break
+            
+            # Check address fields
+            elif category == 'address':
+                for field_name, keywords in keywords_dict.items():
+                    for keyword in keywords:
+                        if keyword in desc_lower:
+                            # Determine address type
+                            if 'home' in desc_lower or 'residence' in desc_lower:
+                                base = "beneficiary.HomeAddress"
+                            elif 'mail' in desc_lower:
+                                base = "beneficiary.MailingAddress"
+                            elif context == 'customer':
+                                base = "customer.address"
+                            else:
+                                base = "beneficiary.HomeAddress"
+                            
+                            full_path = f"{base}.{field_name}"
+                            suggestions.append(MappingSuggestion(
+                                full_path, 0.85, f"Address field: {keyword}"
+                            ))
+                            break
+            
+            # Check document fields (passport, visa, i94)
+            elif category in ['passport', 'visa', 'i94']:
+                for field_name, keywords in keywords_dict.items():
+                    for keyword in keywords:
+                        if keyword in desc_lower:
+                            if category == 'passport':
+                                full_path = f"beneficiary.PassportDetails.Passport.{field_name}"
+                            elif category == 'visa':
+                                full_path = f"beneficiary.VisaDetails.Visa.{field_name}"
+                            elif category == 'i94':
+                                full_path = f"beneficiary.I94Details.I94.{field_name}"
+                            
+                            suggestions.append(MappingSuggestion(
+                                full_path, 0.85, f"{category.title()} field: {keyword}"
+                            ))
+                            break
+        
+        # Fuzzy matching if no exact matches
+        if not suggestions:
+            suggestions.extend(self._get_fuzzy_matches(desc_lower))
+        
+        # Sort by confidence
+        suggestions.sort(key=lambda x: x.confidence, reverse=True)
+        
+        return suggestions[:5]
+    
+    def _get_fuzzy_matches(self, description: str) -> List[MappingSuggestion]:
+        """Get fuzzy matches using string similarity"""
+        suggestions = []
+        
+        for db_path in self.db_paths:
+            # Get the field name part
+            field_name = db_path.split('.')[-1]
+            
+            # Convert to readable format
+            field_readable = field_name.replace('_', ' ').replace('beneficiary', '').lower()
+            
+            # Calculate similarity
+            similarity = difflib.SequenceMatcher(None, description, field_readable).ratio()
+            
+            if similarity > 0.6:
+                suggestions.append(MappingSuggestion(
+                    db_path, similarity * 0.7, f"Similar to: {field_readable}"
+                ))
+        
+        return suggestions
+    
+    def _get_part_context(self, part: str, description: str) -> str:
+        """Determine context from part and description"""
+        part_lower = part.lower()
+        desc_lower = description.lower()
+        
+        # Check description for context clues
+        if any(word in desc_lower for word in ['your', 'applicant', 'you']):
+            return 'beneficiary'
+        elif any(word in desc_lower for word in ['company', 'employer', 'organization', 'petitioner']):
+            return 'customer'
+        
+        # Check part name
+        if 'information about you' in part_lower:
+            return 'beneficiary'
+        elif 'petitioner' in part_lower or 'employer' in part_lower:
+            return 'customer'
+        
+        # Default to beneficiary for most forms
+        return 'beneficiary'
     
     def _extract_part(self, field_name: str) -> str:
         """Extract part number from field name"""
@@ -325,7 +545,7 @@ class SimplifiedUSCISMapper:
             if match:
                 return f"Part {match.group(1)}"
         
-        return "General"
+        return "Part 1"  # Default to Part 1 if no part found
     
     def _clean_field_name(self, field_name: str) -> str:
         """Clean field name"""
@@ -357,32 +577,28 @@ class SimplifiedUSCISMapper:
         else:
             return "text"
     
-    def _extract_item(self, field_name: str) -> str:
-        """Extract item number"""
-        patterns = [
-            r'Item\s*(\d+[a-zA-Z]?)',
-            r'_(\d+[a-zA-Z]?)$',
-            r'\.(\d+[a-zA-Z]?)$'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, field_name, re.IGNORECASE)
-            if match:
-                return match.group(1)
-        
-        return ""
-    
     def _generate_description(self, field_name: str, field_display: str) -> str:
         """Generate field description"""
         if field_display and not field_display.startswith('form'):
-            return field_display
-        
-        # Extract meaningful part from field name
-        parts = field_name.split('.')
-        meaningful_part = parts[-1] if parts else field_name
+            desc = field_display
+        else:
+            # Extract meaningful part from field name
+            parts = field_name.split('.')
+            meaningful_part = parts[-1] if parts else field_name
+            desc = meaningful_part
         
         # Convert camelCase to readable
-        desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', meaningful_part)
+        desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', desc)
+        
+        # Expand common abbreviations
+        abbreviations = {
+            'DOB': 'Date of Birth',
+            'SSN': 'Social Security Number',
+            'EIN': 'Employer Identification Number'
+        }
+        
+        for abbr, full in abbreviations.items():
+            desc = desc.replace(abbr, full)
         
         return desc.strip()
     
@@ -475,25 +691,54 @@ def render_header():
         .field-card {
             background: white;
             border: 1px solid #e5e7eb;
-            padding: 15px;
+            padding: 20px;
             margin: 10px 0;
-            border-radius: 8px;
-        }
-        .metric-card {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
+            border-radius: 10px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            text-align: center;
+        }
+        .suggestion-card {
+            background: #f3f4f6;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .suggestion-card:hover {
+            background: #e5e7eb;
+            transform: translateX(5px);
+        }
+        .confidence-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .high-confidence { background: #d1fae5; color: #065f46; }
+        .medium-confidence { background: #fef3c7; color: #92400e; }
+        .low-confidence { background: #fee2e2; color: #991b1b; }
+        .progress-bar {
+            background: #e5e7eb;
+            height: 8px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .progress-fill {
+            background: #667eea;
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s;
         }
     </style>
     <div class="main-header">
-        <h1 class="header-title">USCIS Form Mapper</h1>
-        <p>Auto-detect forms and map to database (Part 1 onwards)</p>
+        <h1 class="header-title">Smart USCIS Form Mapper</h1>
+        <p>AI-powered field mapping with NLP suggestions</p>
     </div>
     """, unsafe_allow_html=True)
 
-def render_upload_section(mapper: SimplifiedUSCISMapper):
+def render_upload_section(mapper: SmartUSCISMapper):
     """Render upload section"""
     st.markdown("## 📤 Upload USCIS Form")
     
@@ -520,48 +765,45 @@ def render_upload_section(mapper: SimplifiedUSCISMapper):
                     st.session_state.form_type = form_type
                     st.success(f"✅ Detected: {form_type} ({confidence:.0%} confidence)")
                     
-                    with st.spinner("Extracting fields (skipping Part 0)..."):
+                    with st.spinner("Extracting fields (Part 1 onwards)..."):
                         fields = mapper.extract_pdf_fields(uploaded_file, form_type)
                         
                         if fields:
                             st.session_state.pdf_fields = fields
                             st.session_state.field_mappings = {f.raw_name: f for f in fields}
-                            st.success(f"✅ Extracted {len(fields)} fields from Part 1 onwards!")
+                            st.session_state.current_field_index = 0
+                            st.session_state.mapping_complete = False
+                            st.success(f"✅ Extracted {len(fields)} fields!")
+                            st.balloons()
                             st.rerun()
                         else:
-                            st.error("No fields found in Part 1 onwards")
+                            st.error("No fields found")
                 else:
-                    st.error("Could not detect form type. Please select manually:")
-                    
-                    form_type = st.selectbox(
-                        "Select form type:",
-                        [""] + list(USCIS_FORMS_DATABASE.keys())
-                    )
-                    
-                    if form_type and st.button("Extract with Manual Selection"):
-                        st.session_state.form_type = form_type
-                        fields = mapper.extract_pdf_fields(uploaded_file, form_type)
-                        
-                        if fields:
-                            st.session_state.pdf_fields = fields
-                            st.session_state.field_mappings = {f.raw_name: f for f in fields}
-                            st.success(f"✅ Extracted {len(fields)} fields!")
-                            st.rerun()
+                    st.error("Could not detect form type")
 
-def render_mapping_section(mapper: SimplifiedUSCISMapper):
-    """Render simplified mapping section"""
+def render_mapping_section(mapper: SmartUSCISMapper):
+    """Render one-by-one mapping section"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
         st.info("Please upload a PDF form first")
         return
     
-    st.markdown("## 🎯 Smart Mapping")
+    st.markdown("## 🎯 Smart Field Mapping")
     
     fields = st.session_state.pdf_fields
+    current_idx = st.session_state.current_field_index
     
-    # Quick stats
+    # Progress bar
+    progress = current_idx / len(fields) if fields else 0
+    st.markdown(f"""
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: {progress * 100}%"></div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Progress stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Fields", len(fields))
+        st.metric("Progress", f"{current_idx}/{len(fields)}")
     with col2:
         mapped = sum(1 for f in fields if f.is_mapped)
         st.metric("Mapped", mapped)
@@ -569,124 +811,161 @@ def render_mapping_section(mapper: SimplifiedUSCISMapper):
         quest = sum(1 for f in fields if f.is_questionnaire)
         st.metric("Questionnaire", quest)
     with col4:
-        unmapped = sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire)
-        st.metric("Unmapped", unmapped)
+        remaining = len(fields) - current_idx
+        st.metric("Remaining", remaining)
     
-    # Quick actions
-    st.markdown("### ⚡ Quick Actions")
-    col1, col2 = st.columns(2)
+    # Check if mapping complete
+    if current_idx >= len(fields):
+        st.session_state.mapping_complete = True
+        st.success("✅ All fields have been processed!")
+        
+        # Summary
+        st.markdown("### 📊 Mapping Summary")
+        
+        mapped = sum(1 for f in fields if f.is_mapped)
+        quest = sum(1 for f in fields if f.is_questionnaire)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Database Mapped", f"{mapped} fields")
+        with col2:
+            st.metric("Manual Entry", f"{quest} fields")
+        
+        if st.button("📝 Review All Mappings", use_container_width=True):
+            st.session_state.current_field_index = 0
+            st.rerun()
+        
+        return
+    
+    # Current field
+    field = fields[current_idx]
+    
+    # Field card
+    st.markdown('<div class="field-card">', unsafe_allow_html=True)
+    
+    # Field header
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.markdown(f"### Field {current_idx + 1} of {len(fields)}")
+        st.markdown(f"**{field.clean_name}** - {field.description}")
+    with col2:
+        if field.is_mapped:
+            st.success("✅ Mapped")
+        elif field.is_questionnaire:
+            st.warning("📋 Questionnaire")
+        else:
+            st.info("🔍 Unmapped")
+    
+    # Field details
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.caption(f"**Part:** {field.part}")
+    with col2:
+        st.caption(f"**Type:** {field.field_type}")
+    with col3:
+        st.caption(f"**Page:** {field.page}")
+    with col4:
+        st.caption(f"**Raw Name:** {field.raw_name.split('.')[-1]}")
+    
+    # Current mapping
+    if field.is_mapped and field.db_mapping:
+        st.info(f"**Currently mapped to:** `{field.db_mapping}`")
+    elif field.is_questionnaire:
+        st.warning("**Currently in:** Manual Entry (Questionnaire)")
+    
+    # AI Suggestions
+    st.markdown("### 🤖 AI Suggestions")
+    
+    if field.ai_suggestions:
+        for i, (suggestion, confidence) in enumerate(zip(field.ai_suggestions, field.confidence_scores)):
+            # Determine confidence level
+            if confidence > 0.8:
+                conf_class = "high-confidence"
+                conf_text = "High"
+            elif confidence > 0.6:
+                conf_class = "medium-confidence"
+                conf_text = "Medium"
+            else:
+                conf_class = "low-confidence"
+                conf_text = "Low"
+            
+            # Suggestion card
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                if st.button(
+                    f"📍 {suggestion}",
+                    key=f"sugg_{current_idx}_{i}",
+                    use_container_width=True,
+                    help=f"Click to select this mapping"
+                ):
+                    field.db_mapping = suggestion
+                    field.is_mapped = True
+                    field.is_questionnaire = False
+                    st.success(f"Mapped to: {suggestion}")
+                    st.session_state.current_field_index += 1
+                    st.rerun()
+            
+            with col2:
+                st.markdown(f'<span class="confidence-badge {conf_class}">{conf_text} ({confidence:.0%})</span>', unsafe_allow_html=True)
+    else:
+        st.info("No AI suggestions available")
+    
+    # Manual selection
+    st.markdown("### 🔧 Manual Selection")
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        selected = st.selectbox(
+            "Select database field or manual entry:",
+            ["Choose..."] + ["Manual Entry (Questionnaire)"] + mapper.db_paths,
+            key=f"select_{current_idx}"
+        )
+    
+    with col2:
+        if st.button("Apply", key=f"apply_{current_idx}", use_container_width=True):
+            if selected == "Manual Entry (Questionnaire)":
+                field.is_questionnaire = True
+                field.is_mapped = False
+                field.db_mapping = None
+                st.success("Added to questionnaire")
+                st.session_state.current_field_index += 1
+                st.rerun()
+            elif selected != "Choose...":
+                field.db_mapping = selected
+                field.is_mapped = True
+                field.is_questionnaire = False
+                st.success(f"Mapped to: {selected}")
+                st.session_state.current_field_index += 1
+                st.rerun()
+    
+    # Navigation buttons
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📋 All Unmapped → Questionnaire", use_container_width=True):
-            count = 0
-            for field in fields:
-                if not field.is_mapped and not field.is_questionnaire:
-                    field.is_questionnaire = True
-                    count += 1
-            if count > 0:
-                st.success(f"Added {count} fields to questionnaire!")
+        if current_idx > 0:
+            if st.button("⬅️ Previous", use_container_width=True):
+                st.session_state.current_field_index -= 1
                 st.rerun()
     
     with col2:
-        if st.button("🔄 Reset All", use_container_width=True):
-            for field in fields:
-                field.is_mapped = False
-                field.is_questionnaire = False
-                field.db_mapping = None
+        if st.button("⏭️ Skip Field", use_container_width=True):
+            field.is_questionnaire = True
+            st.session_state.current_field_index += 1
             st.rerun()
     
-    # Group fields by part
-    fields_by_part = defaultdict(list)
-    for field in fields:
-        # Skip if field already processed
-        field_key = f"{field.clean_name}_{field.description}"
-        if field_key not in st.session_state.processed_fields:
-            fields_by_part[field.part].append(field)
-    
-    # Sort parts
-    sorted_parts = sorted(fields_by_part.keys(), 
-                         key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
-    
-    # Display fields by part
-    for part in sorted_parts:
-        part_fields = fields_by_part[part]
-        if not part_fields:
-            continue
-            
-        with st.expander(f"📄 **{part}** ({len(part_fields)} fields)", expanded=True):
-            for field in part_fields:
-                render_field_mapping(field, mapper)
-
-def render_field_mapping(field: PDFField, mapper: SimplifiedUSCISMapper):
-    """Render individual field mapping with database dropdown"""
-    field_key = f"{field.clean_name}_{field.description}"
-    
-    with st.container():
-        st.markdown('<div class="field-card">', unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([3, 2])
-        
-        with col1:
-            st.markdown(f"**{field.clean_name}** - {field.description}")
-            st.caption(f"Type: {field.field_type} | Page: {field.page}")
-            
-            # Current status
-            if field.is_mapped and field.db_mapping:
-                st.success(f"✅ Mapped to: `{field.db_mapping}`")
-            elif field.is_questionnaire:
-                st.warning("📋 In Questionnaire")
-            else:
-                st.info("❌ Unmapped")
-        
-        with col2:
-            # Mapping action dropdown
-            action_key = f"action_{field.index}"
-            
-            # Create options list
-            options = ["Choose Action", "Manual Entry (Questionnaire)"] + mapper.db_paths
-            
-            # Get current selection
-            if field.is_questionnaire:
-                current_value = "Manual Entry (Questionnaire)"
-            elif field.db_mapping:
-                current_value = field.db_mapping
-            else:
-                current_value = "Choose Action"
-            
-            # Find index of current value
-            try:
-                current_index = options.index(current_value)
-            except ValueError:
-                current_index = 0
-            
-            selected = st.selectbox(
-                "Select mapping",
-                options,
-                index=current_index,
-                key=action_key,
-                label_visibility="collapsed"
-            )
-            
-            # Apply button
-            if st.button("Apply", key=f"apply_{field.index}"):
-                if selected == "Manual Entry (Questionnaire)":
-                    field.is_questionnaire = True
-                    field.is_mapped = False
-                    field.db_mapping = None
-                    st.session_state.processed_fields.add(field_key)
-                    st.success("Added to questionnaire!")
+    with col3:
+        if current_idx < len(fields) - 1:
+            if st.button("Next ➡️", use_container_width=True):
+                if not field.is_mapped and not field.is_questionnaire:
+                    st.error("Please map this field or skip it")
+                else:
+                    st.session_state.current_field_index += 1
                     st.rerun()
-                elif selected != "Choose Action":
-                    field.db_mapping = selected
-                    field.is_mapped = True
-                    field.is_questionnaire = False
-                    st.session_state.processed_fields.add(field_key)
-                    st.success("Mapped successfully!")
-                    st.rerun()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
-def render_export_section(mapper: SimplifiedUSCISMapper):
+def render_export_section(mapper: SmartUSCISMapper):
     """Render export section"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
         st.info("Please complete field mapping first")
@@ -712,19 +991,11 @@ def render_export_section(mapper: SimplifiedUSCISMapper):
         readiness = ((mapped_count + quest_count) / len(fields)) * 100 if fields else 0
         st.metric("📊 Readiness", f"{readiness:.0f}%")
     
-    if unmapped_count > 0:
-        st.warning(f"⚠️ {unmapped_count} fields are unmapped. Add them to questionnaire before export.")
-    
     # Export buttons
     col1, col2 = st.columns(2)
     
     with col1:
         if st.button("🔧 Generate TypeScript", type="primary", use_container_width=True):
-            # Auto-add unmapped to questionnaire
-            for field in fields:
-                if not field.is_mapped and not field.is_questionnaire:
-                    field.is_questionnaire = True
-            
             ts_content = mapper.generate_typescript_export(form_type, fields)
             
             st.download_button(
@@ -734,17 +1005,20 @@ def render_export_section(mapper: SimplifiedUSCISMapper):
                 "text/plain",
                 use_container_width=True
             )
+            
+            with st.expander("Preview TypeScript"):
+                st.code(ts_content, language="typescript")
     
     with col2:
-        if st.button("📊 Export to CSV", type="primary", use_container_width=True):
+        if st.button("📊 Export Summary", type="primary", use_container_width=True):
             data = []
             for field in fields:
                 data.append({
-                    'Field Name': field.clean_name,
+                    'Field': field.clean_name,
                     'Description': field.description,
                     'Part': field.part,
                     'Type': field.field_type,
-                    'Mapped To': field.db_mapping if field.db_mapping else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
+                    'Mapping': field.db_mapping if field.db_mapping else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
                     'Page': field.page
                 })
             
@@ -762,13 +1036,13 @@ def render_export_section(mapper: SimplifiedUSCISMapper):
 def main():
     """Main application"""
     st.set_page_config(
-        page_title="USCIS Form Mapper",
-        page_icon="📄",
+        page_title="Smart USCIS Form Mapper",
+        page_icon="🧠",
         layout="wide"
     )
     
     # Initialize mapper
-    mapper = SimplifiedUSCISMapper()
+    mapper = SmartUSCISMapper()
     
     # Render header
     render_header()
@@ -791,7 +1065,7 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.markdown("## 📊 Status")
+        st.markdown("## 📊 Mapping Status")
         
         if 'pdf_fields' in st.session_state and st.session_state.pdf_fields:
             fields = st.session_state.pdf_fields
@@ -800,6 +1074,24 @@ def main():
             mapped = sum(1 for f in fields if f.is_mapped)
             quest = sum(1 for f in fields if f.is_questionnaire)
             unmapped = total - mapped - quest
+            
+            # Progress circle
+            progress = (mapped + quest) / total if total > 0 else 0
+            
+            st.markdown(f"""
+            <div style="text-align: center; padding: 20px;">
+                <div style="position: relative; width: 100px; height: 100px; margin: 0 auto;">
+                    <svg width="100" height="100" style="transform: rotate(-90deg);">
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="#e5e7eb" stroke-width="8"/>
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="#667eea" stroke-width="8"
+                                stroke-dasharray="{progress * 251} 251" stroke-linecap="round"/>
+                    </svg>
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(90deg); font-size: 20px; font-weight: bold;">
+                        {progress * 100:.0f}%
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             
             st.metric("Total Fields", total)
             st.metric("Mapped", mapped)
@@ -813,12 +1105,18 @@ def main():
             st.info("Upload a form to see status")
         
         st.markdown("---")
-        st.markdown("### ℹ️ Info")
+        st.markdown("### ℹ️ How it Works")
         st.markdown("""
+        1. **Upload** - Auto-detects form type
+        2. **Map** - Review each field one by one
+        3. **AI Suggests** - NLP-based suggestions
+        4. **Export** - Generate TypeScript/CSV
+        
+        **Tips:**
         - Part 0 fields are skipped
-        - Select database object from dropdown
-        - Or choose "Manual Entry" for questionnaire
-        - All fields must be mapped before export
+        - Fields start from P1_1
+        - Click AI suggestions to quick-map
+        - Skip unmapped fields to questionnaire
         """)
 
 if __name__ == "__main__":
