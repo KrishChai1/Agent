@@ -8,7 +8,7 @@ from collections import defaultdict, OrderedDict
 import pandas as pd
 from dataclasses import dataclass
 
-# Database Object Structure
+# Database Object Structure for mapping
 DB_OBJECTS = {
     "attorney": {
         "attorneyInfo": [
@@ -16,8 +16,7 @@ DB_OBJECTS = {
             "emailAddress", "faxNumber", "stateBarNumber", "licensingAuthority"
         ],
         "address": [
-            "addressStreet", "addressCity", "addressState", "addressZip", 
-            "addressCountry"
+            "addressStreet", "addressCity", "addressState", "addressZip", "addressCountry"
         ]
     },
     "beneficiary": {
@@ -29,334 +28,294 @@ DB_OBJECTS = {
             "beneficiaryPrimaryEmailAddress", "maritalStatus"
         ],
         "HomeAddress": [
-            "addressStreet", "addressCity", "addressState", "addressZip", 
-            "addressCountry"
+            "addressStreet", "addressCity", "addressState", "addressZip", "addressCountry"
         ],
         "MailingAddress": [
-            "addressStreet", "addressCity", "addressState", "addressZip", 
-            "addressCountry"
+            "addressStreet", "addressCity", "addressState", "addressZip", "addressCountry"
         ],
         "PassportDetails": {
             "Passport": [
-                "passportNumber", "passportIssueCountry", 
-                "passportIssueDate", "passportExpiryDate"
+                "passportNumber", "passportIssueCountry", "passportIssueDate", "passportExpiryDate"
             ]
         },
         "VisaDetails": {
-            "Visa": [
-                "visaStatus", "visaExpiryDate", "visaNumber"
-            ]
+            "Visa": ["visaStatus", "visaExpiryDate", "visaNumber"]
         },
         "I94Details": {
-            "I94": [
-                "i94Number", "i94ArrivalDate", "i94ExpiryDate"
-            ]
+            "I94": ["i94Number", "i94ArrivalDate", "i94ExpiryDate"]
         }
     },
     "customer": {
-        "": [
-            "customer_name", "customer_type_of_business", "customer_tax_id"
-        ],
-        "signatory": [
-            "signatory_first_name", "signatory_last_name", "signatory_job_title"
-        ],
-        "address": [
-            "address_street", "address_city", "address_state", "address_zip"
-        ]
+        "": ["customer_name", "customer_type_of_business", "customer_tax_id"],
+        "signatory": ["signatory_first_name", "signatory_last_name", "signatory_job_title"],
+        "address": ["address_street", "address_city", "address_state", "address_zip"]
     }
 }
 
 @dataclass
-class PDFField:
-    """Simple field representation"""
-    raw_name: str
-    clean_name: str
-    part: str
-    page: int
-    field_type: str
-    value: str = ""
-    description: str = ""
-    item_number: str = ""
-    db_mapping: Optional[str] = None
+class ExtractedField:
+    """Represents a field extracted from PDF"""
+    field_name: str          # Original PDF field name
+    field_id: str           # Clean ID like P1_1, P1_2
+    part: str               # Part 1, Part 2, etc.
+    page: int               # Page number
+    field_type: str         # text, checkbox, radio, etc.
+    field_value: str        # Current value if any
+    description: str        # Human-readable description
+    rect: tuple            # Position on page (x0, y0, x1, y1)
+    db_mapping: Optional[str] = None  # Database path if mapped
     is_mapped: bool = False
-    to_json: bool = False
+    to_questionnaire: bool = False
 
-class SimpleUSCISMapper:
-    """Simple USCIS Form Mapper"""
+class PDFFieldExtractor:
+    """Accurate PDF field extractor for USCIS forms"""
     
     def __init__(self):
         self.init_session_state()
         self.db_paths = self._build_database_paths()
-        
+    
     def init_session_state(self):
         """Initialize session state"""
-        if 'form_type' not in st.session_state:
-            st.session_state.form_type = None
-        if 'pdf_fields' not in st.session_state:
-            st.session_state.pdf_fields = []
+        if 'extracted_fields' not in st.session_state:
+            st.session_state.extracted_fields = []
         if 'fields_by_part' not in st.session_state:
             st.session_state.fields_by_part = OrderedDict()
+        if 'form_info' not in st.session_state:
+            st.session_state.form_info = {}
     
     def _build_database_paths(self) -> List[str]:
-        """Build list of all database paths"""
+        """Build flat list of all database paths"""
         paths = []
         
-        for obj_name, obj_structure in DB_OBJECTS.items():
-            for key, value in obj_structure.items():
-                if isinstance(value, list):
+        for obj_name, structure in DB_OBJECTS.items():
+            for key, fields in structure.items():
+                if isinstance(fields, list):
                     if key == "":
-                        paths.extend([f"{obj_name}.{field}" for field in value])
+                        for field in fields:
+                            paths.append(f"{obj_name}.{field}")
                     else:
-                        paths.extend([f"{obj_name}.{key}.{field}" for field in value])
-                elif isinstance(value, dict):
-                    for nested_key, nested_fields in value.items():
-                        paths.extend([f"{obj_name}.{key}.{nested_key}.{field}" for field in nested_fields])
+                        for field in fields:
+                            paths.append(f"{obj_name}.{key}.{field}")
+                elif isinstance(fields, dict):
+                    for sub_key, sub_fields in fields.items():
+                        for field in sub_fields:
+                            paths.append(f"{obj_name}.{key}.{sub_key}.{field}")
         
         return sorted(paths)
     
-    def extract_pdf_fields(self, pdf_file) -> Tuple[str, List[PDFField]]:
-        """Extract fields from PDF with proper part detection"""
-        fields = []
-        form_type = None
-        
+    def extract_from_pdf(self, pdf_file) -> bool:
+        """Extract all fields from uploaded PDF"""
         try:
+            # Reset state
+            st.session_state.extracted_fields = []
+            st.session_state.fields_by_part = OrderedDict()
+            
+            # Read PDF
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            # Detect form type from first page
-            first_page_text = doc[0].get_text().upper()
-            form_patterns = {
-                'I-90': r'FORM\s*I-90|I-90',
-                'I-129': r'FORM\s*I-129|I-129',
-                'I-130': r'FORM\s*I-130|I-130',
-                'I-131': r'FORM\s*I-131|I-131',
-                'I-140': r'FORM\s*I-140|I-140',
-                'I-485': r'FORM\s*I-485|I-485',
-                'I-539': r'FORM\s*I-539|I-539',
-                'I-765': r'FORM\s*I-765|I-765',
-                'N-400': r'FORM\s*N-400|N-400'
-            }
+            # Detect form type
+            form_info = self._detect_form_type(doc)
+            st.session_state.form_info = form_info
             
-            for form, pattern in form_patterns.items():
-                if re.search(pattern, first_page_text):
-                    form_type = form
+            # Extract all fields with their parts
+            all_fields = []
+            
+            # First, find where Part 1 starts
+            part1_page = 0
+            for page_num in range(len(doc)):
+                page_text = doc[page_num].get_text()
+                if re.search(r'Part\s+1\b', page_text, re.IGNORECASE):
+                    part1_page = page_num
                     break
             
-            # Extract all widgets with their page info
-            all_widgets = []
-            for page_num in range(len(doc)):
+            # Extract fields starting from Part 1
+            current_part = None
+            field_counter = defaultdict(int)
+            
+            for page_num in range(part1_page, len(doc)):
                 page = doc[page_num]
                 page_text = page.get_text()
                 
-                # Detect current part from page text
-                current_part = "Part 1"  # Default
-                part_matches = re.findall(r'Part\s+(\d+)', page_text, re.IGNORECASE)
-                if part_matches:
-                    # Use the most common part number on this page
-                    current_part = f"Part {max(set(part_matches), key=part_matches.count)}"
+                # Detect current part from page
+                part_match = re.search(r'Part\s+(\d+)\b', page_text, re.IGNORECASE)
+                if part_match:
+                    current_part = f"Part {part_match.group(1)}"
                 
-                for widget in page.widgets():
-                    if widget.field_name:
-                        # Skip Part 0 fields
-                        if "Part 0" in current_part or self._is_part_0_field(widget.field_name, page_text):
-                            continue
-                        
-                        all_widgets.append({
-                            'widget': widget,
-                            'page': page_num + 1,
-                            'part': current_part,
-                            'page_text': page_text
-                        })
-            
-            # Process widgets
-            field_counters = defaultdict(int)
-            
-            for widget_info in all_widgets:
-                widget = widget_info['widget']
-                part = widget_info['part']
+                # Skip if we haven't found Part 1 yet
+                if not current_part:
+                    continue
                 
-                # Clean field name
-                raw_name = widget.field_name
-                clean_name = self._clean_field_name(raw_name)
+                # Extract widgets from this page
+                widgets = page.widgets()
                 
-                # Extract item number if present
-                item_number = self._extract_item_number(clean_name)
-                
-                # Generate field ID
-                part_num = re.search(r'Part\s*(\d+)', part)
-                if part_num:
-                    field_counters[part] += 1
-                    field_id = f"P{part_num.group(1)}_{field_counters[part]}"
-                else:
-                    field_id = f"Field_{len(fields) + 1}"
-                
-                # Get field type
-                field_type = self._get_field_type(widget)
-                
-                # Generate description
-                description = self._generate_description(widget, clean_name)
-                
-                field = PDFField(
-                    raw_name=raw_name,
-                    clean_name=field_id,
-                    part=part,
-                    page=widget_info['page'],
-                    field_type=field_type,
-                    value=widget.field_value or '',
-                    description=description,
-                    item_number=item_number
-                )
-                
-                fields.append(field)
+                for widget in widgets:
+                    if not widget.field_name:
+                        continue
+                    
+                    # Clean field name
+                    field_name = widget.field_name
+                    
+                    # Get field properties
+                    field_type = self._get_field_type(widget.field_type)
+                    field_value = widget.field_value or ""
+                    rect = widget.rect
+                    
+                    # Generate field ID
+                    part_num = re.search(r'(\d+)', current_part).group(1)
+                    field_counter[current_part] += 1
+                    field_id = f"P{part_num}_{field_counter[current_part]}"
+                    
+                    # Generate description
+                    description = self._generate_description(field_name, widget.field_display)
+                    
+                    # Create field object
+                    field = ExtractedField(
+                        field_name=field_name,
+                        field_id=field_id,
+                        part=current_part,
+                        page=page_num + 1,
+                        field_type=field_type,
+                        field_value=field_value,
+                        description=description,
+                        rect=(rect.x0, rect.y0, rect.x1, rect.y1)
+                    )
+                    
+                    all_fields.append(field)
             
             doc.close()
             
-            # Group fields by part
-            fields_by_part = OrderedDict()
-            for field in fields:
-                if field.part not in fields_by_part:
-                    fields_by_part[field.part] = []
-                fields_by_part[field.part].append(field)
+            # Store fields
+            st.session_state.extracted_fields = all_fields
             
-            # Sort parts
-            sorted_parts = sorted(fields_by_part.keys(), 
-                                key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 999)
+            # Group by part
+            for field in all_fields:
+                if field.part not in st.session_state.fields_by_part:
+                    st.session_state.fields_by_part[field.part] = []
+                st.session_state.fields_by_part[field.part].append(field)
             
-            st.session_state.fields_by_part = OrderedDict((k, fields_by_part[k]) for k in sorted_parts)
+            # Sort parts naturally
+            sorted_parts = sorted(st.session_state.fields_by_part.keys(), 
+                                key=lambda x: int(re.search(r'\d+', x).group()))
+            st.session_state.fields_by_part = OrderedDict(
+                (part, st.session_state.fields_by_part[part]) for part in sorted_parts
+            )
+            
+            return True
             
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
-            return None, []
-        
-        return form_type, fields
+            return False
     
-    def _is_part_0_field(self, field_name: str, page_text: str) -> bool:
-        """Check if field belongs to Part 0 (attorney section)"""
-        field_lower = field_name.lower()
-        page_lower = page_text.lower()
+    def _detect_form_type(self, doc) -> dict:
+        """Detect form type from PDF"""
+        first_page_text = doc[0].get_text().upper()
         
-        # Check for attorney section indicators
-        attorney_indicators = [
-            "attorney or accredited representative",
-            "form g-28",
-            "g-28 is attached",
-            "attorney or representative"
-        ]
-        
-        return any(indicator in page_lower for indicator in attorney_indicators)
-    
-    def _clean_field_name(self, field_name: str) -> str:
-        """Clean field name"""
-        # Remove form prefixes
-        patterns = [
-            r'form\d*\[\d+\]\.',
-            r'#subform\[\d+\]\.',
-            r'topmostSubform\[\d+\]\.',
-            r'\[\d+\]',
-            r'^#'
-        ]
-        
-        clean = field_name
-        for pattern in patterns:
-            clean = re.sub(pattern, '', clean, flags=re.IGNORECASE)
-        
-        # Extract last meaningful part
-        parts = clean.split('.')
-        return parts[-1] if parts else clean
-    
-    def _extract_item_number(self, field_name: str) -> str:
-        """Extract item number from field name"""
-        # Look for patterns like Item1, Line2a, etc.
-        patterns = [
-            r'Item[\s_]*(\d+[a-zA-Z]?)',
-            r'Line[\s_]*(\d+[a-zA-Z]?)',
-            r'Number[\s_]*(\d+[a-zA-Z]?)',
-            r'_(\d+[a-zA-Z]?)$'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, field_name, re.IGNORECASE)
-            if match:
-                return match.group(1)
-        
-        return ""
-    
-    def _get_field_type(self, widget) -> str:
-        """Get field type"""
-        widget_types = {
-            2: "checkbox",
-            3: "radio",
-            4: "text",
-            5: "select",
-            7: "signature"
-        }
-        return widget_types.get(widget.field_type, "text")
-    
-    def _generate_description(self, widget, clean_name: str) -> str:
-        """Generate human-readable description"""
-        # Use display name if available
-        if widget.field_display and not widget.field_display.startswith('form'):
-            return widget.field_display
-        
-        # Otherwise, make field name readable
-        desc = clean_name
-        desc = re.sub(r'([a-z])([A-Z])', r'\1 \2', desc)  # CamelCase to spaces
-        desc = desc.replace('_', ' ')
-        
-        # Common replacements
-        replacements = {
-            'fname': 'First Name',
-            'lname': 'Last Name',
-            'mname': 'Middle Name',
-            'dob': 'Date of Birth',
-            'ssn': 'Social Security Number'
+        # Common USCIS forms
+        forms = {
+            'I-90': 'Application to Replace Permanent Resident Card',
+            'I-129': 'Petition for a Nonimmigrant Worker',
+            'I-130': 'Petition for Alien Relative',
+            'I-131': 'Application for Travel Document',
+            'I-140': 'Immigrant Petition for Alien Workers',
+            'I-485': 'Application to Register Permanent Residence',
+            'I-539': 'Application To Extend/Change Nonimmigrant Status',
+            'I-765': 'Application for Employment Authorization',
+            'N-400': 'Application for Naturalization'
         }
         
-        desc_lower = desc.lower()
-        for key, value in replacements.items():
-            if key in desc_lower:
-                desc = value
+        detected_form = None
+        for form_number, form_title in forms.items():
+            if form_number in first_page_text:
+                detected_form = form_number
                 break
         
-        return desc.title()
+        return {
+            'form_number': detected_form or 'Unknown',
+            'form_title': forms.get(detected_form, 'Unknown Form'),
+            'total_pages': len(doc)
+        }
     
-    def generate_typescript(self, fields: List[PDFField]) -> str:
-        """Generate TypeScript export"""
-        form_name = st.session_state.form_type.replace('-', '') if st.session_state.form_type else 'Form'
+    def _get_field_type(self, widget_type: int) -> str:
+        """Convert widget type to field type"""
+        types = {
+            1: "button",
+            2: "checkbox", 
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return types.get(widget_type, "text")
+    
+    def _generate_description(self, field_name: str, display_name: str) -> str:
+        """Generate human-readable description"""
+        # Use display name if available
+        if display_name and display_name.strip():
+            return display_name.strip()
         
-        # Group fields
-        mapped_fields = defaultdict(list)
-        json_fields = []
+        # Otherwise clean up field name
+        # Remove common prefixes
+        clean = field_name
+        prefixes = ['form[0].', '#subform[0].', 'Page1[0].', 'Part']
+        for prefix in prefixes:
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+        
+        # Extract last component
+        if '.' in clean:
+            clean = clean.split('.')[-1]
+        
+        # Remove brackets and numbers
+        clean = re.sub(r'\[\d+\]', '', clean)
+        
+        # Convert to readable format
+        clean = clean.replace('_', ' ')
+        clean = re.sub(r'([a-z])([A-Z])', r'\1 \2', clean)
+        
+        return clean.strip()
+    
+    def generate_typescript(self, fields: List[ExtractedField]) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields by mapping type
+        db_fields = defaultdict(list)
+        questionnaire_fields = []
         
         for field in fields:
             if field.is_mapped and field.db_mapping:
                 obj = field.db_mapping.split('.')[0]
-                mapped_fields[obj].append(field)
-            elif field.to_json or not field.is_mapped:
-                json_fields.append(field)
+                db_fields[obj].append(field)
+            else:
+                questionnaire_fields.append(field)
         
-        # Generate TypeScript
-        ts = f"export const {form_name} = {{\n"
+        # Build TypeScript
+        ts = f"// {st.session_state.form_info.get('form_number', 'Form')} Field Mappings\n"
+        ts += f"// Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        ts += f"export const {form_name} = {{\n"
         
-        # Add mapped fields by object
-        for obj, fields_list in mapped_fields.items():
+        # Add database mappings
+        for obj, fields_list in sorted(db_fields.items()):
             ts += f"  {obj}Data: {{\n"
             for field in fields_list:
                 path = field.db_mapping.replace(f"{obj}.", "")
-                ts += f'    "{field.clean_name}": "{path}",\n'
+                field_type = ":TextBox" if field.field_type == "text" else f":{field.field_type.title()}Box"
+                ts += f'    "{field.field_id}{field_type}": "{path}",\n'
             ts = ts.rstrip(',\n') + '\n'
             ts += "  },\n"
         
-        # Add JSON fields
-        if json_fields:
+        # Add questionnaire fields
+        if questionnaire_fields:
             ts += "  questionnaireData: {\n"
-            for field in json_fields:
-                ts += f'    "{field.clean_name}": {{\n'
+            for field in questionnaire_fields:
+                ts += f'    "{field.field_id}": {{\n'
                 ts += f'      description: "{field.description}",\n'
-                ts += f'      type: "{field.field_type}",\n'
+                ts += f'      fieldType: "{field.field_type}",\n'
                 ts += f'      part: "{field.part}",\n'
-                if field.item_number:
-                    ts += f'      item: "{field.item_number}",\n'
+                ts += f'      page: {field.page},\n'
+                ts += f'      required: true\n'
                 ts += "    },\n"
             ts = ts.rstrip(',\n') + '\n'
             ts += "  }\n"
@@ -366,35 +325,42 @@ class SimpleUSCISMapper:
         
         return ts
     
-    def generate_json(self, fields: List[PDFField]) -> str:
-        """Generate JSON questionnaire"""
-        json_fields = [f for f in fields if f.to_json or not f.is_mapped]
+    def generate_questionnaire_json(self, fields: List[ExtractedField]) -> str:
+        """Generate JSON for questionnaire fields"""
+        questionnaire_fields = [f for f in fields if not f.is_mapped]
         
         # Group by part
         by_part = defaultdict(list)
-        for field in json_fields:
+        for field in questionnaire_fields:
             by_part[field.part].append(field)
         
-        # Build JSON
+        # Build JSON structure
         data = {
-            "form": st.session_state.form_type,
+            "form": st.session_state.form_info.get('form_number', 'Unknown'),
+            "title": st.session_state.form_info.get('form_title', 'Unknown Form'),
             "generated": datetime.now().isoformat(),
+            "totalFields": len(questionnaire_fields),
             "sections": []
         }
         
-        for part in sorted(by_part.keys()):
+        for part in sorted(by_part.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
             section = {
                 "part": part,
+                "fieldCount": len(by_part[part]),
                 "fields": []
             }
             
             for field in by_part[part]:
                 section["fields"].append({
-                    "id": field.clean_name,
+                    "id": field.field_id,
+                    "fieldName": field.field_name,
                     "description": field.description,
                     "type": field.field_type,
                     "page": field.page,
-                    "item": field.item_number if field.item_number else None
+                    "position": {
+                        "x": field.rect[0],
+                        "y": field.rect[1]
+                    }
                 })
             
             data["sections"].append(section)
@@ -402,315 +368,303 @@ class SimpleUSCISMapper:
         return json.dumps(data, indent=2)
 
 def render_header():
-    """Render header"""
+    """Render application header"""
     st.markdown("""
     <style>
         .main-header {
-            background: #4f46e5;
+            background: linear-gradient(135deg, #1e3a8a 0%, #3730a3 100%);
             color: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            padding: 2rem;
+            border-radius: 10px;
+            margin-bottom: 2rem;
             text-align: center;
         }
-        .part-section {
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
-            padding: 15px;
-            margin: 10px 0;
+        .part-header {
+            background: #f3f4f6;
+            padding: 1rem;
             border-radius: 8px;
+            margin: 1rem 0;
+            border-left: 4px solid #3730a3;
         }
-        .field-row {
+        .field-card {
             background: white;
             border: 1px solid #e5e7eb;
-            padding: 10px;
-            margin: 5px 0;
-            border-radius: 4px;
+            padding: 1rem;
+            margin: 0.5rem 0;
+            border-radius: 6px;
+            transition: all 0.2s;
         }
-        .field-row:hover {
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        .field-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .status-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.85em;
-            font-weight: bold;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
         }
-        .mapped { background: #d1fae5; color: #065f46; }
-        .json { background: #fef3c7; color: #92400e; }
-        .unmapped { background: #fee2e2; color: #991b1b; }
+        .status-mapped { background: #d1fae5; color: #065f46; }
+        .status-questionnaire { background: #fed7aa; color: #92400e; }
+        .status-unmapped { background: #fee2e2; color: #991b1b; }
     </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("""
     <div class="main-header">
-        <h1>Simple USCIS Form Mapper</h1>
-        <p>Extract fields by parts → Map to database → Export</p>
+        <h1>📄 USCIS PDF Form Field Extractor</h1>
+        <p>Extract fields from PDF → Map to database → Export unmapped to JSON</p>
     </div>
     """, unsafe_allow_html=True)
 
-def render_upload_section(mapper: SimpleUSCISMapper):
-    """Upload and extract fields"""
-    st.markdown("## 📤 Upload Form")
+def render_upload_tab(extractor: PDFFieldExtractor):
+    """Upload and extract PDF fields"""
+    st.markdown("## 📤 Upload USCIS Form PDF")
     
     uploaded_file = st.file_uploader(
-        "Upload USCIS PDF form",
+        "Choose a USCIS form PDF file",
         type=['pdf'],
-        help="Upload any USCIS form (I-90, I-129, I-485, etc.)"
+        help="Upload any USCIS form (I-90, I-129, I-485, N-400, etc.)"
     )
     
     if uploaded_file:
-        if st.button("Extract Fields", type="primary", use_container_width=True):
-            with st.spinner("Extracting fields..."):
-                form_type, fields = mapper.extract_pdf_fields(uploaded_file)
-                
-                if form_type and fields:
-                    st.session_state.form_type = form_type
-                    st.session_state.pdf_fields = fields
-                    st.success(f"✅ Extracted {len(fields)} fields from {form_type}")
-                    st.rerun()
-                else:
-                    st.error("Could not extract fields. Please check the PDF.")
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.info(f"📄 **File:** {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
+        with col2:
+            if st.button("🔍 Extract Fields", type="primary"):
+                with st.spinner("Reading PDF and extracting fields..."):
+                    if extractor.extract_from_pdf(uploaded_file):
+                        st.success(f"✅ Successfully extracted {len(st.session_state.extracted_fields)} fields!")
+                        st.rerun()
     
-    # Show extracted fields
-    if st.session_state.pdf_fields:
+    # Display extracted fields
+    if st.session_state.extracted_fields:
         st.markdown("---")
         st.markdown("## 📊 Extracted Fields by Part")
         
-        # Summary
-        total_fields = len(st.session_state.pdf_fields)
-        total_parts = len(st.session_state.fields_by_part)
-        
-        col1, col2, col3 = st.columns(3)
+        # Form info
+        form_info = st.session_state.form_info
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Form", st.session_state.form_type)
+            st.metric("Form", form_info.get('form_number', 'Unknown'))
         with col2:
-            st.metric("Total Fields", total_fields)
+            st.metric("Total Fields", len(st.session_state.extracted_fields))
         with col3:
-            st.metric("Parts", total_parts)
+            st.metric("Parts", len(st.session_state.fields_by_part))
+        with col4:
+            st.metric("Pages", form_info.get('total_pages', 0))
         
-        # Show fields by part
+        # Display fields by part
         for part, fields in st.session_state.fields_by_part.items():
-            st.markdown(f'<div class="part-section">', unsafe_allow_html=True)
-            st.markdown(f"### {part} ({len(fields)} fields)")
-            
-            # Create simple table
-            for i, field in enumerate(fields):
-                col1, col2, col3, col4 = st.columns([1, 3, 2, 1])
+            with st.expander(f"📑 **{part}** - {len(fields)} fields", expanded=(part == "Part 1")):
+                # Part summary
+                field_types = defaultdict(int)
+                for field in fields:
+                    field_types[field.field_type] += 1
                 
-                with col1:
-                    st.write(field.clean_name)
+                type_summary = ", ".join([f"{t}: {c}" for t, c in field_types.items()])
+                st.caption(f"Field types: {type_summary}")
                 
-                with col2:
-                    st.write(field.description)
-                    if field.item_number:
-                        st.caption(f"Item {field.item_number}")
+                # Fields table
+                df_data = []
+                for field in fields:
+                    df_data.append({
+                        "ID": field.field_id,
+                        "Description": field.description,
+                        "Type": field.field_type,
+                        "Page": field.page,
+                        "Status": "Mapped" if field.is_mapped else "Questionnaire" if field.to_questionnaire else "Unmapped"
+                    })
                 
-                with col3:
-                    st.write(f"Type: {field.field_type}")
-                    st.caption(f"Page {field.page}")
-                
-                with col4:
-                    if field.is_mapped:
-                        st.markdown('<span class="status-badge mapped">Mapped</span>', unsafe_allow_html=True)
-                    elif field.to_json:
-                        st.markdown('<span class="status-badge json">JSON</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="status-badge unmapped">Unmapped</span>', unsafe_allow_html=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
 
-def render_mapping_section(mapper: SimpleUSCISMapper):
-    """Map fields to database"""
-    if not st.session_state.pdf_fields:
-        st.info("Please upload and extract a form first")
+def render_mapping_tab(extractor: PDFFieldExtractor):
+    """Map fields to database objects"""
+    if not st.session_state.extracted_fields:
+        st.info("👆 Please upload and extract a PDF form first")
         return
     
     st.markdown("## 🎯 Field Mapping")
     
-    # Quick actions
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("All Unmapped → JSON", type="secondary"):
-            count = 0
-            for field in st.session_state.pdf_fields:
-                if not field.is_mapped:
-                    field.to_json = True
-                    count += 1
-            st.success(f"Moved {count} fields to JSON")
-            st.rerun()
-    
-    with col2:
-        if st.button("Reset All", type="secondary"):
-            for field in st.session_state.pdf_fields:
-                field.is_mapped = False
-                field.to_json = False
-                field.db_mapping = None
-            st.rerun()
-    
-    # Stats
-    total = len(st.session_state.pdf_fields)
-    mapped = sum(1 for f in st.session_state.pdf_fields if f.is_mapped)
-    json_count = sum(1 for f in st.session_state.pdf_fields if f.to_json)
-    unmapped = total - mapped - json_count
+    # Summary stats
+    fields = st.session_state.extracted_fields
+    mapped = sum(1 for f in fields if f.is_mapped)
+    questionnaire = sum(1 for f in fields if f.to_questionnaire)
+    unmapped = len(fields) - mapped - questionnaire
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total", total)
+        st.metric("Total Fields", len(fields))
     with col2:
-        st.metric("Mapped", mapped)
+        st.metric("Mapped to DB", mapped)
     with col3:
-        st.metric("To JSON", json_count)
+        st.metric("To Questionnaire", questionnaire)
     with col4:
         st.metric("Unmapped", unmapped)
     
-    # Part selector
-    parts = ["All"] + list(st.session_state.fields_by_part.keys())
-    selected_part = st.selectbox("View Part", parts)
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("📋 All Unmapped → Questionnaire"):
+            for field in fields:
+                if not field.is_mapped:
+                    field.to_questionnaire = True
+            st.success(f"Moved {unmapped} fields to questionnaire")
+            st.rerun()
+    with col2:
+        if st.button("🔄 Reset All Mappings"):
+            for field in fields:
+                field.is_mapped = False
+                field.to_questionnaire = False
+                field.db_mapping = None
+            st.rerun()
+    
+    # Part filter
+    st.markdown("### 📑 Map Fields by Part")
+    parts = ["All Parts"] + list(st.session_state.fields_by_part.keys())
+    selected_part = st.selectbox("Select Part", parts)
     
     # Get fields to display
-    if selected_part == "All":
-        display_fields = st.session_state.pdf_fields
+    if selected_part == "All Parts":
+        display_fields = fields
     else:
-        display_fields = st.session_state.fields_by_part.get(selected_part, [])
+        display_fields = st.session_state.fields_by_part[selected_part]
     
     # Display fields for mapping
-    st.markdown("---")
+    st.markdown(f"<div class='part-header'>Showing {len(display_fields)} fields</div>", unsafe_allow_html=True)
     
     for field in display_fields:
-        col1, col2, col3, col4 = st.columns([2, 3, 3, 1])
+        col1, col2, col3, col4 = st.columns([1.5, 2.5, 3, 1])
         
         with col1:
-            st.write(f"**{field.clean_name}**")
-            st.caption(f"{field.part} • {field.field_type}")
+            st.markdown(f"**{field.field_id}**")
+            st.caption(f"{field.part}")
         
         with col2:
-            st.write(field.description)
-            if field.item_number:
-                st.caption(f"Item {field.item_number}")
+            st.markdown(f"**{field.description}**")
+            st.caption(f"Type: {field.field_type} | Page: {field.page}")
         
         with col3:
-            # Mapping options
             if field.is_mapped:
-                st.info(f"→ {field.db_mapping}")
-            elif field.to_json:
-                st.warning("→ JSON Questionnaire")
+                st.success(f"✅ Mapped to: {field.db_mapping}")
+            elif field.to_questionnaire:
+                st.warning("📋 In Questionnaire")
             else:
-                options = ["Select..."] + ["To JSON"] + mapper.db_paths
+                # Mapping dropdown
+                options = ["-- Select Mapping --"] + ["📋 Send to Questionnaire"] + extractor.db_paths
+                
                 selected = st.selectbox(
                     "Map to",
                     options,
-                    key=f"map_{field.clean_name}",
+                    key=f"map_{field.field_id}",
                     label_visibility="collapsed"
                 )
                 
-                if selected == "To JSON":
-                    field.to_json = True
+                if selected == "📋 Send to Questionnaire":
+                    field.to_questionnaire = True
                     st.rerun()
-                elif selected != "Select...":
+                elif selected != "-- Select Mapping --":
                     field.db_mapping = selected
                     field.is_mapped = True
                     st.rerun()
         
         with col4:
-            if field.is_mapped or field.to_json:
-                if st.button("Reset", key=f"reset_{field.clean_name}"):
+            if field.is_mapped or field.to_questionnaire:
+                if st.button("❌", key=f"reset_{field.field_id}", help="Reset mapping"):
                     field.is_mapped = False
-                    field.to_json = False
+                    field.to_questionnaire = False
                     field.db_mapping = None
                     st.rerun()
 
-def render_export_section(mapper: SimpleUSCISMapper):
-    """Export mappings"""
-    if not st.session_state.pdf_fields:
-        st.info("Please map fields first")
+def render_export_tab(extractor: PDFFieldExtractor):
+    """Export mapped fields"""
+    if not st.session_state.extracted_fields:
+        st.info("👆 Please extract and map fields first")
         return
     
-    st.markdown("## 📥 Export")
+    st.markdown("## 📥 Export Mappings")
     
     # Summary
-    fields = st.session_state.pdf_fields
+    fields = st.session_state.extracted_fields
     mapped = sum(1 for f in fields if f.is_mapped)
-    json_count = sum(1 for f in fields if f.to_json)
-    unmapped = len(fields) - mapped - json_count
+    questionnaire = sum(1 for f in fields if f.to_questionnaire)
+    unmapped = len(fields) - mapped - questionnaire
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Database Mapped", mapped)
+        st.markdown('<div class="status-badge status-mapped">Database Mapped: ' + str(mapped) + '</div>', unsafe_allow_html=True)
     with col2:
-        st.metric("To JSON", json_count)
+        st.markdown('<div class="status-badge status-questionnaire">Questionnaire: ' + str(questionnaire) + '</div>', unsafe_allow_html=True)
     with col3:
-        st.metric("Unmapped", unmapped)
+        st.markdown('<div class="status-badge status-unmapped">Unmapped: ' + str(unmapped) + '</div>', unsafe_allow_html=True)
     
     if unmapped > 0:
-        st.warning(f"⚠️ {unmapped} fields are unmapped. They will be added to JSON on export.")
+        st.warning(f"⚠️ {unmapped} unmapped fields will be automatically added to the questionnaire JSON")
     
-    # Export buttons
+    st.markdown("---")
+    
+    # Export options
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("Generate TypeScript", type="primary", use_container_width=True):
-            # Auto-add unmapped to JSON
-            for field in fields:
-                if not field.is_mapped and not field.to_json:
-                    field.to_json = True
-            
-            ts_content = mapper.generate_typescript(fields)
-            
-            st.download_button(
-                "📥 Download TypeScript",
-                ts_content,
-                f"{st.session_state.form_type.replace('-', '')}.ts",
-                "text/plain"
-            )
+        st.markdown("### 📝 TypeScript Export")
+        st.markdown("Database field mappings for your application")
+        
+        ts_content = extractor.generate_typescript(fields)
+        
+        st.download_button(
+            label="📥 Download TypeScript File",
+            data=ts_content,
+            file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+            mime="text/plain",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview TypeScript"):
+            st.code(ts_content[:1000] + "\n...", language="typescript")
     
     with col2:
-        if st.button("Generate JSON", type="primary", use_container_width=True):
-            # Auto-add unmapped to JSON
-            for field in fields:
-                if not field.is_mapped and not field.to_json:
-                    field.to_json = True
-            
-            json_content = mapper.generate_json(fields)
-            
-            st.download_button(
-                "📥 Download JSON",
-                json_content,
-                f"{st.session_state.form_type.lower()}-questionnaire.json",
-                "application/json"
-            )
-    
-    # Preview
-    st.markdown("### Preview")
-    
-    tab1, tab2 = st.tabs(["TypeScript", "JSON"])
-    
-    with tab1:
-        ts_preview = mapper.generate_typescript(fields[:10])
-        st.code(ts_preview, language="typescript")
-    
-    with tab2:
-        json_fields = [f for f in fields[:10] if f.to_json or not f.is_mapped]
-        if json_fields:
-            preview_data = {
-                "form": st.session_state.form_type,
-                "sample_fields": [
-                    {
-                        "id": f.clean_name,
-                        "description": f.description,
-                        "part": f.part
-                    } for f in json_fields[:5]
-                ]
-            }
+        st.markdown("### 📋 Questionnaire JSON")
+        st.markdown("Fields requiring manual entry")
+        
+        # Auto-add unmapped to questionnaire for JSON
+        temp_fields = []
+        for field in fields:
+            if not field.is_mapped:
+                temp_field = field
+                temp_field.to_questionnaire = True
+                temp_fields.append(temp_field)
+            else:
+                temp_fields.append(field)
+        
+        json_content = extractor.generate_questionnaire_json(temp_fields)
+        
+        st.download_button(
+            label="📥 Download JSON File",
+            data=json_content,
+            file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+            mime="application/json",
+            use_container_width=True
+        )
+        
+        with st.expander("Preview JSON"):
+            preview_data = json.loads(json_content)
+            preview_data["sections"] = preview_data["sections"][:1]  # Show first section only
+            if preview_data["sections"]:
+                preview_data["sections"][0]["fields"] = preview_data["sections"][0]["fields"][:3]
             st.json(preview_data)
 
 def main():
     st.set_page_config(
-        page_title="Simple USCIS Form Mapper",
+        page_title="USCIS PDF Field Extractor",
         page_icon="📄",
         layout="wide"
     )
     
-    # Initialize mapper
-    mapper = SimpleUSCISMapper()
+    # Initialize extractor
+    extractor = PDFFieldExtractor()
     
     # Render header
     render_header()
@@ -719,13 +673,49 @@ def main():
     tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export"])
     
     with tab1:
-        render_upload_section(mapper)
+        render_upload_tab(extractor)
     
     with tab2:
-        render_mapping_section(mapper)
+        render_mapping_tab(extractor)
     
     with tab3:
-        render_export_section(mapper)
+        render_export_tab(extractor)
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## 📊 Progress Overview")
+        
+        if st.session_state.extracted_fields:
+            fields = st.session_state.extracted_fields
+            total = len(fields)
+            mapped = sum(1 for f in fields if f.is_mapped)
+            quest = sum(1 for f in fields if f.to_questionnaire)
+            progress = (mapped + quest) / total if total > 0 else 0
+            
+            st.progress(progress)
+            st.caption(f"{progress:.0%} Complete")
+            
+            st.markdown("---")
+            
+            # Part breakdown
+            st.markdown("### 📑 Parts Summary")
+            for part, part_fields in st.session_state.fields_by_part.items():
+                part_mapped = sum(1 for f in part_fields if f.is_mapped or f.to_questionnaire)
+                st.write(f"**{part}**: {part_mapped}/{len(part_fields)} done")
+        
+        st.markdown("---")
+        st.markdown("### ℹ️ Instructions")
+        st.markdown("""
+        1. **Upload** your USCIS PDF form
+        2. **Extract** fields (starts from Part 1)
+        3. **Map** fields to database or questionnaire
+        4. **Export** TypeScript and JSON files
+        
+        **Notes:**
+        - Part 0 (attorney) is skipped
+        - Unmapped fields → JSON automatically
+        - Fields numbered as P1_1, P1_2, etc.
+        """)
 
 if __name__ == "__main__":
     main()
