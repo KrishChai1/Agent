@@ -17,7 +17,7 @@ USCIS_FORMS_DATABASE = {
         "identifier_patterns": ["Form I-90", "I-90", "OMB No. 1615-0052"]
     },
     "I-129": {
-        "title": "Petition for a Nonimmigrant Worker",
+        "title": "Petition for a Nonimmigrant Worker", 
         "keywords": ["nonimmigrant worker", "h1b", "l1", "petition"],
         "identifier_patterns": ["Form I-129", "I-129", "OMB No. 1615-0009"]
     },
@@ -238,12 +238,10 @@ class SmartUSCISMapper:
             st.session_state.pdf_fields = []
         if 'field_mappings' not in st.session_state:
             st.session_state.field_mappings = {}
-        if 'current_part' not in st.session_state:
-            st.session_state.current_part = None
-        if 'current_field_index' not in st.session_state:
-            st.session_state.current_field_index = 0
         if 'fields_by_part' not in st.session_state:
             st.session_state.fields_by_part = {}
+        if 'current_view_part' not in st.session_state:
+            st.session_state.current_view_part = "All"
     
     def _build_database_paths(self):
         """Build flat list of all database paths"""
@@ -678,6 +676,51 @@ class SmartUSCISMapper:
         ts_content += "};\n"
         
         return ts_content
+    
+    def generate_questionnaire_json(self, fields: List[PDFField]) -> str:
+        """Generate questionnaire JSON for unmapped fields"""
+        questionnaire_fields = [f for f in fields if f.is_questionnaire or not f.db_mapping]
+        
+        # Group by part
+        fields_by_part = defaultdict(list)
+        for field in questionnaire_fields:
+            fields_by_part[field.part].append(field)
+        
+        # Build JSON structure
+        questionnaire = {
+            "formType": st.session_state.form_type,
+            "generatedAt": datetime.now().isoformat(),
+            "totalQuestions": len(questionnaire_fields),
+            "sections": []
+        }
+        
+        # Sort parts
+        sorted_parts = sorted(fields_by_part.keys(), 
+                            key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
+        
+        for part in sorted_parts:
+            section = {
+                "name": part,
+                "questions": []
+            }
+            
+            for field in fields_by_part[part]:
+                question = {
+                    "id": field.clean_name,
+                    "description": field.description,
+                    "type": field.field_type,
+                    "required": True,
+                    "page": field.page
+                }
+                
+                if field.item:
+                    question["item"] = field.item
+                
+                section["questions"].append(question)
+            
+            questionnaire["sections"].append(section)
+        
+        return json.dumps(questionnaire, indent=2)
 
 def render_header():
     """Render header"""
@@ -699,24 +742,28 @@ def render_header():
         .field-card {
             background: white;
             border: 1px solid #e5e7eb;
-            padding: 20px;
+            padding: 15px;
             margin: 10px 0;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-        .suggestion-card {
-            background: #f3f4f6;
-            padding: 10px;
-            margin: 5px 0;
-            border-radius: 5px;
-            cursor: pointer;
+            border-radius: 8px;
             transition: all 0.2s;
         }
-        .suggestion-card:hover {
-            background: #e5e7eb;
-            transform: translateX(5px);
+        .field-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
-        .confidence-badge {
+        .part-card {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+        }
+        .part-header {
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+            color: #4b5563;
+        }
+        .status-badge {
             display: inline-block;
             padding: 2px 8px;
             border-radius: 12px;
@@ -724,43 +771,37 @@ def render_header():
             font-weight: bold;
             margin-left: 10px;
         }
-        .high-confidence { background: #d1fae5; color: #065f46; }
-        .medium-confidence { background: #fef3c7; color: #92400e; }
-        .low-confidence { background: #fee2e2; color: #991b1b; }
-        .progress-bar {
-            background: #e5e7eb;
-            height: 8px;
-            border-radius: 4px;
-            margin: 20px 0;
+        .mapped { background: #d1fae5; color: #065f46; }
+        .questionnaire { background: #fef3c7; color: #92400e; }
+        .unmapped { background: #fee2e2; color: #991b1b; }
+        .database { background: #dbeafe; color: #1e3a8a; }
+        .json { background: #e0e7ff; color: #4338ca; }
+        .field-table {
+            font-size: 0.9em;
+            margin-top: 10px;
         }
-        .progress-fill {
-            background: #667eea;
-            height: 100%;
-            border-radius: 4px;
-            transition: width 0.3s;
-        }
-        .part-selector {
-            background: #f9fafb;
+        .mapping-stats {
+            background: white;
             padding: 15px;
             border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             margin: 10px 0;
-            border: 1px solid #e5e7eb;
         }
     </style>
     <div class="main-header">
         <h1 class="header-title">Smart USCIS Form Mapper</h1>
-        <p>Part-by-Part Field Mapping with AI Suggestions</p>
+        <p>Extract, Map to Database Objects, Export Unmapped to JSON</p>
     </div>
     """, unsafe_allow_html=True)
 
 def render_upload_section(mapper: SmartUSCISMapper):
-    """Render upload section"""
-    st.markdown("## 📤 Upload USCIS Form")
+    """Render upload section with extracted fields display"""
+    st.markdown("## 📤 Upload & Extract USCIS Form")
     
     uploaded_file = st.file_uploader(
         "Upload USCIS PDF form",
         type=['pdf'],
-        help="Upload any fillable USCIS form"
+        help="Upload any fillable USCIS form (Part 0 will be skipped)"
     )
     
     if uploaded_file:
@@ -778,331 +819,250 @@ def render_upload_section(mapper: SmartUSCISMapper):
                 
                 if form_type and confidence >= 0.5:
                     st.session_state.form_type = form_type
-                    st.success(f"✅ Detected: {form_type} ({confidence:.0%} confidence)")
+                    st.success(f"✅ Detected: **{form_type}** - {USCIS_FORMS_DATABASE[form_type]['title']} ({confidence:.0%} confidence)")
                     
-                    with st.spinner("Extracting fields (Part 1 onwards)..."):
+                    with st.spinner("Extracting fields (skipping Part 0)..."):
                         fields = mapper.extract_pdf_fields(uploaded_file, form_type)
                         
                         if fields:
                             st.session_state.pdf_fields = fields
                             st.session_state.field_mappings = {f.raw_name: f for f in fields}
-                            st.session_state.current_field_index = 0
-                            st.success(f"✅ Extracted {len(fields)} fields!")
+                            st.success(f"✅ Extracted {len(fields)} fields from {len(st.session_state.fields_by_part)} parts!")
                             st.balloons()
-                            st.rerun()
                         else:
                             st.error("No fields found")
                 else:
-                    st.error("Could not detect form type")
+                    st.error("Could not detect form type. Please try another form.")
+    
+    # Display extracted fields by part
+    if 'pdf_fields' in st.session_state and st.session_state.pdf_fields:
+        st.markdown("---")
+        st.markdown("## 📊 Extracted Fields by Part")
+        
+        # Overall stats
+        fields = st.session_state.pdf_fields
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Fields", len(fields))
+        with col2:
+            st.metric("Total Parts", len(st.session_state.fields_by_part))
+        with col3:
+            st.metric("Pages", max(f.page for f in fields))
+        with col4:
+            st.metric("Form", st.session_state.form_type)
+        
+        # Display fields by part
+        sorted_parts = sorted(st.session_state.fields_by_part.keys(), 
+                            key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
+        
+        for part in sorted_parts:
+            part_fields = st.session_state.fields_by_part[part]
+            
+            with st.expander(f"📑 **{part}** ({len(part_fields)} fields)", expanded=False):
+                # Part stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.caption(f"**Fields:** {len(part_fields)}")
+                with col2:
+                    pages = list(set(f.page for f in part_fields))
+                    st.caption(f"**Pages:** {min(pages)}-{max(pages)}")
+                with col3:
+                    types = list(set(f.field_type for f in part_fields))
+                    st.caption(f"**Types:** {', '.join(types)}")
+                
+                # Field table
+                field_data = []
+                for field in part_fields:
+                    field_data.append({
+                        "Field": field.clean_name,
+                        "Description": field.description[:50] + "..." if len(field.description) > 50 else field.description,
+                        "Type": field.field_type,
+                        "Page": field.page,
+                        "AI Suggestion": field.ai_suggestions[0].split('.')[-1] if field.ai_suggestions else "-"
+                    })
+                
+                df = pd.DataFrame(field_data)
+                st.dataframe(df, use_container_width=True, hide_index=True, height=200)
 
 def render_mapping_section(mapper: SmartUSCISMapper):
-    """Render part-by-part mapping section"""
+    """Render smart mapping section with All option"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
         st.info("Please upload a PDF form first")
         return
     
     st.markdown("## 🎯 Smart Field Mapping")
     
-    # Part selector
-    st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+    # Part selector with All option
+    parts = ["All"] + sorted(list(st.session_state.fields_by_part.keys()), 
+                           key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
     
-    # Get all parts
-    parts = sorted(list(st.session_state.fields_by_part.keys()), 
-                  key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
-    
-    # Part selection
-    col1, col2, col3 = st.columns([2, 2, 1])
-    
+    col1, col2 = st.columns([3, 1])
     with col1:
-        selected_part = st.selectbox(
-            "📑 Select Part to Map",
+        view_part = st.selectbox(
+            "📑 View Part",
             parts,
-            index=parts.index(st.session_state.current_part) if st.session_state.current_part in parts else 0,
-            help="Choose which part of the form to work on"
+            index=parts.index(st.session_state.current_view_part) if st.session_state.current_view_part in parts else 0,
+            help="Select 'All' to see all fields or choose a specific part"
         )
-        st.session_state.current_part = selected_part
+        st.session_state.current_view_part = view_part
     
     with col2:
-        # Part statistics
-        part_fields = st.session_state.fields_by_part.get(selected_part, [])
-        mapped = sum(1 for f in part_fields if f.is_mapped)
-        quest = sum(1 for f in part_fields if f.is_questionnaire)
-        unmapped = len(part_fields) - mapped - quest
-        
-        st.metric(f"{selected_part} Progress", f"{mapped + quest}/{len(part_fields)}")
-    
-    with col3:
-        # Quick actions for this part
-        if st.button("Skip All to Questionnaire", help="Add all unmapped fields in this part to questionnaire"):
+        # Quick actions
+        if st.button("📋 All to Questionnaire", help="Add all unmapped fields to questionnaire"):
             count = 0
-            for field in part_fields:
+            if view_part == "All":
+                fields_to_process = st.session_state.pdf_fields
+            else:
+                fields_to_process = st.session_state.fields_by_part.get(view_part, [])
+            
+            for field in fields_to_process:
                 if not field.is_mapped and not field.is_questionnaire:
                     field.is_questionnaire = True
                     count += 1
+            
             if count > 0:
                 st.success(f"Added {count} fields to questionnaire")
                 st.rerun()
     
+    # Get fields to display
+    if view_part == "All":
+        display_fields = st.session_state.pdf_fields
+        # Group by part for display
+        fields_by_part = st.session_state.fields_by_part
+        sorted_parts = sorted(fields_by_part.keys(), 
+                            key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
+    else:
+        display_fields = st.session_state.fields_by_part.get(view_part, [])
+        sorted_parts = [view_part]
+        fields_by_part = {view_part: display_fields}
+    
+    # Overall mapping statistics
+    st.markdown('<div class="mapping-stats">', unsafe_allow_html=True)
+    st.markdown("### 📊 Mapping Status")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    total = len(display_fields)
+    mapped = sum(1 for f in display_fields if f.is_mapped)
+    quest = sum(1 for f in display_fields if f.is_questionnaire)
+    unmapped = total - mapped - quest
+    
+    with col1:
+        st.metric("Total", total)
+    with col2:
+        st.metric("Mapped to DB", mapped)
+        st.caption("Database objects")
+    with col3:
+        st.metric("To JSON", quest)
+        st.caption("Questionnaire")
+    with col4:
+        st.metric("Unmapped", unmapped)
+    with col5:
+        progress = (mapped + quest) / total if total > 0 else 0
+        st.metric("Progress", f"{progress:.0%}")
+    
     st.markdown('</div>', unsafe_allow_html=True)
     
-    # Overall progress
-    all_fields = st.session_state.pdf_fields
-    total_mapped = sum(1 for f in all_fields if f.is_mapped)
-    total_quest = sum(1 for f in all_fields if f.is_questionnaire)
-    overall_progress = (total_mapped + total_quest) / len(all_fields) if all_fields else 0
-    
-    st.markdown(f"""
-    <div class="progress-bar">
-        <div class="progress-fill" style="width: {overall_progress * 100}%"></div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Overall stats
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Fields", len(all_fields))
-    with col2:
-        st.metric("Mapped", total_mapped)
-    with col3:
-        st.metric("Questionnaire", total_quest)
-    with col4:
-        st.metric("Unmapped", len(all_fields) - total_mapped - total_quest)
-    
-    # Get fields for selected part
-    part_fields = st.session_state.fields_by_part.get(selected_part, [])
-    
-    if not part_fields:
-        st.warning(f"No fields found in {selected_part}")
-        return
-    
-    # Get current field index within this part
-    if 'part_field_index' not in st.session_state or st.session_state.get('last_part') != selected_part:
-        st.session_state.part_field_index = 0
-        st.session_state.last_part = selected_part
-    
-    current_idx = st.session_state.part_field_index
-    
-    # Check if all fields in this part are processed
-    if current_idx >= len(part_fields):
-        st.success(f"✅ All fields in {selected_part} have been processed!")
+    # Display fields by part
+    for part in sorted_parts:
+        part_fields = fields_by_part[part]
         
-        # Part summary
-        st.markdown(f"### 📊 {selected_part} Summary")
+        # Part header with stats
+        part_mapped = sum(1 for f in part_fields if f.is_mapped)
+        part_quest = sum(1 for f in part_fields if f.is_questionnaire)
+        part_unmapped = len(part_fields) - part_mapped - part_quest
         
-        mapped = sum(1 for f in part_fields if f.is_mapped)
-        quest = sum(1 for f in part_fields if f.is_questionnaire)
+        st.markdown(f"""
+        <div class="part-card">
+            <div class="part-header">
+                📑 {part} ({len(part_fields)} fields)
+                <span class="status-badge database">DB: {part_mapped}</span>
+                <span class="status-badge json">JSON: {part_quest}</span>
+                <span class="status-badge unmapped">Unmapped: {part_unmapped}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        col1, col2 = st.columns(2)
+        # Display fields
+        for field in part_fields:
+            render_field_mapping_card(field, mapper)
+
+def render_field_mapping_card(field: PDFField, mapper: SmartUSCISMapper):
+    """Render individual field mapping card"""
+    with st.container():
+        st.markdown('<div class="field-card">', unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns([3, 2, 1])
+        
         with col1:
-            st.metric("Database Mapped", f"{mapped} fields")
-        with col2:
-            st.metric("Manual Entry", f"{quest} fields")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Review Fields", use_container_width=True):
-                st.session_state.part_field_index = 0
-                st.rerun()
-        with col2:
-            # Check if there are more parts
-            current_part_idx = parts.index(selected_part)
-            if current_part_idx < len(parts) - 1:
-                if st.button("Next Part →", use_container_width=True, type="primary"):
-                    st.session_state.current_part = parts[current_part_idx + 1]
-                    st.session_state.part_field_index = 0
-                    st.rerun()
-        
-        return
-    
-    # Current field
-    field = part_fields[current_idx]
-    
-    # Field card
-    st.markdown('<div class="field-card">', unsafe_allow_html=True)
-    
-    # Field header
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown(f"### Field {current_idx + 1} of {len(part_fields)} in {selected_part}")
-        st.markdown(f"**{field.clean_name}** - {field.description}")
-    with col2:
-        if field.is_mapped:
-            st.success("✅ Mapped")
-        elif field.is_questionnaire:
-            st.warning("📋 Questionnaire")
-        else:
-            st.info("🔍 Unmapped")
-    
-    # Field details
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.caption(f"**Type:** {field.field_type}")
-    with col2:
-        st.caption(f"**Page:** {field.page}")
-    with col3:
-        st.caption(f"**Raw Name:** {field.raw_name.split('.')[-1]}")
-    
-    # Current mapping
-    if field.is_mapped and field.db_mapping:
-        st.info(f"**Currently mapped to:** `{field.db_mapping}`")
-    elif field.is_questionnaire:
-        st.warning("**Currently in:** Manual Entry (Questionnaire)")
-    
-    # AI Suggestions
-    st.markdown("### 🤖 AI Suggestions")
-    
-    if field.ai_suggestions:
-        for i, (suggestion, confidence) in enumerate(zip(field.ai_suggestions, field.confidence_scores)):
-            # Determine confidence level
-            if confidence > 0.8:
-                conf_class = "high-confidence"
-                conf_text = "High"
-            elif confidence > 0.6:
-                conf_class = "medium-confidence"
-                conf_text = "Medium"
-            else:
-                conf_class = "low-confidence"
-                conf_text = "Low"
+            # Field info
+            st.markdown(f"**{field.clean_name}** - {field.description}")
+            st.caption(f"Type: {field.field_type} | Page: {field.page}")
             
-            # Suggestion card
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                if st.button(
-                    f"📍 {suggestion}",
-                    key=f"sugg_{selected_part}_{current_idx}_{i}",
-                    use_container_width=True,
-                    help=f"Click to select this mapping"
-                ):
-                    field.db_mapping = suggestion
+            # Current status
+            if field.is_mapped:
+                st.markdown(f'<span class="status-badge mapped">✅ Mapped to Database</span>', unsafe_allow_html=True)
+                st.caption(f"Path: `{field.db_mapping}`")
+            elif field.is_questionnaire:
+                st.markdown('<span class="status-badge questionnaire">📋 To JSON (Questionnaire)</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span class="status-badge unmapped">❌ Unmapped</span>', unsafe_allow_html=True)
+        
+        with col2:
+            # Mapping selector
+            if field.ai_suggestions:
+                default_option = field.db_mapping if field.is_mapped else ("To JSON (Questionnaire)" if field.is_questionnaire else field.ai_suggestions[0])
+            else:
+                default_option = field.db_mapping if field.is_mapped else ("To JSON (Questionnaire)" if field.is_questionnaire else "Select...")
+            
+            options = ["Select...", "To JSON (Questionnaire)"] + field.ai_suggestions + ["--- All Database Paths ---"] + mapper.db_paths
+            
+            try:
+                default_index = options.index(default_option)
+            except ValueError:
+                default_index = 0
+            
+            selected = st.selectbox(
+                "Map to",
+                options,
+                index=default_index,
+                key=f"map_{field.index}",
+                label_visibility="collapsed"
+            )
+        
+        with col3:
+            # Apply button
+            if st.button("Apply", key=f"apply_{field.index}"):
+                if selected == "To JSON (Questionnaire)":
+                    field.is_questionnaire = True
+                    field.is_mapped = False
+                    field.db_mapping = None
+                    st.success("→ JSON")
+                    st.rerun()
+                elif selected != "Select..." and selected != "--- All Database Paths ---":
+                    field.db_mapping = selected
                     field.is_mapped = True
                     field.is_questionnaire = False
-                    st.success(f"Mapped to: {suggestion}")
-                    st.session_state.part_field_index += 1
+                    st.success("→ DB")
                     st.rerun()
-            
-            with col2:
-                st.markdown(f'<span class="confidence-badge {conf_class}">{conf_text} ({confidence:.0%})</span>', unsafe_allow_html=True)
-    else:
-        st.info("No AI suggestions available")
-    
-    # Manual selection
-    st.markdown("### 🔧 Manual Selection")
-    
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        selected = st.selectbox(
-            "Select database field or manual entry:",
-            ["Choose..."] + ["Manual Entry (Questionnaire)"] + mapper.db_paths,
-            key=f"select_{selected_part}_{current_idx}"
-        )
-    
-    with col2:
-        if st.button("Apply", key=f"apply_{selected_part}_{current_idx}", use_container_width=True):
-            if selected == "Manual Entry (Questionnaire)":
-                field.is_questionnaire = True
-                field.is_mapped = False
-                field.db_mapping = None
-                st.success("Added to questionnaire")
-                st.session_state.part_field_index += 1
-                st.rerun()
-            elif selected != "Choose...":
-                field.db_mapping = selected
-                field.is_mapped = True
-                field.is_questionnaire = False
-                st.success(f"Mapped to: {selected}")
-                st.session_state.part_field_index += 1
-                st.rerun()
-    
-    # Navigation buttons
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if current_idx > 0:
-            if st.button("⬅️ Previous", use_container_width=True):
-                st.session_state.part_field_index -= 1
-                st.rerun()
-    
-    with col2:
-        if st.button("⏭️ Skip Field", use_container_width=True):
-            field.is_questionnaire = True
-            st.session_state.part_field_index += 1
-            st.rerun()
-    
-    with col3:
-        if current_idx < len(part_fields) - 1:
-            if st.button("Next ➡️", use_container_width=True):
-                if not field.is_mapped and not field.is_questionnaire:
-                    st.error("Please map this field or skip it")
-                else:
-                    st.session_state.part_field_index += 1
-                    st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-def render_all_fields_view(mapper: SmartUSCISMapper):
-    """Render all fields view"""
-    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
-        st.info("Please upload a PDF form first")
-        return
-    
-    st.markdown("## 📊 All Fields Overview")
-    
-    fields = st.session_state.pdf_fields
-    
-    # Filter by part
-    parts = ["All Parts"] + sorted(list(st.session_state.fields_by_part.keys()), 
-                                  key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
-    
-    selected_part_filter = st.selectbox("Filter by Part", parts)
-    
-    # Filter fields
-    if selected_part_filter == "All Parts":
-        display_fields = fields
-    else:
-        display_fields = [f for f in fields if f.part == selected_part_filter]
-    
-    # Create DataFrame
-    data = []
-    for field in display_fields:
-        data.append({
-            'Field': field.clean_name,
-            'Description': field.description,
-            'Part': field.part,
-            'Type': field.field_type,
-            'Status': 'Mapped' if field.is_mapped else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
-            'Mapping': field.db_mapping if field.db_mapping else '-',
-            'Page': field.page
-        })
-    
-    df = pd.DataFrame(data)
-    
-    # Display stats
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Fields", len(display_fields))
-    with col2:
-        mapped = len([f for f in display_fields if f.is_mapped])
-        st.metric("Mapped", mapped)
-    with col3:
-        quest = len([f for f in display_fields if f.is_questionnaire])
-        st.metric("Questionnaire", quest)
-    
-    # Display table
-    st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
 def render_export_section(mapper: SmartUSCISMapper):
-    """Render export section"""
+    """Render export section with database and JSON visualization"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
         st.info("Please complete field mapping first")
         return
     
-    st.markdown("## 📥 Export")
+    st.markdown("## 📥 Export & Review")
     
     fields = st.session_state.pdf_fields
     form_type = st.session_state.form_type
     
-    # Export stats
+    # Export statistics
+    st.markdown("### 📊 Export Summary")
+    
     col1, col2, col3 = st.columns(3)
     
     mapped_count = sum(1 for f in fields if f.is_mapped)
@@ -1110,18 +1070,38 @@ def render_export_section(mapper: SmartUSCISMapper):
     unmapped_count = sum(1 for f in fields if not f.is_mapped and not f.is_questionnaire)
     
     with col1:
-        st.metric("✅ Ready", mapped_count + quest_count)
+        st.markdown('<div class="mapping-stats">', unsafe_allow_html=True)
+        st.metric("✅ Database Mapped", mapped_count)
+        st.caption("Ready for database")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
     with col2:
-        st.metric("⚠️ Unmapped", unmapped_count)
+        st.markdown('<div class="mapping-stats">', unsafe_allow_html=True)
+        st.metric("📋 JSON Questionnaire", quest_count)
+        st.caption("Manual entry fields")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
     with col3:
-        readiness = ((mapped_count + quest_count) / len(fields)) * 100 if fields else 0
-        st.metric("📊 Readiness", f"{readiness:.0f}%")
+        st.markdown('<div class="mapping-stats">', unsafe_allow_html=True)
+        st.metric("⚠️ Unmapped", unmapped_count)
+        st.caption("Need attention")
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    if unmapped_count > 0:
+        st.warning(f"⚠️ {unmapped_count} fields are still unmapped. They will be added to JSON questionnaire on export.")
     
     # Export buttons
-    col1, col2 = st.columns(2)
+    st.markdown("### 🚀 Export Options")
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
         if st.button("🔧 Generate TypeScript", type="primary", use_container_width=True):
+            # Auto-add unmapped to questionnaire
+            for field in fields:
+                if not field.is_mapped and not field.is_questionnaire:
+                    field.is_questionnaire = True
+            
             ts_content = mapper.generate_typescript_export(form_type, fields)
             
             st.download_button(
@@ -1131,12 +1111,26 @@ def render_export_section(mapper: SmartUSCISMapper):
                 "text/plain",
                 use_container_width=True
             )
-            
-            with st.expander("Preview TypeScript"):
-                st.code(ts_content, language="typescript")
     
     with col2:
-        if st.button("📊 Export Summary", type="primary", use_container_width=True):
+        if st.button("📋 Generate JSON", type="primary", use_container_width=True):
+            # Auto-add unmapped to questionnaire
+            for field in fields:
+                if not field.is_mapped and not field.is_questionnaire:
+                    field.is_questionnaire = True
+            
+            json_content = mapper.generate_questionnaire_json(fields)
+            
+            st.download_button(
+                "📥 Download Questionnaire JSON",
+                json_content,
+                f"{form_type.lower()}-questionnaire.json",
+                "application/json",
+                use_container_width=True
+            )
+    
+    with col3:
+        if st.button("📊 Export Summary CSV", type="primary", use_container_width=True):
             data = []
             for field in fields:
                 data.append({
@@ -1144,7 +1138,8 @@ def render_export_section(mapper: SmartUSCISMapper):
                     'Description': field.description,
                     'Part': field.part,
                     'Type': field.field_type,
-                    'Mapping': field.db_mapping if field.db_mapping else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
+                    'Status': 'Database' if field.is_mapped else 'JSON' if field.is_questionnaire else 'Unmapped',
+                    'Mapping': field.db_mapping if field.is_mapped else 'Questionnaire' if field.is_questionnaire else '-',
                     'Page': field.page
                 })
             
@@ -1154,10 +1149,91 @@ def render_export_section(mapper: SmartUSCISMapper):
             st.download_button(
                 "📥 Download CSV",
                 csv,
-                f"{form_type}_mappings.csv",
+                f"{form_type}_mapping_summary.csv",
                 "text/csv",
                 use_container_width=True
             )
+    
+    # Preview sections
+    st.markdown("### 👁️ Preview Exports")
+    
+    tab1, tab2, tab3 = st.tabs(["📊 Database Mappings", "📋 JSON Questionnaire", "🔧 TypeScript"])
+    
+    with tab1:
+        # Show database mappings by object
+        st.markdown("#### Database Object Mappings")
+        
+        # Group by database object
+        db_mappings = defaultdict(list)
+        for field in fields:
+            if field.is_mapped and field.db_mapping:
+                obj = field.db_mapping.split('.')[0]
+                db_mappings[obj].append(field)
+        
+        for obj, obj_fields in db_mappings.items():
+            st.markdown(f"**{obj}** ({len(obj_fields)} fields)")
+            
+            mapping_data = []
+            for field in obj_fields:
+                mapping_data.append({
+                    "PDF Field": field.clean_name,
+                    "Database Path": field.db_mapping,
+                    "Description": field.description
+                })
+            
+            df = pd.DataFrame(mapping_data)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=150)
+    
+    with tab2:
+        # Show JSON questionnaire structure
+        st.markdown("#### JSON Questionnaire Structure")
+        
+        # Auto-add unmapped for preview
+        preview_quest_fields = [f for f in fields if f.is_questionnaire or (not f.is_mapped and not f.is_questionnaire)]
+        
+        if preview_quest_fields:
+            # Group by part
+            quest_by_part = defaultdict(list)
+            for field in preview_quest_fields:
+                quest_by_part[field.part].append(field)
+            
+            json_preview = {
+                "formType": form_type,
+                "totalQuestions": len(preview_quest_fields),
+                "sections": []
+            }
+            
+            for part, part_fields in sorted(quest_by_part.items()):
+                section = {
+                    "name": part,
+                    "questionCount": len(part_fields),
+                    "questions": [
+                        {
+                            "id": f.clean_name,
+                            "description": f.description,
+                            "type": f.field_type
+                        } for f in part_fields[:3]  # Show first 3
+                    ]
+                }
+                if len(part_fields) > 3:
+                    section["questions"].append({"...": f"and {len(part_fields) - 3} more"})
+                
+                json_preview["sections"].append(section)
+            
+            st.json(json_preview)
+        else:
+            st.info("No fields in questionnaire")
+    
+    with tab3:
+        # Show TypeScript preview
+        st.markdown("#### TypeScript Export Preview")
+        
+        # Generate preview
+        ts_preview = mapper.generate_typescript_export(form_type, fields[:10])  # Show first 10 fields
+        if len(fields) > 10:
+            ts_preview = ts_preview.rstrip("}\n") + "\n  // ... and more fields\n};\n"
+        
+        st.code(ts_preview, language="typescript")
 
 def main():
     """Main application"""
@@ -1175,10 +1251,9 @@ def main():
     
     # Create tabs
     tabs = st.tabs([
-        "📤 Upload Form",
+        "📤 Upload & Extract",
         "🎯 Smart Mapping",
-        "📊 All Fields",
-        "📥 Export"
+        "📥 Export & Review"
     ])
     
     with tabs[0]:
@@ -1188,14 +1263,11 @@ def main():
         render_mapping_section(mapper)
     
     with tabs[2]:
-        render_all_fields_view(mapper)
-    
-    with tabs[3]:
         render_export_section(mapper)
     
     # Sidebar
     with st.sidebar:
-        st.markdown("## 📊 Mapping Status")
+        st.markdown("## 📊 Overall Status")
         
         if 'pdf_fields' in st.session_state and st.session_state.pdf_fields:
             fields = st.session_state.pdf_fields
@@ -1205,7 +1277,7 @@ def main():
             quest = sum(1 for f in fields if f.is_questionnaire)
             unmapped = total - mapped - quest
             
-            # Progress circle
+            # Progress visualization
             progress = (mapped + quest) / total if total > 0 else 0
             
             st.markdown(f"""
@@ -1223,39 +1295,45 @@ def main():
             </div>
             """, unsafe_allow_html=True)
             
-            st.metric("Total Fields", total)
-            st.metric("Mapped", mapped)
-            st.metric("Questionnaire", quest)
-            st.metric("Unmapped", unmapped)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Fields", total)
+                st.metric("To Database", mapped)
+            with col2:
+                st.metric("To JSON", quest)
+                st.metric("Unmapped", unmapped)
             
-            if st.session_state.form_type:
-                st.markdown("---")
-                st.markdown(f"**Form:** {st.session_state.form_type}")
+            # Form info
+            st.markdown("---")
+            st.markdown(f"**Form:** {st.session_state.form_type}")
+            st.markdown(f"**Parts:** {len(st.session_state.fields_by_part)}")
+            
+            # Quick stats by part
+            st.markdown("### Part Status")
+            for part, part_fields in sorted(st.session_state.fields_by_part.items()):
+                part_mapped = sum(1 for f in part_fields if f.is_mapped)
+                part_quest = sum(1 for f in part_fields if f.is_questionnaire)
+                part_total = len(part_fields)
+                part_progress = (part_mapped + part_quest) / part_total if part_total > 0 else 0
                 
-                # Part progress
-                st.markdown("### Part Progress")
-                for part, part_fields in st.session_state.fields_by_part.items():
-                    part_mapped = sum(1 for f in part_fields if f.is_mapped or f.is_questionnaire)
-                    part_total = len(part_fields)
-                    part_progress = part_mapped / part_total if part_total > 0 else 0
-                    st.progress(part_progress, text=f"{part}: {part_mapped}/{part_total}")
+                st.progress(part_progress, text=f"{part}: {part_mapped + part_quest}/{part_total}")
         else:
             st.info("Upload a form to see status")
         
         st.markdown("---")
-        st.markdown("### ℹ️ How it Works")
+        st.markdown("### ℹ️ Workflow")
         st.markdown("""
         1. **Upload** - Auto-detects form type
-        2. **Select Part** - Choose which part to work on
-        3. **Map Fields** - Review each field one by one
-        4. **AI Suggests** - Click to accept suggestions
-        5. **Export** - Generate TypeScript/CSV
+        2. **Extract** - Shows all fields by part
+        3. **Map** - Assign to database or JSON
+        4. **Export** - TypeScript & JSON files
         
-        **Tips:**
-        - Part 0 is automatically skipped
-        - Work on one part at a time
-        - Fields numbered as P1_1, P1_2, etc.
-        - Skip unmapped fields to questionnaire
+        **Features:**
+        - ⏭️ Part 0 automatically skipped
+        - 🤖 AI suggestions for mapping
+        - 📊 Database object mapping
+        - 📋 JSON questionnaire for manual fields
+        - 📥 Multiple export formats
         """)
 
 if __name__ == "__main__":
