@@ -238,10 +238,12 @@ class SmartUSCISMapper:
             st.session_state.pdf_fields = []
         if 'field_mappings' not in st.session_state:
             st.session_state.field_mappings = {}
+        if 'current_part' not in st.session_state:
+            st.session_state.current_part = None
         if 'current_field_index' not in st.session_state:
             st.session_state.current_field_index = 0
-        if 'mapping_complete' not in st.session_state:
-            st.session_state.mapping_complete = False
+        if 'fields_by_part' not in st.session_state:
+            st.session_state.fields_by_part = {}
     
     def _build_database_paths(self):
         """Build flat list of all database paths"""
@@ -256,7 +258,6 @@ class SmartUSCISMapper:
                             for field_name in value:
                                 path = f"{obj_name}.{field_name}"
                                 self.db_paths.append(path)
-                                # Create human-readable description
                                 desc = field_name.replace('_', ' ').replace('beneficiary', '').replace('customer', '')
                                 self.path_descriptions[path] = desc
                     else:
@@ -399,6 +400,13 @@ class SmartUSCISMapper:
                 field_index += 1
             
             doc.close()
+            
+            # Group fields by part
+            fields_by_part = defaultdict(list)
+            for field in fields:
+                fields_by_part[field.part].append(field)
+            
+            st.session_state.fields_by_part = dict(fields_by_part)
             
         except Exception as e:
             st.error(f"Error extracting PDF: {str(e)}")
@@ -731,10 +739,17 @@ def render_header():
             border-radius: 4px;
             transition: width 0.3s;
         }
+        .part-selector {
+            background: #f9fafb;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 1px solid #e5e7eb;
+        }
     </style>
     <div class="main-header">
         <h1 class="header-title">Smart USCIS Form Mapper</h1>
-        <p>AI-powered field mapping with NLP suggestions</p>
+        <p>Part-by-Part Field Mapping with AI Suggestions</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -772,7 +787,6 @@ def render_upload_section(mapper: SmartUSCISMapper):
                             st.session_state.pdf_fields = fields
                             st.session_state.field_mappings = {f.raw_name: f for f in fields}
                             st.session_state.current_field_index = 0
-                            st.session_state.mapping_complete = False
                             st.success(f"✅ Extracted {len(fields)} fields!")
                             st.balloons()
                             st.rerun()
@@ -782,48 +796,101 @@ def render_upload_section(mapper: SmartUSCISMapper):
                     st.error("Could not detect form type")
 
 def render_mapping_section(mapper: SmartUSCISMapper):
-    """Render one-by-one mapping section"""
+    """Render part-by-part mapping section"""
     if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
         st.info("Please upload a PDF form first")
         return
     
     st.markdown("## 🎯 Smart Field Mapping")
     
-    fields = st.session_state.pdf_fields
-    current_idx = st.session_state.current_field_index
+    # Part selector
+    st.markdown('<div class="part-selector">', unsafe_allow_html=True)
     
-    # Progress bar
-    progress = current_idx / len(fields) if fields else 0
+    # Get all parts
+    parts = sorted(list(st.session_state.fields_by_part.keys()), 
+                  key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
+    
+    # Part selection
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        selected_part = st.selectbox(
+            "📑 Select Part to Map",
+            parts,
+            index=parts.index(st.session_state.current_part) if st.session_state.current_part in parts else 0,
+            help="Choose which part of the form to work on"
+        )
+        st.session_state.current_part = selected_part
+    
+    with col2:
+        # Part statistics
+        part_fields = st.session_state.fields_by_part.get(selected_part, [])
+        mapped = sum(1 for f in part_fields if f.is_mapped)
+        quest = sum(1 for f in part_fields if f.is_questionnaire)
+        unmapped = len(part_fields) - mapped - quest
+        
+        st.metric(f"{selected_part} Progress", f"{mapped + quest}/{len(part_fields)}")
+    
+    with col3:
+        # Quick actions for this part
+        if st.button("Skip All to Questionnaire", help="Add all unmapped fields in this part to questionnaire"):
+            count = 0
+            for field in part_fields:
+                if not field.is_mapped and not field.is_questionnaire:
+                    field.is_questionnaire = True
+                    count += 1
+            if count > 0:
+                st.success(f"Added {count} fields to questionnaire")
+                st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Overall progress
+    all_fields = st.session_state.pdf_fields
+    total_mapped = sum(1 for f in all_fields if f.is_mapped)
+    total_quest = sum(1 for f in all_fields if f.is_questionnaire)
+    overall_progress = (total_mapped + total_quest) / len(all_fields) if all_fields else 0
+    
     st.markdown(f"""
     <div class="progress-bar">
-        <div class="progress-fill" style="width: {progress * 100}%"></div>
+        <div class="progress-fill" style="width: {overall_progress * 100}%"></div>
     </div>
     """, unsafe_allow_html=True)
     
-    # Progress stats
+    # Overall stats
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Progress", f"{current_idx}/{len(fields)}")
+        st.metric("Total Fields", len(all_fields))
     with col2:
-        mapped = sum(1 for f in fields if f.is_mapped)
-        st.metric("Mapped", mapped)
+        st.metric("Mapped", total_mapped)
     with col3:
-        quest = sum(1 for f in fields if f.is_questionnaire)
-        st.metric("Questionnaire", quest)
+        st.metric("Questionnaire", total_quest)
     with col4:
-        remaining = len(fields) - current_idx
-        st.metric("Remaining", remaining)
+        st.metric("Unmapped", len(all_fields) - total_mapped - total_quest)
     
-    # Check if mapping complete
-    if current_idx >= len(fields):
-        st.session_state.mapping_complete = True
-        st.success("✅ All fields have been processed!")
+    # Get fields for selected part
+    part_fields = st.session_state.fields_by_part.get(selected_part, [])
+    
+    if not part_fields:
+        st.warning(f"No fields found in {selected_part}")
+        return
+    
+    # Get current field index within this part
+    if 'part_field_index' not in st.session_state or st.session_state.get('last_part') != selected_part:
+        st.session_state.part_field_index = 0
+        st.session_state.last_part = selected_part
+    
+    current_idx = st.session_state.part_field_index
+    
+    # Check if all fields in this part are processed
+    if current_idx >= len(part_fields):
+        st.success(f"✅ All fields in {selected_part} have been processed!")
         
-        # Summary
-        st.markdown("### 📊 Mapping Summary")
+        # Part summary
+        st.markdown(f"### 📊 {selected_part} Summary")
         
-        mapped = sum(1 for f in fields if f.is_mapped)
-        quest = sum(1 for f in fields if f.is_questionnaire)
+        mapped = sum(1 for f in part_fields if f.is_mapped)
+        quest = sum(1 for f in part_fields if f.is_questionnaire)
         
         col1, col2 = st.columns(2)
         with col1:
@@ -831,14 +898,24 @@ def render_mapping_section(mapper: SmartUSCISMapper):
         with col2:
             st.metric("Manual Entry", f"{quest} fields")
         
-        if st.button("📝 Review All Mappings", use_container_width=True):
-            st.session_state.current_field_index = 0
-            st.rerun()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Review Fields", use_container_width=True):
+                st.session_state.part_field_index = 0
+                st.rerun()
+        with col2:
+            # Check if there are more parts
+            current_part_idx = parts.index(selected_part)
+            if current_part_idx < len(parts) - 1:
+                if st.button("Next Part →", use_container_width=True, type="primary"):
+                    st.session_state.current_part = parts[current_part_idx + 1]
+                    st.session_state.part_field_index = 0
+                    st.rerun()
         
         return
     
     # Current field
-    field = fields[current_idx]
+    field = part_fields[current_idx]
     
     # Field card
     st.markdown('<div class="field-card">', unsafe_allow_html=True)
@@ -846,7 +923,7 @@ def render_mapping_section(mapper: SmartUSCISMapper):
     # Field header
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown(f"### Field {current_idx + 1} of {len(fields)}")
+        st.markdown(f"### Field {current_idx + 1} of {len(part_fields)} in {selected_part}")
         st.markdown(f"**{field.clean_name}** - {field.description}")
     with col2:
         if field.is_mapped:
@@ -857,14 +934,12 @@ def render_mapping_section(mapper: SmartUSCISMapper):
             st.info("🔍 Unmapped")
     
     # Field details
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
-        st.caption(f"**Part:** {field.part}")
-    with col2:
         st.caption(f"**Type:** {field.field_type}")
-    with col3:
+    with col2:
         st.caption(f"**Page:** {field.page}")
-    with col4:
+    with col3:
         st.caption(f"**Raw Name:** {field.raw_name.split('.')[-1]}")
     
     # Current mapping
@@ -894,7 +969,7 @@ def render_mapping_section(mapper: SmartUSCISMapper):
             with col1:
                 if st.button(
                     f"📍 {suggestion}",
-                    key=f"sugg_{current_idx}_{i}",
+                    key=f"sugg_{selected_part}_{current_idx}_{i}",
                     use_container_width=True,
                     help=f"Click to select this mapping"
                 ):
@@ -902,7 +977,7 @@ def render_mapping_section(mapper: SmartUSCISMapper):
                     field.is_mapped = True
                     field.is_questionnaire = False
                     st.success(f"Mapped to: {suggestion}")
-                    st.session_state.current_field_index += 1
+                    st.session_state.part_field_index += 1
                     st.rerun()
             
             with col2:
@@ -918,24 +993,24 @@ def render_mapping_section(mapper: SmartUSCISMapper):
         selected = st.selectbox(
             "Select database field or manual entry:",
             ["Choose..."] + ["Manual Entry (Questionnaire)"] + mapper.db_paths,
-            key=f"select_{current_idx}"
+            key=f"select_{selected_part}_{current_idx}"
         )
     
     with col2:
-        if st.button("Apply", key=f"apply_{current_idx}", use_container_width=True):
+        if st.button("Apply", key=f"apply_{selected_part}_{current_idx}", use_container_width=True):
             if selected == "Manual Entry (Questionnaire)":
                 field.is_questionnaire = True
                 field.is_mapped = False
                 field.db_mapping = None
                 st.success("Added to questionnaire")
-                st.session_state.current_field_index += 1
+                st.session_state.part_field_index += 1
                 st.rerun()
             elif selected != "Choose...":
                 field.db_mapping = selected
                 field.is_mapped = True
                 field.is_questionnaire = False
                 st.success(f"Mapped to: {selected}")
-                st.session_state.current_field_index += 1
+                st.session_state.part_field_index += 1
                 st.rerun()
     
     # Navigation buttons
@@ -945,25 +1020,76 @@ def render_mapping_section(mapper: SmartUSCISMapper):
     with col1:
         if current_idx > 0:
             if st.button("⬅️ Previous", use_container_width=True):
-                st.session_state.current_field_index -= 1
+                st.session_state.part_field_index -= 1
                 st.rerun()
     
     with col2:
         if st.button("⏭️ Skip Field", use_container_width=True):
             field.is_questionnaire = True
-            st.session_state.current_field_index += 1
+            st.session_state.part_field_index += 1
             st.rerun()
     
     with col3:
-        if current_idx < len(fields) - 1:
+        if current_idx < len(part_fields) - 1:
             if st.button("Next ➡️", use_container_width=True):
                 if not field.is_mapped and not field.is_questionnaire:
                     st.error("Please map this field or skip it")
                 else:
-                    st.session_state.current_field_index += 1
+                    st.session_state.part_field_index += 1
                     st.rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
+
+def render_all_fields_view(mapper: SmartUSCISMapper):
+    """Render all fields view"""
+    if 'pdf_fields' not in st.session_state or not st.session_state.pdf_fields:
+        st.info("Please upload a PDF form first")
+        return
+    
+    st.markdown("## 📊 All Fields Overview")
+    
+    fields = st.session_state.pdf_fields
+    
+    # Filter by part
+    parts = ["All Parts"] + sorted(list(st.session_state.fields_by_part.keys()), 
+                                  key=lambda x: (0, int(re.search(r'\d+', x).group())) if re.search(r'\d+', x) else (1, x))
+    
+    selected_part_filter = st.selectbox("Filter by Part", parts)
+    
+    # Filter fields
+    if selected_part_filter == "All Parts":
+        display_fields = fields
+    else:
+        display_fields = [f for f in fields if f.part == selected_part_filter]
+    
+    # Create DataFrame
+    data = []
+    for field in display_fields:
+        data.append({
+            'Field': field.clean_name,
+            'Description': field.description,
+            'Part': field.part,
+            'Type': field.field_type,
+            'Status': 'Mapped' if field.is_mapped else 'Questionnaire' if field.is_questionnaire else 'Unmapped',
+            'Mapping': field.db_mapping if field.db_mapping else '-',
+            'Page': field.page
+        })
+    
+    df = pd.DataFrame(data)
+    
+    # Display stats
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Fields", len(display_fields))
+    with col2:
+        mapped = len([f for f in display_fields if f.is_mapped])
+        st.metric("Mapped", mapped)
+    with col3:
+        quest = len([f for f in display_fields if f.is_questionnaire])
+        st.metric("Questionnaire", quest)
+    
+    # Display table
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 def render_export_section(mapper: SmartUSCISMapper):
     """Render export section"""
@@ -1051,6 +1177,7 @@ def main():
     tabs = st.tabs([
         "📤 Upload Form",
         "🎯 Smart Mapping",
+        "📊 All Fields",
         "📥 Export"
     ])
     
@@ -1061,6 +1188,9 @@ def main():
         render_mapping_section(mapper)
     
     with tabs[2]:
+        render_all_fields_view(mapper)
+    
+    with tabs[3]:
         render_export_section(mapper)
     
     # Sidebar
@@ -1101,6 +1231,14 @@ def main():
             if st.session_state.form_type:
                 st.markdown("---")
                 st.markdown(f"**Form:** {st.session_state.form_type}")
+                
+                # Part progress
+                st.markdown("### Part Progress")
+                for part, part_fields in st.session_state.fields_by_part.items():
+                    part_mapped = sum(1 for f in part_fields if f.is_mapped or f.is_questionnaire)
+                    part_total = len(part_fields)
+                    part_progress = part_mapped / part_total if part_total > 0 else 0
+                    st.progress(part_progress, text=f"{part}: {part_mapped}/{part_total}")
         else:
             st.info("Upload a form to see status")
         
@@ -1108,14 +1246,15 @@ def main():
         st.markdown("### ℹ️ How it Works")
         st.markdown("""
         1. **Upload** - Auto-detects form type
-        2. **Map** - Review each field one by one
-        3. **AI Suggests** - NLP-based suggestions
-        4. **Export** - Generate TypeScript/CSV
+        2. **Select Part** - Choose which part to work on
+        3. **Map Fields** - Review each field one by one
+        4. **AI Suggests** - Click to accept suggestions
+        5. **Export** - Generate TypeScript/CSV
         
         **Tips:**
-        - Part 0 fields are skipped
-        - Fields start from P1_1
-        - Click AI suggestions to quick-map
+        - Part 0 is automatically skipped
+        - Work on one part at a time
+        - Fields numbered as P1_1, P1_2, etc.
         - Skip unmapped fields to questionnaire
         """)
 
