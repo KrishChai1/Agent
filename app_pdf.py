@@ -866,29 +866,6 @@ def main():
             # Summary Report
             if st.session_state.get('show_summary', False):
                 st.markdown("---")
-        
-        # Theme toggle
-        st.markdown("### 🎨 Appearance")
-        dark_mode = st.checkbox("Dark Mode", value=False, key="dark_mode")
-        
-        if dark_mode:
-            st.markdown("""
-            <style>
-                .stApp { background: #1a1a1a; }
-                div[data-testid="stVerticalBlock"] > div { background: #2d2d2d; border-color: #444; }
-                .stMarkdown { color: #e0e0e0; }
-                h1, h2, h3 { color: #ffffff; }
-                .subtitle { color: #b0b0b0; }
-                .stTextInput > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
-                .stSelectbox > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
-                [data-testid="metric-container"] { background: #2d2d2d; border-color: #444; }
-                .filter-section { background: #2d2d2d; border-color: #444; }
-                .field-container { background: #2d2d2d; border-color: #444; }
-                .streamlit-expanderHeader { background: #2d2d2d; border-color: #444; color: #e0e0e0; }
-            </style>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
                 st.markdown("### 📊 Field Mapping Summary Report")
                 
                 # Create summary dataframe
@@ -1177,96 +1154,6 @@ def main():
                     
                     # Add separator between fields
                     st.markdown("<hr style='margin: 0.5rem 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
-                # Show part header when it changes
-                if field.part_number != current_part:
-                    current_part = field.part_number
-                    st.markdown("---")
-                    st.markdown(f"#### 📑 Part {current_part}")
-                    # Show part-specific stats
-                    part_fields = [f for f in filtered_fields if f.part_number == current_part]
-                    part_mapped = sum(1 for f in part_fields if f.is_mapped)
-                    part_quest = sum(1 for f in part_fields if f.to_questionnaire and not f.is_mapped)
-                    st.caption(f"Total: {len(part_fields)} fields | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {len(part_fields) - part_mapped - part_quest}")
-                
-                # Field container
-                with st.container():
-                    col1, col2, col3 = st.columns([3, 3, 1])
-                    
-                    with col1:
-                        # Field type icon
-                        type_icons = {
-                            "text": "📝",
-                            "checkbox": "☑️",
-                            "radio": "⭕",
-                            "dropdown": "📋",
-                            "signature": "✍️",
-                            "button": "🔘",
-                            "list": "📃"
-                        }
-                        icon = type_icons.get(field.field_type, "📄")
-                        
-                        st.markdown(f"{icon} **{field.field_label}**")
-                        field_info = f"Type: **{field.field_type}** | Page: **{field.page}** | ID: `{field.field_id}`"
-                        st.caption(field_info)
-                    
-                    with col2:
-                        if field.field_type == 'text' and not field.to_questionnaire:
-                            # Database mapping dropdown
-                            mapping_key = f"mapping_{field.field_id}"
-                            current_value = field.db_mapping or ""
-                            
-                            options = ["-- Select Mapping --"] + ["📋 Move to Questionnaire"] + extractor.db_paths
-                            
-                            # Find index of current value
-                            try:
-                                if current_value in extractor.db_paths:
-                                    index = options.index(current_value)
-                                else:
-                                    index = 0
-                            except:
-                                index = 0
-                            
-                            selected = st.selectbox(
-                                "Map to",
-                                options,
-                                index=index,
-                                key=mapping_key,
-                                label_visibility="collapsed"
-                            )
-                            
-                            if selected != current_value and selected != "-- Select Mapping --":
-                                if selected == "📋 Move to Questionnaire":
-                                    field.to_questionnaire = True
-                                    field.is_mapped = False
-                                    field.db_mapping = None
-                                elif selected:
-                                    field.db_mapping = selected
-                                    field.is_mapped = True
-                                    field.to_questionnaire = False
-                                st.rerun()
-                        else:
-                            # Questionnaire checkbox
-                            quest_key = f"quest_{field.field_id}"
-                            include = st.checkbox(
-                                "Include in Questionnaire",
-                                value=field.to_questionnaire,
-                                key=quest_key
-                            )
-                            if include != field.to_questionnaire:
-                                field.to_questionnaire = include
-                                st.rerun()
-                    
-                    with col3:
-                        status = field.get_status()
-                        if "Mapped" in status:
-                            st.success(status)
-                        elif "Questionnaire" in status:
-                            st.warning(status)
-                        else:
-                            st.info(status)
-                
-                # Add separator between fields
-                st.markdown("<hr style='margin: 0.5rem 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
         
         # Export section
         st.markdown("---")
@@ -1367,6 +1254,29 @@ def main():
         - **Table view** for bulk operations
         - **Export** to TypeScript or JSON
         """)
+        
+        st.markdown("---")
+        
+        # Theme toggle
+        st.markdown("### 🎨 Appearance")
+        dark_mode = st.checkbox("Dark Mode", value=False, key="dark_mode")
+        
+        if dark_mode:
+            st.markdown("""
+            <style>
+                .stApp { background: #1a1a1a; }
+                div[data-testid="stVerticalBlock"] > div { background: #2d2d2d; border-color: #444; }
+                .stMarkdown { color: #e0e0e0; }
+                h1, h2, h3 { color: #ffffff; }
+                .subtitle { color: #b0b0b0; }
+                .stTextInput > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
+                .stSelectbox > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
+                [data-testid="metric-container"] { background: #2d2d2d; border-color: #444; }
+                .filter-section { background: #2d2d2d; border-color: #444; }
+                .field-container { background: #2d2d2d; border-color: #444; }
+                .streamlit-expanderHeader { background: #2d2d2d; border-color: #444; color: #e0e0e0; }
+            </style>
+            """, unsafe_allow_html=True)
         
         st.markdown("---")
         
