@@ -8,8 +8,14 @@ from collections import defaultdict, OrderedDict
 import pandas as pd
 from dataclasses import dataclass, field
 import hashlib
-import openai
 from io import BytesIO
+
+# Try to import openai - make it optional
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
 
 # Configure page
 st.set_page_config(
@@ -994,15 +1000,21 @@ def main():
                 col1, col2, col3 = st.columns([1, 1, 1])
                 
                 with col1:
-                    if extractor.ai_mapper.has_api_key():
+                    if not OPENAI_AVAILABLE:
+                        st.error("❌ OpenAI not installed")
+                        st.caption("Run: pip install openai")
+                    elif extractor.ai_mapper.has_api_key():
                         st.success("✅ AI Ready (API key found)")
                     else:
                         st.warning("⚠️ No API key found in secrets")
                         st.caption("Add OPENAI_API_KEY to secrets.toml")
                 
                 with col2:
-                    if st.button("🎯 AI Auto-Map", type="primary", use_container_width=True):
-                        if extractor.ai_mapper.has_api_key():
+                    if st.button("🎯 AI Auto-Map", type="primary", use_container_width=True, 
+                                disabled=not OPENAI_AVAILABLE):
+                        if not OPENAI_AVAILABLE:
+                            st.error("Please install openai: pip install openai")
+                        elif extractor.ai_mapper.has_api_key():
                             count = extractor.auto_map_with_ai()
                             if count > 0:
                                 st.success(f"✨ AI mapped {count} fields with high confidence!")
