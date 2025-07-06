@@ -115,15 +115,13 @@ class PDFField:
     
     def __hash__(self):
         """Make PDFField hashable for deduplication"""
-        return hash((self.widget_name, self.part_number, self.item_number))
+        return hash((self.widget_name, self.field_id))
     
     def __eq__(self, other):
         """Check equality based on key fields"""
         if not isinstance(other, PDFField):
             return False
-        return (self.widget_name == other.widget_name and 
-                self.part_number == other.part_number and 
-                self.item_number == other.item_number)
+        return self.widget_name == other.widget_name and self.field_id == other.field_id
 
 class SmartUSCISExtractor:
     """Smart USCIS Form PDF Field Extractor with improved accuracy"""
@@ -131,13 +129,16 @@ class SmartUSCISExtractor:
     def __init__(self):
         self.init_session_state()
         self.db_paths = self._build_database_paths()
+        # Comprehensive part detection patterns
         self.part_patterns = [
-            r'Part\s+(\d+)\.?\s*[-–—]\s*([A-Z][^\.]+)',  # Part 1 - Information About You
-            r'Part\s+(\d+)\.?\s+([A-Z][^\.]+)',         # Part 1. Information About You
-            r'Part\s+(\d+)\.?\s*([A-Z])',               # Part 1. I
-            r'Part\s+(\d+)\.',                           # Part 1.
-            r'Part\s+(\d+)\s'                            # Part 1 
+            r'Part\s+(\d+)\.?\s*[-–—:]\s*([^\n\r]+)',  # Part 1 - Information About You
+            r'Part\s+(\d+)\.?\s+([A-Z][^\n\r]+)',      # Part 1. Information About You
+            r'Part\s+(\d+)\.\s*$',                      # Part 1. (at end of line)
+            r'Part\s+(\d+)\s+[-–—]',                   # Part 1 -
+            r'^Part\s+(\d+)\s*$',                       # Part 1 (standalone)
+            r'PART\s+(\d+)',                            # PART 1 (uppercase)
         ]
+        self.attorney_part_numbers = set()  # Track which parts are attorney/preparer
     
     def init_session_state(self):
         """Initialize session state"""
@@ -153,6 +154,8 @@ class SmartUSCISExtractor:
             st.session_state.one_by_one_mode = False
         if 'extraction_log' not in st.session_state:
             st.session_state.extraction_log = []
+        if 'part_info' not in st.session_state:
+            st.session_state.part_info = {}
     
     def _build_database_paths(self) -> List[str]:
         """Build flat list of all database paths"""
@@ -182,6 +185,8 @@ class SmartUSCISExtractor:
             st.session_state.fields_by_part = OrderedDict()
             st.session_state.current_field_index = 0
             st.session_state.extraction_log = []
+            st.session_state.part_info = {}
+            self.attorney_part_numbers = set()
             
             # Read PDF
             pdf_bytes = pdf_file.read()
@@ -194,33 +199,51 @@ class SmartUSCISExtractor:
             # Build comprehensive page analysis
             page_analysis = self._analyze_pdf_structure(doc)
             
+            # Log detected parts
+            st.session_state.extraction_log.append(f"Detected {len(page_analysis['parts'])} parts in the form")
+            for part_num, part_info in sorted(page_analysis['parts'].items()):
+                st.session_state.extraction_log.append(
+                    f"Part {part_num}: {part_info['title']} (Pages: {part_info['pages']})"
+                )
+            
             # Extract fields with improved logic
             all_fields = []
             seen_fields = set()  # For deduplication
             
-            # Process each part starting from Part 1
+            # Process each part
             for part_num in sorted(page_analysis['parts'].keys()):
-                if part_num == 0:  # Skip attorney/preparer sections
+                # Skip attorney/preparer parts
+                if part_num in self.attorney_part_numbers:
+                    st.session_state.extraction_log.append(f"Skipping Part {part_num} (Attorney/Preparer section)")
                     continue
                     
                 part_info = page_analysis['parts'][part_num]
-                st.session_state.extraction_log.append(f"Processing Part {part_num}: {part_info['title']}")
+                st.session_state.extraction_log.append(f"\nProcessing Part {part_num}: {part_info['title']}")
+                st.session_state.part_info[part_num] = part_info['title']
                 
-                # Process pages for this part
+                # Process all pages for this part
+                part_field_count = 0
                 for page_num in part_info['pages']:
                     fields_on_page = self._extract_fields_from_page(
                         doc, page_num, part_num, page_analysis
                     )
                     
-                    # Deduplicate fields
+                    # Deduplicate and add fields
                     for field in fields_on_page:
-                        field_key = (field.widget_name, field.part_number, field.item_number)
-                        if field_key not in seen_fields:
-                            seen_fields.add(field_key)
+                        if field.widget_name not in seen_fields:
+                            seen_fields.add(field.widget_name)
+                            
+                            # AUTO-MOVE CHECKBOXES TO QUESTIONNAIRE
+                            if field.field_type in ['checkbox', 'radio']:
+                                field.to_questionnaire = True
+                                st.session_state.extraction_log.append(
+                                    f"Auto-moved {field.field_type}: {field.field_id} to questionnaire"
+                                )
+                            
                             all_fields.append(field)
-                            st.session_state.extraction_log.append(
-                                f"Added field: {field.field_id} - {field.field_label}"
-                            )
+                            part_field_count += 1
+                
+                st.session_state.extraction_log.append(f"Part {part_num} total: {part_field_count} fields")
             
             doc.close()
             
@@ -242,6 +265,12 @@ class SmartUSCISExtractor:
                     st.session_state.fields_by_part[part_key] = []
                 st.session_state.fields_by_part[part_key].append(field)
             
+            # Log summary
+            st.session_state.extraction_log.append(f"\n=== EXTRACTION COMPLETE ===")
+            st.session_state.extraction_log.append(f"Total fields extracted: {len(all_fields)}")
+            checkboxes = sum(1 for f in all_fields if f.field_type in ['checkbox', 'radio'])
+            st.session_state.extraction_log.append(f"Checkboxes/Radio auto-moved to questionnaire: {checkboxes}")
+            
             return True
             
         except Exception as e:
@@ -258,41 +287,73 @@ class SmartUSCISExtractor:
             'items_by_page': {}
         }
         
-        current_part = 0
-        
+        # First pass: detect all parts and their titles
+        all_parts = {}
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
             
-            # Detect part changes
+            # Look for part headers
             for pattern in self.part_patterns:
-                matches = re.finditer(pattern, text, re.MULTILINE)
+                matches = list(re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE))
                 for match in matches:
                     part_num = int(match.group(1))
-                    part_title = match.group(2) if len(match.groups()) > 1 else f"Part {part_num}"
+                    part_title = match.group(2).strip() if len(match.groups()) > 1 else f"Part {part_num}"
                     
-                    # Only process if it's a new part or Part 1 and we haven't started
-                    if part_num > current_part or (part_num == 1 and current_part == 0):
-                        current_part = part_num
-                        if part_num not in analysis['parts']:
-                            analysis['parts'][part_num] = {
-                                'title': part_title.strip(),
-                                'start_page': page_num,
-                                'pages': []
-                            }
-                        break
+                    # Clean title
+                    part_title = re.sub(r'\s+', ' ', part_title)
+                    part_title = part_title.split('\n')[0].strip()
+                    
+                    # Check if it's attorney/preparer section
+                    title_lower = part_title.lower()
+                    if any(keyword in title_lower for keyword in ['attorney', 'preparer', 'interpreter', 'contact information']):
+                        self.attorney_part_numbers.add(part_num)
+                    
+                    if part_num not in all_parts:
+                        all_parts[part_num] = {
+                            'title': part_title,
+                            'first_page': page_num,
+                            'matches': []
+                        }
+                    all_parts[part_num]['matches'].append((page_num, match.start()))
+        
+        # Second pass: determine page ranges for each part
+        sorted_parts = sorted(all_parts.keys())
+        for i, part_num in enumerate(sorted_parts):
+            part_info = all_parts[part_num]
             
-            # Skip pages before Part 1
-            if current_part == 0:
-                continue
-                
-            # Assign page to current part
-            analysis['page_to_part'][page_num] = current_part
-            if current_part in analysis['parts']:
-                analysis['parts'][current_part]['pages'].append(page_num)
+            # Determine pages for this part
+            start_page = part_info['first_page']
             
-            # Extract items on this page
-            analysis['items_by_page'][page_num] = self._extract_items_from_text(text, current_part)
+            # Find end page (start of next part or end of document)
+            if i + 1 < len(sorted_parts):
+                next_part = sorted_parts[i + 1]
+                end_page = all_parts[next_part]['first_page'] - 1
+            else:
+                end_page = len(doc) - 1
+            
+            # Create part entry
+            analysis['parts'][part_num] = {
+                'title': part_info['title'],
+                'start_page': start_page,
+                'pages': list(range(start_page, end_page + 1))
+            }
+            
+            # Map pages to parts
+            for page in range(start_page, end_page + 1):
+                analysis['page_to_part'][page] = part_num
+        
+        # Third pass: extract items from each page
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            text = page.get_text()
+            
+            # Get part number for this page
+            part_num = analysis['page_to_part'].get(page_num, 0)
+            
+            # Extract items
+            if part_num > 0:
+                analysis['items_by_page'][page_num] = self._extract_items_from_text(text, part_num)
         
         return analysis
     
@@ -311,35 +372,53 @@ class SmartUSCISExtractor:
         if not widgets:
             return fields
         
-        # Process widgets
-        field_counter = defaultdict(int)
-        
+        # Group widgets by position for better item association
+        widgets_by_position = []
         for widget in widgets:
             if not widget.field_name:
                 continue
                 
-            # Skip attorney/preparer fields
+            # Skip if this looks like an attorney field
             if self._is_attorney_field(widget.field_name, page_text):
                 continue
             
-            # Get widget position
             rect = widget.rect
-            widget_y = rect.y0
+            widgets_by_position.append({
+                'widget': widget,
+                'y_pos': rect.y0,
+                'x_pos': rect.x0,
+                'rect': (rect.x0, rect.y0, rect.x1, rect.y1)
+            })
+        
+        # Sort by position (top to bottom, left to right)
+        widgets_by_position.sort(key=lambda w: (w['y_pos'], w['x_pos']))
+        
+        # Process widgets
+        field_counter = defaultdict(int)
+        item_tracker = {}  # Track fields per item for sub-lettering
+        
+        for widget_data in widgets_by_position:
+            widget = widget_data['widget']
             
             # Match to item
             item_info = self._match_widget_to_item_improved(
-                widget, widget_y, items_on_page, page_text
+                widget, widget_data['y_pos'], items_on_page, page_text
             )
             
-            # Generate field ID
-            field_counter[item_info['number']] += 1
-            sub_index = field_counter[item_info['number']]
+            # Track fields per item for proper sub-lettering
+            if item_info['number'] not in item_tracker:
+                item_tracker[item_info['number']] = []
             
-            if sub_index == 1:
+            item_tracker[item_info['number']].append(widget)
+            field_index = len(item_tracker[item_info['number']])
+            
+            # Generate field ID with proper sub-lettering
+            if field_index == 1:
                 field_id = f"P{part_num}_{item_info['number']}"
             else:
-                # For multiple fields in same item
-                field_id = f"P{part_num}_{item_info['number']}_{chr(96 + sub_index)}"
+                # Use letters for sub-fields (a, b, c, etc.)
+                sub_letter = chr(96 + field_index)  # 97 is 'a'
+                field_id = f"P{part_num}_{item_info['number']}_{sub_letter}"
             
             # Create field
             pdf_field = PDFField(
@@ -351,12 +430,8 @@ class SmartUSCISExtractor:
                 field_type=self._get_field_type(widget.field_type),
                 page=page_num + 1,
                 value=widget.field_value or '',
-                widget_rect=(rect.x0, rect.y0, rect.x1, rect.y1)
+                widget_rect=widget_data['rect']
             )
-            
-            # Auto-assign checkboxes to questionnaire
-            if pdf_field.field_type in ['checkbox', 'radio']:
-                pdf_field.to_questionnaire = True
             
             fields.append(pdf_field)
         
@@ -376,6 +451,9 @@ class SmartUSCISExtractor:
             'I-485': 'Application to Register Permanent Residence or Adjust Status',
             'I-765': 'Application for Employment Authorization',
             'I-131': 'Application for Travel Document',
+            'I-140': 'Immigrant Petition for Alien Worker',
+            'I-526': 'Immigrant Petition by Alien Entrepreneur',
+            'I-751': 'Petition to Remove Conditions on Residence',
             'N-400': 'Application for Naturalization',
             'N-600': 'Application for Certificate of Citizenship'
         }
@@ -397,19 +475,13 @@ class SmartUSCISExtractor:
         attorney_keywords = [
             'attorney', 'preparer', 'representative', 'g-28', 'g28',
             'bar number', 'bia', 'accredited', 'interpreter',
-            'Part 5', 'Part 6', 'Part 7', 'Part 8', 'Part 9'  # Common attorney parts
+            'signature of attorney', 'law firm', 'eligibility'
         ]
         
         field_lower = field_name.lower()
-        page_lower = page_text.lower()
         
         # Check field name
         if any(keyword in field_lower for keyword in attorney_keywords):
-            return True
-            
-        # Check if we're in attorney section of the page
-        if 'preparer' in page_lower and 'attorney' in page_lower:
-            # More sophisticated check could go here
             return True
             
         return False
@@ -420,17 +492,24 @@ class SmartUSCISExtractor:
         
         # Comprehensive patterns for item detection
         patterns = [
-            # Standard patterns
-            r'(?:Item\s+Number\s+)?(\d+)\.\s+([A-Z][^\n\r]+?)(?=\s*(?:\n|\r|$|Item|\d+\.))',
-            r'(?:Item\s+Number\s+)?(\d+[a-z])\.\s+([A-Z][^\n\r]+?)(?=\s*(?:\n|\r|$|Item|\d+[a-z]?\.))',
-            r'(\d+)\.\s*([A-Za-z][^\n\r]{5,100})',
-            
-            # Letter patterns (a., b., c.)
-            r'([a-z])\.\s+([A-Z][^\n\r]+?)(?=\s*(?:\n|\r|$|[a-z]\.))',
-            
+            # Item Number X. pattern
+            r'Item\s+Number\s+(\d+[a-z]?)\.\s*([^\n\r]+)',
+            # Standard numbered items
+            r'^(\d+)\.\s+([A-Z][^\n\r]+)',
+            r'^\s*(\d+)\.\s+([A-Z][^\n\r]+)',
+            # Letter items (a., b., c.)
+            r'^([a-z])\.\s+([A-Z][^\n\r]+)',
+            r'^\s*([a-z])\.\s+([A-Z][^\n\r]+)',
+            # Combined number-letter (1a., 2b.)
+            r'^(\d+[a-z])\.\s+([^\n\r]+)',
+            r'^\s*(\d+[a-z])\.\s+([^\n\r]+)',
             # Checkbox patterns
             r'□\s*(\d+[a-z]?)\.\s*([^\n\r]+)',
             r'\[\s*\]\s*(\d+[a-z]?)\.\s*([^\n\r]+)',
+            # With parentheses
+            r'^\((\d+[a-z]?)\)\s*([^\n\r]+)',
+            # Question format
+            r'^(\d+)\.\s*(?:Question:|Q:)?\s*([^\n\r]+)',
         ]
         
         seen_items = set()
@@ -438,23 +517,28 @@ class SmartUSCISExtractor:
         for pattern in patterns:
             matches = re.finditer(pattern, page_text, re.MULTILINE)
             for match in matches:
-                item_num = match.group(1)
+                item_num = match.group(1).strip()
                 item_label = match.group(2).strip()
                 
                 # Clean up label
                 item_label = re.sub(r'\s+', ' ', item_label)
                 item_label = re.sub(r'\s*\([^)]*\)\s*$', '', item_label)  # Remove trailing parentheses
+                item_label = re.sub(r'\s*\[[^\]]*\]\s*$', '', item_label)  # Remove trailing brackets
                 item_label = item_label.strip()
                 
                 # Skip if too short or already seen
-                if len(item_label) < 3 or item_num in seen_items:
+                if len(item_label) < 3 or (item_num, item_label) in seen_items:
                     continue
                 
-                seen_items.add(item_num)
+                # Skip page numbers or form numbers
+                if re.match(r'^(Page|Form|I-\d+)', item_label):
+                    continue
+                
+                seen_items.add((item_num, item_label))
                 
                 items.append({
                     'number': item_num,
-                    'label': item_label[:100],  # Limit length
+                    'label': item_label[:200],  # Limit length
                     'position': match.start(),
                     'y_position': self._estimate_y_position(page_text, match.start())
                 })
@@ -476,23 +560,38 @@ class SmartUSCISExtractor:
         """Improved widget to item matching with better heuristics"""
         widget_name_lower = widget.field_name.lower()
         
-        # First, try specific field patterns
+        # First, try specific field patterns based on common USCIS form fields
         specific_mappings = {
-            ('familyname', 'lastname'): {'number': '1a', 'label': 'Family Name (Last Name)'},
+            # Name fields
+            ('familyname', 'lastname', 'surname'): {'number': '1a', 'label': 'Family Name (Last Name)'},
             ('givenname', 'firstname'): {'number': '1b', 'label': 'Given Name (First Name)'},
-            ('middlename',): {'number': '1c', 'label': 'Middle Name'},
-            ('alien', 'anumber', 'a-number'): {'number': '2', 'label': 'Alien Registration Number (A-Number)'},
+            ('middlename', 'middle'): {'number': '1c', 'label': 'Middle Name'},
+            # Common ID fields
+            ('alien', 'anumber', 'a-number', 'alienregistration'): {'number': '2', 'label': 'Alien Registration Number (A-Number)'},
             ('uscis', 'online', 'account'): {'number': '3', 'label': 'USCIS Online Account Number'},
-            ('date', 'birth', 'dob'): {'number': '4', 'label': 'Date of Birth'},
-            ('country', 'birth'): {'number': '5', 'label': 'Country of Birth'},
-            ('country', 'citizenship'): {'number': '6', 'label': 'Country of Citizenship'},
+            # Personal info
+            ('dateofbirth', 'birthdate', 'dob'): {'number': '4', 'label': 'Date of Birth'},
+            ('countryofbirth', 'birthcountry', 'cob'): {'number': '5', 'label': 'Country of Birth'},
+            ('countryofcitizenship', 'citizenship', 'nationality'): {'number': '6', 'label': 'Country of Citizenship or Nationality'},
             ('gender', 'sex'): {'number': '7', 'label': 'Gender'},
-            ('marital', 'status'): {'number': '8', 'label': 'Marital Status'},
-            ('ssn', 'social', 'security'): {'number': '9', 'label': 'U.S. Social Security Number'},
+            ('maritalstatus', 'marital'): {'number': '8', 'label': 'Marital Status'},
+            ('ssn', 'socialsecurity', 'social'): {'number': '9', 'label': 'U.S. Social Security Number'},
+            # Address fields
+            ('streetnumber', 'street', 'address1', 'streetaddress'): {'number': '10a', 'label': 'Street Number and Name'},
+            ('apt', 'apartment', 'suite', 'unit'): {'number': '10b', 'label': 'Apt./Ste./Flr. Number'},
+            ('city', 'town', 'citytown'): {'number': '10c', 'label': 'City or Town'},
+            ('state', 'province'): {'number': '10d', 'label': 'State'},
+            ('zipcode', 'zip', 'postalcode'): {'number': '10e', 'label': 'ZIP Code'},
+            ('country',): {'number': '10f', 'label': 'Country'},
+            # Contact info
+            ('daytimephone', 'dayphone', 'phoneday'): {'number': '11', 'label': 'Daytime Telephone Number'},
+            ('mobilephone', 'cellphone', 'mobile'): {'number': '12', 'label': 'Mobile Telephone Number'},
+            ('email', 'emailaddress'): {'number': '13', 'label': 'Email Address'},
         }
         
+        # Check specific mappings
         for keywords, mapping in specific_mappings.items():
-            if any(kw in widget_name_lower for kw in keywords):
+            if any(kw in widget_name_lower.replace('_', '').replace('-', '') for kw in keywords):
                 return mapping
         
         # Try to find closest item by Y position
@@ -503,7 +602,7 @@ class SmartUSCISExtractor:
             for item in items:
                 # Calculate distance
                 distance = abs(item.get('y_position', 0) - y_pos)
-                if distance < min_distance and distance < 50:  # Within 50 units
+                if distance < min_distance and distance < 100:  # Within reasonable distance
                     min_distance = distance
                     closest_item = item
             
@@ -513,7 +612,15 @@ class SmartUSCISExtractor:
                     'label': closest_item['label']
                 }
         
-        # Default fallback
+        # Default fallback - generate item number based on widget name
+        # Try to extract number from widget name
+        number_match = re.search(r'(\d+[a-z]?)', widget_name_lower)
+        if number_match:
+            return {
+                'number': number_match.group(1),
+                'label': self._extract_field_label(widget, page_text)
+            }
+        
         return {
             'number': '99',
             'label': self._extract_field_label(widget, page_text)
@@ -528,34 +635,53 @@ class SmartUSCISExtractor:
         # Try to extract from field name
         field_name = widget.field_name
         
-        # Remove common prefixes
+        # Remove common prefixes and clean up
         prefixes_to_remove = [
-            'form1[0].', '#subform[0].', 'Page1[0].', 'Page2[0].', 'Page3[0].',
-            'Pt1', 'Pt2', 'Pt3', 'Part1', 'Part2', 'Part3',
-            'TextField[', 'CheckBox[', 'RadioButton['
+            'form1[0].', '#subform[0].', '#subform[', 'Page1[0].', 'Page2[0].', 'Page3[0].',
+            'Page4[0].', 'Page5[0].', 'Page6[0].', 'Page7[0].', 'Page8[0].',
+            'Pg1_', 'Pg2_', 'Pg3_', 'Pg4_', 'Pg5_',
+            'P1_', 'P2_', 'P3_', 'P4_', 'P5_',
+            'Pt1_', 'Pt2_', 'Pt3_', 'Pt4_', 'Pt5_',
+            'Part1', 'Part2', 'Part3', 'Part4', 'Part5',
+            'TextField[', 'TextField1[', 'TextField2[',
+            'CheckBox[', 'CheckBox1[', 'CheckBox2[',
+            'RadioButton[', 'Radio[',
+            'DateField[', 'Date['
         ]
         
+        cleaned_name = field_name
         for prefix in prefixes_to_remove:
-            if field_name.startswith(prefix):
-                field_name = field_name[len(prefix):]
+            if cleaned_name.startswith(prefix):
+                cleaned_name = cleaned_name[len(prefix):]
+                break
         
         # Remove array indices and closing brackets
-        field_name = re.sub(r'\[\d+\]', '', field_name)
-        field_name = field_name.rstrip(']')
+        cleaned_name = re.sub(r'\[\d+\]', '', cleaned_name)
+        cleaned_name = cleaned_name.rstrip(']').rstrip('[')
+        cleaned_name = cleaned_name.strip('_')
         
         # Extract meaningful part
-        parts = field_name.split('.')
+        parts = cleaned_name.split('.')
         if parts:
             label = parts[-1]
-            # Convert camelCase to readable
+            
+            # Convert various naming conventions to readable format
+            # Handle camelCase
             label = re.sub(r'([a-z])([A-Z])', r'\1 \2', label)
-            label = label.replace('_', ' ').strip()
+            # Handle snake_case
+            label = label.replace('_', ' ')
+            # Handle abbreviations
+            label = label.replace('DOB', 'Date of Birth')
+            label = label.replace('SSN', 'Social Security Number')
+            label = label.replace('Apt', 'Apartment')
+            label = label.replace('Ste', 'Suite')
+            label = label.replace('Flr', 'Floor')
             
             # Capitalize appropriately
             words = label.split()
             label = ' '.join(word.capitalize() for word in words)
             
-            return label
+            return label.strip()
         
         return "Field"
     
@@ -574,6 +700,11 @@ class SmartUSCISExtractor:
         # Try letter only (for sub-items)
         if len(item_num) == 1 and item_num.isalpha():
             return (0, item_num)
+            
+        # Try to extract any number
+        numbers = re.findall(r'\d+', str(item_num))
+        if numbers:
+            return (int(numbers[0]), str(item_num))
             
         return (999, str(item_num))
     
@@ -610,31 +741,51 @@ class SmartUSCISExtractor:
         ts += f"// Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         ts += f"// Total Fields: {len(fields)} (DB: {sum(len(f) for f in db_fields.values())}, "
         ts += f"Questionnaire: {len(questionnaire_fields)})\n\n"
+        
+        # Add part information
+        ts += "// Form Structure:\n"
+        for part_num, part_title in sorted(st.session_state.part_info.items()):
+            part_fields = [f for f in fields if f.part_number == part_num]
+            ts += f"// Part {part_num}: {part_title} ({len(part_fields)} fields)\n"
+        ts += "\n"
+        
         ts += f"export const {form_name} = {{\n"
         
         # Add database mappings
         for obj, fields_list in sorted(db_fields.items()):
             ts += f"  {obj}Data: {{\n"
-            for field in sorted(fields_list, key=lambda f: (f.part_number, f.item_number)):
+            for field in sorted(fields_list, key=lambda f: (f.part_number, self._parse_item_number_for_sort(f.item_number))):
                 path = field.db_mapping.replace(f"{obj}.", "")
                 field_suffix = ":TextBox" if field.field_type == "text" else f":{field.field_type.title()}Box"
                 comment = f" // Part {field.part_number}, Item {field.item_number}: {field.field_label[:50]}"
+                if len(field.field_label) > 50:
+                    comment += "..."
                 ts += f'    "{field.field_id}{field_suffix}": "{path}",{comment}\n'
             ts = ts.rstrip(',\n') + '\n'
             ts += "  },\n\n"
         
-        # Add questionnaire fields
+        # Add questionnaire fields grouped by part
         if questionnaire_fields:
             ts += "  questionnaireData: {\n"
-            for field in sorted(questionnaire_fields, key=lambda f: (f.part_number, f.item_number)):
-                ts += f'    "{field.field_id}": {{\n'
-                ts += f'      description: "{field.field_label}",\n'
-                ts += f'      fieldType: "{field.field_type}",\n'
-                ts += f'      part: "Part {field.part_number}",\n'
-                ts += f'      item: "{field.item_number}",\n'
-                ts += f'      page: {field.page},\n'
-                ts += f'      required: true\n'
-                ts += "    },\n"
+            
+            # Group by part for better organization
+            questionnaire_by_part = defaultdict(list)
+            for field in questionnaire_fields:
+                questionnaire_by_part[field.part_number].append(field)
+            
+            for part_num in sorted(questionnaire_by_part.keys()):
+                ts += f"    // Part {part_num} - {st.session_state.part_info.get(part_num, 'Unknown')}\n"
+                for field in sorted(questionnaire_by_part[part_num], key=lambda f: self._parse_item_number_for_sort(f.item_number)):
+                    ts += f'    "{field.field_id}": {{\n'
+                    ts += f'      description: "{field.field_label}",\n'
+                    ts += f'      fieldType: "{field.field_type}",\n'
+                    ts += f'      part: {field.part_number},\n'
+                    ts += f'      item: "{field.item_number}",\n'
+                    ts += f'      page: {field.page},\n'
+                    ts += f'      required: true\n'
+                    ts += "    },\n"
+                ts += "\n"
+            
             ts = ts.rstrip(',\n') + '\n'
             ts += "  }\n"
         
@@ -645,7 +796,7 @@ class SmartUSCISExtractor:
     
     def generate_json(self, fields: List[PDFField]) -> str:
         """Generate JSON for questionnaire fields"""
-        questionnaire_fields = [f for f in fields if not f.is_mapped]
+        questionnaire_fields = [f for f in fields if not f.is_mapped or f.field_type in ['checkbox', 'radio']]
         
         # Group by part
         by_part = defaultdict(list)
@@ -658,12 +809,15 @@ class SmartUSCISExtractor:
             "title": st.session_state.form_info.get('form_title', 'Unknown Form'),
             "generated": datetime.now().isoformat(),
             "totalFields": len(questionnaire_fields),
+            "checkboxCount": sum(1 for f in questionnaire_fields if f.field_type in ['checkbox', 'radio']),
+            "textFieldCount": sum(1 for f in questionnaire_fields if f.field_type == 'text'),
             "sections": []
         }
         
         for part_num in sorted(by_part.keys()):
             section = {
-                "part": f"Part {part_num}",
+                "part": part_num,
+                "title": st.session_state.part_info.get(part_num, f"Part {part_num}"),
                 "fieldCount": len(by_part[part_num]),
                 "fields": []
             }
@@ -675,8 +829,19 @@ class SmartUSCISExtractor:
                     "item": field.item_number,
                     "type": field.field_type,
                     "page": field.page,
-                    "widgetName": field.widget_name  # Include for debugging
+                    "widgetName": field.widget_name,  # Include for debugging
+                    "required": True  # Default to required
                 }
+                
+                # Add validation rules for specific field types
+                if 'date' in field.field_label.lower():
+                    field_data["validation"] = {"type": "date", "format": "MM/DD/YYYY"}
+                elif 'email' in field.field_label.lower():
+                    field_data["validation"] = {"type": "email"}
+                elif 'phone' in field.field_label.lower() or 'telephone' in field.field_label.lower():
+                    field_data["validation"] = {"type": "phone"}
+                elif 'zip' in field.field_label.lower():
+                    field_data["validation"] = {"type": "zip"}
                 
                 section["fields"].append(field_data)
             
@@ -782,7 +947,7 @@ def render_header():
             border-radius: 8px;
             padding: 1rem;
             margin: 1rem 0;
-            max-height: 300px;
+            max-height: 400px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 0.875rem;
@@ -792,13 +957,46 @@ def render_header():
             padding: 0.25rem 0;
             border-bottom: 1px solid #f3f4f6;
         }
+        .metric-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            padding: 1.5rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #2563eb;
+            margin: 0.5rem 0;
+        }
+        .metric-label {
+            font-size: 0.875rem;
+            color: #6b7280;
+        }
+        .checkbox-indicator {
+            background: #fef3c7;
+            border: 1px solid #fbbf24;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .checkbox-indicator svg {
+            width: 20px;
+            height: 20px;
+            color: #f59e0b;
+        }
     </style>
     """, unsafe_allow_html=True)
     
     st.markdown("""
     <div class="main-header">
         <h1>📄 Smart USCIS Form Field Extractor</h1>
-        <p>Advanced extraction with accurate Part and Item structure</p>
+        <p>Advanced extraction with automatic checkbox handling</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -818,9 +1016,19 @@ def render_upload_tab(extractor: SmartUSCISExtractor):
             st.info(f"📄 **File:** {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
         with col2:
             if st.button("🔍 Extract Fields", type="primary", use_container_width=True):
-                with st.spinner("Analyzing PDF structure and extracting fields..."):
+                with st.spinner("Analyzing PDF structure and extracting all fields..."):
                     if extractor.extract_fields_from_pdf(uploaded_file):
-                        st.success(f"✅ Successfully extracted {len(st.session_state.extracted_fields)} unique fields!")
+                        st.success(f"✅ Successfully extracted {len(st.session_state.extracted_fields)} fields from {len(st.session_state.fields_by_part)} parts!")
+                        
+                        # Show checkbox auto-move notification
+                        checkboxes = sum(1 for f in st.session_state.extracted_fields if f.field_type in ['checkbox', 'radio'])
+                        if checkboxes > 0:
+                            st.markdown(f"""
+                            <div class="checkbox-indicator">
+                                ☑️ <strong>{checkboxes} checkboxes/radio buttons</strong> were automatically moved to questionnaire
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
                         st.rerun()
     
     # Display extracted fields
@@ -830,7 +1038,7 @@ def render_upload_tab(extractor: SmartUSCISExtractor):
         
         # Summary metrics
         fields = st.session_state.extracted_fields
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         
         with col1:
             st.metric("Form", st.session_state.form_info.get('form_number', 'Unknown'))
@@ -842,13 +1050,23 @@ def render_upload_tab(extractor: SmartUSCISExtractor):
             checkboxes = sum(1 for f in fields if f.field_type in ['checkbox', 'radio'])
             st.metric("Checkboxes", checkboxes)
         with col5:
+            text_fields = sum(1 for f in fields if f.field_type == 'text')
+            st.metric("Text Fields", text_fields)
+        with col6:
             st.metric("Pages", st.session_state.form_info.get('total_pages', 0))
         
         # Show extraction log
-        with st.expander("📝 Extraction Log", expanded=False):
+        with st.expander("📝 View Extraction Log", expanded=False):
             st.markdown('<div class="extraction-log">', unsafe_allow_html=True)
-            for log_entry in st.session_state.extraction_log[-50:]:  # Show last 50 entries
-                st.markdown(f'<div class="extraction-log-entry">{log_entry}</div>', unsafe_allow_html=True)
+            for log_entry in st.session_state.extraction_log:
+                if log_entry.startswith("==="):
+                    st.markdown(f'<div class="extraction-log-entry"><strong>{log_entry}</strong></div>', unsafe_allow_html=True)
+                elif log_entry.startswith("Part"):
+                    st.markdown(f'<div class="extraction-log-entry" style="color: #2563eb;"><strong>{log_entry}</strong></div>', unsafe_allow_html=True)
+                elif "Auto-moved" in log_entry:
+                    st.markdown(f'<div class="extraction-log-entry" style="color: #f59e0b;">{log_entry}</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="extraction-log-entry">{log_entry}</div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
         
         # Display by parts
@@ -860,8 +1078,12 @@ def render_upload_tab(extractor: SmartUSCISExtractor):
             checkbox_count = sum(1 for f in part_fields if f.field_type in ['checkbox', 'radio'])
             other_count = len(part_fields) - text_count - checkbox_count
             
+            # Get part title
+            part_num = int(part.split()[1])
+            part_title = st.session_state.part_info.get(part_num, "")
+            
             with st.expander(
-                f"**{part}** ({len(part_fields)} fields: {text_count} text, {checkbox_count} checkbox/radio, {other_count} other)", 
+                f"**{part}** - {part_title} ({len(part_fields)} fields: {text_count} text, {checkbox_count} checkbox/radio, {other_count} other)", 
                 expanded=(part == "Part 1")
             ):
                 # Create a clean table view
@@ -926,6 +1148,11 @@ def render_mapping_tab(extractor: SmartUSCISExtractor):
         if unmapped > 0:
             st.caption("⚠️ Will go to questionnaire")
     
+    # Show checkbox notification
+    checkboxes = sum(1 for f in fields if f.field_type in ['checkbox', 'radio'])
+    if checkboxes > 0:
+        st.info(f"ℹ️ All {checkboxes} checkbox/radio fields have been automatically moved to questionnaire")
+    
     # Quick actions
     st.markdown("### ⚡ Quick Actions")
     col1, col2, col3, col4 = st.columns(4)
@@ -942,30 +1169,33 @@ def render_mapping_tab(extractor: SmartUSCISExtractor):
                 st.rerun()
     
     with col2:
-        if st.button("☑️ All Checkboxes → Quest", use_container_width=True):
-            count = 0
-            for field in fields:
-                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
-                    field.to_questionnaire = True
-                    field.is_mapped = False
-                    field.db_mapping = None
-                    count += 1
-            if count > 0:
-                st.success(f"Moved {count} checkboxes to questionnaire")
-                st.rerun()
-    
-    with col3:
         if st.button("🗺️ Auto-map Common Fields", use_container_width=True):
             count = auto_map_common_fields(extractor)
             if count > 0:
                 st.success(f"Auto-mapped {count} fields")
                 st.rerun()
     
+    with col3:
+        # Move all text fields to questionnaire
+        if st.button("📝 All Text → Quest", use_container_width=True):
+            count = 0
+            for field in fields:
+                if field.field_type == 'text' and not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            if count > 0:
+                st.success(f"Moved {count} text fields to questionnaire")
+                st.rerun()
+    
     with col4:
         if st.button("🔄 Reset All Mappings", use_container_width=True):
             for field in fields:
                 field.is_mapped = False
-                field.to_questionnaire = False
+                # Keep checkboxes in questionnaire
+                if field.field_type in ['checkbox', 'radio']:
+                    field.to_questionnaire = True
+                else:
+                    field.to_questionnaire = False
                 field.db_mapping = None
             st.session_state.current_field_index = 0
             st.rerun()
@@ -982,10 +1212,10 @@ def auto_map_common_fields(extractor: SmartUSCISExtractor) -> int:
     count = 0
     fields = st.session_state.extracted_fields
     
-    # Common field mappings
+    # Comprehensive field mappings for USCIS forms
     auto_mappings = {
         # Name fields
-        r'family\s*name|last\s*name': 'beneficiary.Beneficiary.beneficiaryLastName',
+        r'family\s*name|last\s*name|surname': 'beneficiary.Beneficiary.beneficiaryLastName',
         r'given\s*name|first\s*name': 'beneficiary.Beneficiary.beneficiaryFirstName',
         r'middle\s*name': 'beneficiary.Beneficiary.beneficiaryMiddleName',
         
@@ -997,48 +1227,70 @@ def auto_map_common_fields(extractor: SmartUSCISExtractor) -> int:
         # Personal info
         r'date\s*of\s*birth|birth\s*date|dob': 'beneficiary.Beneficiary.beneficiaryDateOfBirth',
         r'country\s*of\s*birth': 'beneficiary.Beneficiary.beneficiaryCountryOfBirth',
-        r'country\s*of\s*citizenship': 'beneficiary.Beneficiary.beneficiaryCitizenOfCountry',
+        r'country\s*of\s*citizenship|nationality': 'beneficiary.Beneficiary.beneficiaryCitizenOfCountry',
         r'gender|sex': 'beneficiary.Beneficiary.beneficiaryGender',
         r'marital\s*status': 'beneficiary.Beneficiary.maritalStatus',
         
         # Contact info
-        r'daytime\s*telephone|day\s*phone': 'beneficiary.ContactInfo.daytimeTelephoneNumber',
-        r'mobile\s*telephone|cell\s*phone': 'beneficiary.ContactInfo.mobileTelephoneNumber',
+        r'daytime\s*(?:telephone|phone)|day\s*phone': 'beneficiary.ContactInfo.daytimeTelephoneNumber',
+        r'mobile\s*(?:telephone|phone)|cell\s*phone': 'beneficiary.ContactInfo.mobileTelephoneNumber',
         r'email\s*address': 'beneficiary.ContactInfo.emailAddress',
         
-        # Address fields
-        r'street\s*(?:number\s*and\s*)?name|street\s*address': 'beneficiary.MailingAddress.addressStreet',
-        r'apt.*number|apartment|suite': 'beneficiary.MailingAddress.addressAptSteFlrNumber',
-        r'city\s*(?:or\s*town)?': 'beneficiary.MailingAddress.addressCity',
-        r'^state$|state\s*(?:or\s*province)?': 'beneficiary.MailingAddress.addressState',
-        r'zip\s*code|postal\s*code': 'beneficiary.MailingAddress.addressZip',
-        r'^country$': 'beneficiary.MailingAddress.addressCountry',
+        # Mailing Address fields
+        r'(?:mailing\s*)?(?:street\s*(?:number\s*and\s*)?name|street\s*address)': 'beneficiary.MailingAddress.addressStreet',
+        r'(?:mailing\s*)?(?:apt|apartment|suite|unit)': 'beneficiary.MailingAddress.addressAptSteFlrNumber',
+        r'(?:mailing\s*)?(?:city|town)': 'beneficiary.MailingAddress.addressCity',
+        r'(?:mailing\s*)?state': 'beneficiary.MailingAddress.addressState',
+        r'(?:mailing\s*)?(?:zip\s*code|postal\s*code)': 'beneficiary.MailingAddress.addressZip',
+        r'(?:mailing\s*)?country': 'beneficiary.MailingAddress.addressCountry',
+        r'in\s*care\s*of|c/o': 'beneficiary.MailingAddress.inCareOfName',
+        
+        # Physical Address (if different from mailing)
+        r'physical\s*(?:street|address)': 'beneficiary.PhysicalAddress.addressStreet',
+        r'physical.*(?:city|town)': 'beneficiary.PhysicalAddress.addressCity',
+        r'physical.*state': 'beneficiary.PhysicalAddress.addressState',
+        r'physical.*(?:zip|postal)': 'beneficiary.PhysicalAddress.addressZip',
         
         # Document fields
         r'passport\s*number': 'beneficiary.PassportDetails.Passport.passportNumber',
         r'passport\s*(?:issue|issuance)\s*country': 'beneficiary.PassportDetails.Passport.passportIssueCountry',
         r'passport\s*(?:issue|issuance)\s*date': 'beneficiary.PassportDetails.Passport.passportIssueDate',
         r'passport\s*expir': 'beneficiary.PassportDetails.Passport.passportExpiryDate',
+        r'travel\s*document\s*number': 'beneficiary.TravelDocument.travelDocumentNumber',
+        r'travel.*country.*issuance': 'beneficiary.TravelDocument.countryOfIssuance',
         
         # Immigration status
         r'current\s*(?:nonimmigrant\s*)?status': 'beneficiary.VisaDetails.Visa.currentNonimmigrantStatus',
         r'date\s*(?:status\s*)?expires|expiration\s*date': 'beneficiary.VisaDetails.Visa.dateStatusExpires',
-        r'i-94\s*number|form\s*i-94': 'beneficiary.I94Details.I94.formI94ArrivalDepartureRecordNumber',
+        r'visa\s*number': 'beneficiary.VisaDetails.Visa.visaNumber',
+        r'i-94\s*number|form\s*i-94|arrival.*departure.*record': 'beneficiary.I94Details.I94.formI94ArrivalDepartureRecordNumber',
         r'date\s*of\s*(?:last\s*)?arrival': 'beneficiary.I94Details.I94.dateOfLastArrival',
         r'sevis\s*number': 'beneficiary.EducationDetails.studentEXTInfoSEVISNumber',
+        
+        # Biographic info
+        r'eye\s*color': 'beneficiary.BiographicInfo.eyeColor',
+        r'hair\s*color': 'beneficiary.BiographicInfo.hairColor',
+        r'height.*feet': 'beneficiary.BiographicInfo.heightFeet',
+        r'height.*inches': 'beneficiary.BiographicInfo.heightInches',
+        r'weight.*pounds': 'beneficiary.BiographicInfo.weightPounds',
+        r'race': 'beneficiary.BiographicInfo.race',
+        r'ethnicity': 'beneficiary.BiographicInfo.ethnicity',
     }
     
     for field in fields:
-        if field.is_mapped or field.to_questionnaire:
+        # Skip if already mapped, in questionnaire, or is a checkbox
+        if field.is_mapped or field.to_questionnaire or field.field_type in ['checkbox', 'radio']:
             continue
             
         label_lower = field.field_label.lower().strip()
         
+        # Try each mapping pattern
         for pattern, db_path in auto_mappings.items():
             if re.search(pattern, label_lower, re.IGNORECASE):
                 field.db_mapping = db_path
                 field.is_mapped = True
                 count += 1
+                st.session_state.extraction_log.append(f"Auto-mapped: {field.field_id} '{field.field_label}' → {db_path}")
                 break
     
     return count
@@ -1048,11 +1300,12 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
     fields = st.session_state.extracted_fields
     current_idx = st.session_state.current_field_index
     
-    # Skip already processed fields
-    unmapped_indices = [i for i, f in enumerate(fields) if not f.is_mapped and not f.to_questionnaire]
+    # Get unmapped text fields only (checkboxes already in questionnaire)
+    unmapped_indices = [i for i, f in enumerate(fields) 
+                       if not f.is_mapped and not f.to_questionnaire and f.field_type == 'text']
     
     if not unmapped_indices:
-        st.success("✅ All fields have been processed!")
+        st.success("✅ All text fields have been processed! Checkboxes are automatically in questionnaire.")
         col1, col2 = st.columns(2)
         with col1:
             if st.button("🔄 Review All Fields", use_container_width=True):
@@ -1078,7 +1331,7 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
     </div>
     """, unsafe_allow_html=True)
     
-    st.markdown(f"### Processing Field {processed + 1} of {len(fields)} ({len(unmapped_indices)} remaining)")
+    st.markdown(f"### Processing Text Field {unmapped_indices.index(current_idx) + 1} of {len(unmapped_indices)}")
     
     # Current field
     field = fields[current_idx]
@@ -1089,18 +1342,14 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
     # Field information
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.markdown(f'<div class="field-id">Part {field.part_number}, Item {field.item_number}</div>', unsafe_allow_html=True)
+        part_title = st.session_state.part_info.get(field.part_number, f"Part {field.part_number}")
+        st.markdown(f'<div class="field-id">{part_title}, Item {field.item_number}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="field-label">{field.field_label}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="field-meta">Field ID: {field.field_id} | Type: {field.field_type} | Page: {field.page}</div>', unsafe_allow_html=True)
         st.markdown(f'<div class="field-meta">Widget: {field.widget_name}</div>', unsafe_allow_html=True)
     
     with col2:
-        if field.field_type == "checkbox":
-            st.info("☑️ Checkbox Field")
-        elif field.field_type == "radio":
-            st.info("⭕ Radio Field")
-        else:
-            st.info("📝 Text Field")
+        st.info("📝 Text Field")
     
     # Mapping options
     st.markdown("### 🎯 Map this field to:")
@@ -1121,8 +1370,11 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
                     field.to_questionnaire = False
                     st.success(f"✅ Mapped to: {suggestion}")
                     # Move to next unmapped
-                    next_unmapped = next((i for i in unmapped_indices if i > current_idx), unmapped_indices[0])
-                    st.session_state.current_field_index = next_unmapped
+                    next_idx = unmapped_indices.index(current_idx) + 1
+                    if next_idx < len(unmapped_indices):
+                        st.session_state.current_field_index = unmapped_indices[next_idx]
+                    else:
+                        st.session_state.current_field_index = len(fields)
                     st.rerun()
     
     # Manual selection
@@ -1156,8 +1408,11 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
                 field.is_mapped = True
                 field.to_questionnaire = False
                 # Move to next unmapped
-                next_unmapped = next((i for i in unmapped_indices if i > current_idx), unmapped_indices[0])
-                st.session_state.current_field_index = next_unmapped
+                next_idx = unmapped_indices.index(current_idx) + 1
+                if next_idx < len(unmapped_indices):
+                    st.session_state.current_field_index = unmapped_indices[next_idx]
+                else:
+                    st.session_state.current_field_index = len(fields)
                 st.rerun()
     
     # Or send to questionnaire
@@ -1168,15 +1423,21 @@ def render_one_by_one_mapping(extractor: SmartUSCISExtractor):
             field.is_mapped = False
             field.db_mapping = None
             # Move to next unmapped
-            next_unmapped = next((i for i in unmapped_indices if i > current_idx), unmapped_indices[0])
-            st.session_state.current_field_index = next_unmapped
+            next_idx = unmapped_indices.index(current_idx) + 1
+            if next_idx < len(unmapped_indices):
+                st.session_state.current_field_index = unmapped_indices[next_idx]
+            else:
+                st.session_state.current_field_index = len(fields)
             st.rerun()
     
     with col2:
         if st.button("⏭️ Skip for Now", use_container_width=True):
             # Move to next unmapped
-            next_unmapped = next((i for i in unmapped_indices if i > current_idx), unmapped_indices[0])
-            st.session_state.current_field_index = next_unmapped
+            next_idx = unmapped_indices.index(current_idx) + 1
+            if next_idx < len(unmapped_indices):
+                st.session_state.current_field_index = unmapped_indices[next_idx]
+            else:
+                st.session_state.current_field_index = 0
             st.rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1238,12 +1499,13 @@ def render_all_fields_mapping(extractor: SmartUSCISExtractor):
     if display_fields:
         col1, col2 = st.columns(2)
         with col1:
-            if st.button(f"📋 Send All {len(display_fields)} to Questionnaire"):
-                for field in display_fields:
-                    if not field.is_mapped:
+            unmapped_text = [f for f in display_fields if not f.is_mapped and not f.to_questionnaire and f.field_type == 'text']
+            if unmapped_text:
+                if st.button(f"📋 Send {len(unmapped_text)} Unmapped Text Fields to Questionnaire"):
+                    for field in unmapped_text:
                         field.to_questionnaire = True
-                st.success(f"Sent {len(display_fields)} fields to questionnaire")
-                st.rerun()
+                    st.success(f"Sent {len(unmapped_text)} fields to questionnaire")
+                    st.rerun()
     
     # Display fields with better layout
     for i, field in enumerate(display_fields):
@@ -1252,8 +1514,9 @@ def render_all_fields_mapping(extractor: SmartUSCISExtractor):
             
             with col1:
                 # Field info with better formatting
-                st.markdown(f"**{field.field_id}**")
-                st.markdown(f"Part {field.part_number}, Item {field.item_number} • {field.field_type} • Page {field.page}")
+                part_title = st.session_state.part_info.get(field.part_number, f"Part {field.part_number}")
+                st.markdown(f"**{field.field_id}** - {part_title}")
+                st.markdown(f"Item {field.item_number} • {field.field_type} • Page {field.page}")
                 st.caption(field.field_label[:80] + "..." if len(field.field_label) > 80 else field.field_label)
             
             with col2:
@@ -1262,44 +1525,50 @@ def render_all_fields_mapping(extractor: SmartUSCISExtractor):
                 elif field.to_questionnaire:
                     st.warning("📋 In Questionnaire")
                 else:
-                    # Quick mapping with search
-                    suggestions = get_smart_suggestions(field.field_label, field.item_number, extractor.db_paths)
-                    
-                    # Combine suggestions with all paths
-                    options = ["-- Select --", "📋 → Questionnaire"]
-                    if suggestions:
-                        options.append("--- Suggestions ---")
-                        options.extend(suggestions[:3])
-                        options.append("--- All Fields ---")
-                    options.extend(extractor.db_paths)
-                    
-                    selected = st.selectbox(
-                        "Map to",
-                        options,
-                        key=f"map_{field.field_id}_{i}",
-                        label_visibility="collapsed"
-                    )
-                    
-                    if selected == "📋 → Questionnaire":
-                        field.to_questionnaire = True
-                        st.rerun()
-                    elif selected not in ["-- Select --", "--- Suggestions ---", "--- All Fields ---"]:
-                        field.db_mapping = selected
-                        field.is_mapped = True
-                        st.rerun()
+                    # Only show mapping for text fields
+                    if field.field_type == 'text':
+                        # Quick mapping with search
+                        suggestions = get_smart_suggestions(field.field_label, field.item_number, extractor.db_paths)
+                        
+                        # Combine suggestions with all paths
+                        options = ["-- Select --", "📋 → Questionnaire"]
+                        if suggestions:
+                            options.append("--- Suggestions ---")
+                            options.extend(suggestions[:3])
+                            options.append("--- All Fields ---")
+                        options.extend(extractor.db_paths)
+                        
+                        selected = st.selectbox(
+                            "Map to",
+                            options,
+                            key=f"map_{field.field_id}_{i}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        if selected == "📋 → Questionnaire":
+                            field.to_questionnaire = True
+                            st.rerun()
+                        elif selected not in ["-- Select --", "--- Suggestions ---", "--- All Fields ---"]:
+                            field.db_mapping = selected
+                            field.is_mapped = True
+                            st.rerun()
+                    else:
+                        st.info(f"Auto-assigned to questionnaire ({field.field_type})")
             
             with col3:
                 # Quick action buttons
                 if field.is_mapped or field.to_questionnaire:
-                    if st.button("↩️ Reset", key=f"reset_{field.field_id}_{i}", help="Reset mapping"):
-                        field.is_mapped = False
-                        field.to_questionnaire = False
-                        field.db_mapping = None
-                        st.rerun()
+                    if field.field_type == 'text':  # Only allow reset for text fields
+                        if st.button("↩️ Reset", key=f"reset_{field.field_id}_{i}", help="Reset mapping"):
+                            field.is_mapped = False
+                            field.to_questionnaire = False
+                            field.db_mapping = None
+                            st.rerun()
                 else:
-                    if st.button("📋 Quest", key=f"quest_{field.field_id}_{i}", help="Send to questionnaire"):
-                        field.to_questionnaire = True
-                        st.rerun()
+                    if field.field_type == 'text':
+                        if st.button("📋 Quest", key=f"quest_{field.field_id}_{i}", help="Send to questionnaire"):
+                            field.to_questionnaire = True
+                            st.rerun()
             
             with col4:
                 # Visual indicator
@@ -1318,7 +1587,7 @@ def get_smart_suggestions(field_label: str, item_number: str, db_paths: List[str
     label_lower = field_label.lower().strip()
     
     # Remove common words for better matching
-    noise_words = ['the', 'of', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'if', 'any']
+    noise_words = ['the', 'of', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'if', 'any', 'your', 'please', 'provide']
     clean_label = ' '.join(word for word in label_lower.split() if word not in noise_words)
     
     # Score each path
@@ -1352,16 +1621,21 @@ def get_smart_suggestions(field_label: str, item_number: str, db_paths: List[str
         # Context bonus (check parent object)
         if len(path_parts) > 1:
             parent = path_parts[-2].lower()
-            if any(word in parent for word in ['beneficiary', 'contact', 'address', 'passport']):
-                # Check if context matches
-                if 'address' in label_lower and 'address' in parent:
-                    score += 30
-                elif 'passport' in label_lower and 'passport' in parent:
-                    score += 30
-                elif 'contact' in label_lower and 'contact' in parent:
-                    score += 30
+            # Check if context matches
+            context_matches = {
+                'address': ['street', 'city', 'state', 'zip', 'apt'],
+                'passport': ['passport', 'issue', 'expir'],
+                'contact': ['phone', 'telephone', 'email', 'mobile'],
+                'visa': ['visa', 'status', 'nonimmigrant'],
+                'biographic': ['height', 'weight', 'eye', 'hair', 'race']
+            }
+            
+            for context, keywords in context_matches.items():
+                if context in parent:
+                    if any(kw in label_lower for kw in keywords):
+                        score += 30
         
-        # Special patterns
+        # Special patterns with higher scores
         special_patterns = {
             r'family\s*name|last\s*name': ['lastname', 'familyname', 'beneficiarylastname'],
             r'given\s*name|first\s*name': ['firstname', 'givenname', 'beneficiaryfirstname'],
@@ -1370,10 +1644,14 @@ def get_smart_suggestions(field_label: str, item_number: str, db_paths: List[str
             r'date.*birth|birth.*date|dob': ['dateofbirth', 'birthdate', 'beneficiarydateofbirth'],
             r'country.*birth': ['countryofbirth', 'birthcountry'],
             r'country.*citizenship': ['countryofcitizenship', 'citizenshipcountry'],
-            r'street|address.*line.*1': ['addressstreet', 'streetaddress'],
-            r'city|town': ['addresscity', 'city'],
-            r'state|province': ['addressstate', 'state'],
-            r'zip|postal': ['addresszip', 'zipcode', 'postalcode'],
+            r'street.*name|street.*address': ['addressstreet', 'streetaddress'],
+            r'city.*town': ['addresscity', 'city'],
+            r'state': ['addressstate', 'state'],
+            r'zip.*code|postal': ['addresszip', 'zipcode', 'postalcode'],
+            r'passport.*number': ['passportnumber'],
+            r'email': ['emailaddress', 'email'],
+            r'daytime.*phone': ['daytimetelephonenumber', 'daytimephone'],
+            r'mobile.*phone|cell': ['mobiletelephonenumber', 'mobilephone', 'cellphone'],
         }
         
         for pattern, field_patterns in special_patterns.items():
@@ -1404,13 +1682,17 @@ def render_export_tab(extractor: SmartUSCISExtractor):
     questionnaire = sum(1 for f in fields if f.to_questionnaire)
     unmapped = len(fields) - mapped - questionnaire
     
+    # Breakdown by type
+    checkboxes_quest = sum(1 for f in fields if f.to_questionnaire and f.field_type in ['checkbox', 'radio'])
+    text_quest = sum(1 for f in fields if f.to_questionnaire and f.field_type == 'text')
+    
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Fields", len(fields))
     with col2:
         st.metric("Database Mapped", mapped, f"{mapped/len(fields)*100:.0f}%")
     with col3:
-        st.metric("Questionnaire", questionnaire, f"{questionnaire/len(fields)*100:.0f}%")
+        st.metric("Questionnaire", questionnaire, f"📋 {checkboxes_quest} ☑️ {text_quest}")
     with col4:
         st.metric("Unmapped", unmapped, "⚠️" if unmapped > 0 else "✅")
     
@@ -1437,9 +1719,6 @@ def render_export_tab(extractor: SmartUSCISExtractor):
     with col1:
         st.markdown("### 📝 TypeScript Export")
         st.markdown("Database field mappings for your application")
-        
-        # Options
-        include_comments = st.checkbox("Include field descriptions as comments", value=True)
         
         # Generate content
         ts_content = extractor.generate_typescript(fields)
@@ -1472,6 +1751,9 @@ def render_export_tab(extractor: SmartUSCISExtractor):
         json_content = extractor.generate_json(fields)
         json_data = json.loads(json_content)
         
+        # Show stats
+        st.info(f"📊 {json_data['checkboxCount']} checkboxes/radio, {json_data['textFieldCount']} text fields")
+        
         # Preview
         with st.expander("Preview JSON Output"):
             st.json(json_data)
@@ -1500,6 +1782,7 @@ def render_export_tab(extractor: SmartUSCISExtractor):
                 summary_data.append({
                     "Field ID": field.field_id,
                     "Part": field.part_number,
+                    "Part Title": st.session_state.part_info.get(field.part_number, ""),
                     "Item": field.item_number,
                     "Label": field.field_label,
                     "Type": field.field_type,
@@ -1535,8 +1818,11 @@ def render_export_tab(extractor: SmartUSCISExtractor):
             summary = f"""
 Form: {st.session_state.form_info.get('form_number', 'Unknown')}
 Total Fields: {len(fields)}
+Parts: {len(st.session_state.fields_by_part)}
 Mapped to Database: {mapped}
 In Questionnaire: {questionnaire + unmapped}
+- Checkboxes/Radio: {checkboxes_quest}
+- Text Fields: {text_quest + unmapped}
             """
             st.code(summary)
             st.info("Copy the above summary manually")
@@ -1558,21 +1844,31 @@ def generate_mapping_report(extractor: SmartUSCISExtractor) -> str:
 - **Total Fields Extracted**: {len(fields)}
 - **Fields Mapped to Database**: {sum(1 for f in fields if f.is_mapped)}
 - **Fields in Questionnaire**: {sum(1 for f in fields if f.to_questionnaire or (not f.is_mapped and not f.to_questionnaire))}
+  - **Checkboxes/Radio (Auto)**: {sum(1 for f in fields if f.field_type in ['checkbox', 'radio'])}
+  - **Text Fields**: {sum(1 for f in fields if f.to_questionnaire and f.field_type == 'text')}
 - **Unique Parts**: {len(st.session_state.fields_by_part)}
 
-## Field Mappings by Part
-
+## Parts Overview
 """
     
+    for part_num, part_title in sorted(st.session_state.part_info.items()):
+        part_fields = [f for f in fields if f.part_number == part_num]
+        report += f"- **Part {part_num}**: {part_title} ({len(part_fields)} fields)\n"
+    
+    report += "\n## Field Mappings by Part\n\n"
+    
     for part, part_fields in st.session_state.fields_by_part.items():
-        report += f"### {part}\n\n"
+        part_num = int(part.split()[1])
+        part_title = st.session_state.part_info.get(part_num, "")
+        report += f"### {part} - {part_title}\n\n"
         report += "| Field ID | Item | Label | Type | Status | Mapping |\n"
         report += "|----------|------|-------|------|--------|----------|\n"
         
-        for field in part_fields:
+        for field in sorted(part_fields, key=lambda f: extractor._parse_item_number_for_sort(f.item_number)):
             status = "Mapped" if field.is_mapped else ("Questionnaire" if field.to_questionnaire else "Unmapped")
             mapping = field.db_mapping or "-"
-            report += f"| {field.field_id} | {field.item_number} | {field.field_label[:40]}... | {field.field_type} | {status} | {mapping} |\n"
+            label = field.field_label[:40] + "..." if len(field.field_label) > 40 else field.field_label
+            report += f"| {field.field_id} | {field.item_number} | {label} | {field.field_type} | {status} | {mapping} |\n"
         
         report += "\n"
     
@@ -1628,6 +1924,12 @@ def main():
             with col2:
                 st.metric("Quest", quest)
             
+            # Type breakdown
+            checkboxes = sum(1 for f in fields if f.field_type in ['checkbox', 'radio'])
+            text_fields = sum(1 for f in fields if f.field_type == 'text')
+            st.caption(f"☑️ {checkboxes} checkboxes (auto-quest)")
+            st.caption(f"📝 {text_fields} text fields")
+            
             if unmapped > 0:
                 st.warning(f"⚠️ {unmapped} unmapped")
             
@@ -1639,29 +1941,33 @@ def main():
                 complete = sum(1 for f in part_fields if f.is_mapped or f.to_questionnaire)
                 part_progress = complete / len(part_fields) if part_fields else 0
                 
+                part_num = int(part.split()[1])
+                part_title = st.session_state.part_info.get(part_num, "")
+                
                 st.markdown(f"**{part}**")
+                if part_title:
+                    st.caption(part_title)
                 st.progress(part_progress)
                 st.caption(f"{complete}/{len(part_fields)} fields")
         else:
             st.info("Upload a PDF to begin")
         
         st.markdown("---")
-        st.markdown("### ℹ️ Features")
+        st.markdown("### ✨ Key Features")
         st.markdown("""
-        - ✅ **Accurate Extraction** - Proper Part/Item structure
-        - 🤖 **Smart Suggestions** - AI-powered field matching
-        - 🎯 **Flexible Mapping** - One-by-one or bulk mode
-        - 📋 **Auto-Questionnaire** - Checkboxes auto-sorted
-        - 📥 **Clean Export** - TypeScript & JSON formats
+        - ✅ **Extracts ALL parts** properly
+        - ☑️ **Auto-moves checkboxes** to questionnaire
+        - 🤖 **Smart field matching** with AI
+        - 📊 **Comprehensive export** options
         """)
         
         st.markdown("---")
         st.markdown("### 🚀 Quick Tips")
         st.markdown("""
-        1. Start with **Part 1** extraction
+        1. All checkboxes → auto questionnaire
         2. Use **Auto-map** for common fields
-        3. Send checkboxes to questionnaire
-        4. Review unmapped before export
+        3. Review unmapped before export
+        4. Check extraction log for details
         """)
 
 if __name__ == "__main__":
