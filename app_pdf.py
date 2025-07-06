@@ -18,27 +18,34 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for modern UI
+# Custom CSS for modern UI with better readability
 st.markdown("""
 <style>
-    /* Main theme */
+    /* Main theme - Light background for better readability */
     .stApp {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        background: #f8fafc;
     }
     
-    /* Cards */
-    .css-1r6slb0 {
-        background: rgba(30, 41, 59, 0.8) !important;
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(59, 130, 246, 0.2);
-        border-radius: 16px;
-        padding: 2rem;
+    /* Main content area */
+    .main .block-container {
+        padding-top: 2rem;
+        max-width: 1400px;
     }
     
-    /* Metrics */
+    /* Cards with better contrast */
+    div[data-testid="stVerticalBlock"] > div {
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Metrics with improved visibility */
     [data-testid="metric-container"] {
-        background: rgba(15, 23, 42, 0.8);
-        border: 1px solid rgba(59, 130, 246, 0.2);
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
         border-radius: 8px;
         padding: 1rem;
         text-align: center;
@@ -47,145 +54,231 @@ st.markdown("""
     [data-testid="metric-value"] {
         font-size: 2rem;
         font-weight: 700;
-        background: linear-gradient(to right, #3b82f6, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #1e40af;
     }
     
-    /* Buttons */
+    [data-testid="metric-label"] {
+        color: #64748b;
+        font-weight: 500;
+    }
+    
+    /* Buttons with better visibility */
     .stButton > button {
-        background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+        background: #3b82f6;
         color: white;
         border: none;
         padding: 0.75rem 1.5rem;
         border-radius: 8px;
         font-weight: 500;
-        transition: all 0.3s ease;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     }
     
     .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4);
+        background: #2563eb;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    }
+    
+    /* Secondary buttons */
+    .stButton > button[kind="secondary"] {
+        background: #e0e7ff;
+        color: #4338ca;
+        border: 1px solid #c7d2fe;
+    }
+    
+    .stButton > button[kind="secondary"]:hover {
+        background: #c7d2fe;
+        border-color: #a5b4fc;
     }
     
     /* File uploader */
     .stFileUploader {
-        background: rgba(59, 130, 246, 0.05);
-        border: 2px dashed rgba(59, 130, 246, 0.5);
+        background: #f8fafc;
+        border: 2px dashed #cbd5e1;
         border-radius: 12px;
         padding: 2rem;
     }
     
-    /* Selectbox */
+    .stFileUploader:hover {
+        border-color: #3b82f6;
+        background: #eff6ff;
+    }
+    
+    /* Selectbox with better contrast */
     .stSelectbox > div > div {
-        background: rgba(15, 23, 42, 0.8);
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        background: white;
+        border: 1px solid #e2e8f0;
         border-radius: 6px;
+        color: #1e293b;
     }
     
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 1rem;
-        border-bottom: 1px solid rgba(59, 130, 246, 0.2);
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 8px 8px 0 0;
-        padding: 0.5rem 1rem;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: rgba(59, 130, 246, 0.1);
-        border-bottom: 2px solid #3b82f6;
+    .stSelectbox > div > div:hover {
+        border-color: #3b82f6;
     }
     
     /* Progress bar */
     .stProgress > div > div {
-        background: linear-gradient(to right, #3b82f6, #8b5cf6);
+        background: #3b82f6;
     }
     
-    /* Success/Info/Warning messages */
+    /* Messages with better visibility */
     .stSuccess {
-        background: rgba(34, 197, 94, 0.1);
-        border: 1px solid rgba(34, 197, 94, 0.3);
+        background: #f0fdf4;
+        border: 1px solid #86efac;
         border-radius: 8px;
+        color: #166534;
     }
     
     .stInfo {
-        background: rgba(59, 130, 246, 0.1);
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        background: #eff6ff;
+        border: 1px solid #93c5fd;
         border-radius: 8px;
+        color: #1e40af;
     }
     
-    /* DataFrames */
-    .stDataFrame {
-        background: rgba(15, 23, 42, 0.5);
+    .stWarning {
+        background: #fef3c7;
+        border: 1px solid #fcd34d;
         border-radius: 8px;
+        color: #92400e;
     }
     
-    /* Expanders */
-    .streamlit-expanderHeader {
-        background: rgba(30, 41, 59, 0.8);
-        border: 1px solid rgba(59, 130, 246, 0.2);
+    .stError {
+        background: #fee2e2;
+        border: 1px solid #fca5a5;
         border-radius: 8px;
+        color: #991b1b;
     }
     
-    /* Headers */
+    /* Headers with better contrast */
     h1 {
-        background: linear-gradient(to right, #3b82f6, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+        color: #1e293b;
         text-align: center;
-        font-size: 3rem;
+        font-size: 2.5rem;
         margin-bottom: 0.5rem;
+        font-weight: 700;
     }
     
     h2 {
-        color: #e2e8f0;
+        color: #334155;
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
     }
     
     h3 {
-        color: #cbd5e1;
+        color: #475569;
+        font-size: 1.25rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+    }
+    
+    /* Text colors */
+    .stMarkdown {
+        color: #334155;
     }
     
     /* Custom classes */
     .subtitle {
         text-align: center;
-        color: #94a3b8;
+        color: #64748b;
         font-size: 1.1rem;
         margin-bottom: 2rem;
     }
     
-    .field-item {
-        background: rgba(30, 41, 59, 0.8);
-        border: 1px solid rgba(59, 130, 246, 0.2);
+    /* Field containers */
+    .field-container {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
         border-radius: 8px;
         padding: 1rem;
         margin-bottom: 0.75rem;
+        transition: all 0.2s ease;
     }
     
+    .field-container:hover {
+        border-color: #3b82f6;
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+    }
+    
+    /* Input fields */
+    .stTextInput > div > div {
+        background: white;
+        border: 1px solid #e2e8f0;
+        color: #1e293b;
+    }
+    
+    /* Checkboxes */
+    .stCheckbox > label {
+        color: #334155;
+    }
+    
+    /* Sidebar styling */
+    .css-1d391kg {
+        background: #f1f5f9;
+    }
+    
+    /* Expanders */
+    .streamlit-expanderHeader {
+        background: #f1f5f9;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        color: #334155;
+    }
+    
+    .streamlit-expanderHeader:hover {
+        background: #e2e8f0;
+    }
+    
+    /* Code blocks */
+    .stCodeBlock {
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 8px;
+    }
+    
+    /* Multiselect */
+    .stMultiSelect > div > div {
+        background: white;
+        border: 1px solid #e2e8f0;
+    }
+    
+    /* Status badges */
     .status-badge {
         display: inline-block;
         padding: 0.25rem 0.75rem;
         border-radius: 9999px;
         font-size: 0.75rem;
-        font-weight: 500;
+        font-weight: 600;
         text-transform: uppercase;
     }
     
     .status-mapped {
-        background: rgba(34, 197, 94, 0.2);
-        color: #22c55e;
+        background: #dcfce7;
+        color: #166534;
+        border: 1px solid #86efac;
     }
     
     .status-questionnaire {
-        background: rgba(251, 146, 60, 0.2);
-        color: #fb923c;
+        background: #fed7aa;
+        color: #9a3412;
+        border: 1px solid #fb923c;
     }
     
     .status-unmapped {
-        background: rgba(100, 116, 139, 0.2);
-        color: #94a3b8;
+        background: #f1f5f9;
+        color: #475569;
+        border: 1px solid #cbd5e1;
+    }
+    
+    /* Filter section */
+    .filter-section {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -277,6 +370,12 @@ class USCISExtractor:
             st.session_state.form_info = {}
         if 'pdf_processed' not in st.session_state:
             st.session_state.pdf_processed = False
+        if 'show_summary' not in st.session_state:
+            st.session_state.show_summary = False
+        if 'ts_generated' not in st.session_state:
+            st.session_state.ts_generated = False
+        if 'json_generated' not in st.session_state:
+            st.session_state.json_generated = False
     
     def _build_db_paths(self) -> List[str]:
         """Build list of all database paths"""
@@ -364,7 +463,11 @@ class USCISExtractor:
             return True
             
         except Exception as e:
-            st.error(f"Error extracting PDF: {str(e)}")
+            st.error(f"❌ Error extracting PDF: {str(e)}")
+            st.info("💡 Please ensure the PDF is a valid USCIS form with fillable fields.")
+            # Log error details in expander for debugging
+            with st.expander("Error Details", expanded=False):
+                st.code(str(e))
             return False
     
     def _detect_form_type(self, doc) -> dict:
@@ -673,7 +776,7 @@ def main():
     extractor = USCISExtractor()
     
     # Header
-    st.markdown("<h1>USCIS Form Reader & Mapper</h1>", unsafe_allow_html=True)
+    st.markdown("<h1>📄 USCIS Form Reader & Mapper</h1>", unsafe_allow_html=True)
     st.markdown('<p class="subtitle">Extract and map PDF form fields to database objects with intelligent automation</p>', unsafe_allow_html=True)
     
     # Main layout
@@ -685,7 +788,7 @@ def main():
         uploaded_file = st.file_uploader(
             "Choose a USCIS form PDF",
             type=['pdf'],
-            help="Supports all USCIS forms (I-90, I-129, I-485, etc.)"
+            help="Upload any USCIS form PDF (I-90, I-129, I-485, etc.). The tool will automatically detect the form type and extract all fillable fields."
         )
         
         if uploaded_file is not None:
@@ -734,12 +837,16 @@ def main():
             
             # Quick actions
             st.markdown("### ⚡ Quick Actions")
-            action_cols = st.columns(2)
+            action_cols = st.columns(3)
             
             with action_cols[0]:
-                if st.button("⚡ Auto-map Common Fields", use_container_width=True):
-                    count = extractor.auto_map_fields()
-                    st.success(f"✅ Auto-mapped {count} fields!")
+                if st.button("⚡ Auto-map Common Fields", use_container_width=True, help="Uses intelligent matching to map fields to database paths"):
+                    with st.spinner("Auto-mapping fields..."):
+                        count = extractor.auto_map_fields()
+                    if count > 0:
+                        st.success(f"✅ Successfully auto-mapped {count} fields!")
+                    else:
+                        st.info("ℹ️ No additional fields could be auto-mapped. Try manual mapping for remaining fields.")
                     st.rerun()
             
             with action_cols[1]:
@@ -751,110 +858,415 @@ def main():
                             count += 1
                     st.success(f"✅ Moved {count} fields to questionnaire!")
                     st.rerun()
+            
+            with action_cols[2]:
+                if st.button("📊 View Summary Report", use_container_width=True):
+                    st.session_state.show_summary = not st.session_state.get('show_summary', False)
+            
+            # Summary Report
+            if st.session_state.get('show_summary', False):
+                st.markdown("---")
+        
+        # Theme toggle
+        st.markdown("### 🎨 Appearance")
+        dark_mode = st.checkbox("Dark Mode", value=False, key="dark_mode")
+        
+        if dark_mode:
+            st.markdown("""
+            <style>
+                .stApp { background: #1a1a1a; }
+                div[data-testid="stVerticalBlock"] > div { background: #2d2d2d; border-color: #444; }
+                .stMarkdown { color: #e0e0e0; }
+                h1, h2, h3 { color: #ffffff; }
+                .subtitle { color: #b0b0b0; }
+                .stTextInput > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
+                .stSelectbox > div > div { background: #3d3d3d; color: #e0e0e0; border-color: #555; }
+                [data-testid="metric-container"] { background: #2d2d2d; border-color: #444; }
+                .filter-section { background: #2d2d2d; border-color: #444; }
+                .field-container { background: #2d2d2d; border-color: #444; }
+                .streamlit-expanderHeader { background: #2d2d2d; border-color: #444; color: #e0e0e0; }
+            </style>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+                st.markdown("### 📊 Field Mapping Summary Report")
+                
+                # Create summary dataframe
+                summary_data = []
+                for part_name, fields in st.session_state.fields_by_part.items():
+                    part_total = len(fields)
+                    part_mapped = sum(1 for f in fields if f.is_mapped)
+                    part_quest = sum(1 for f in fields if f.to_questionnaire and not f.is_mapped)
+                    part_unmapped = part_total - part_mapped - part_quest
+                    
+                    summary_data.append({
+                        "Part": part_name,
+                        "Total Fields": part_total,
+                        "✅ Mapped": part_mapped,
+                        "📋 Questionnaire": part_quest,
+                        "⚪ Unmapped": part_unmapped,
+                        "Completion %": f"{((part_mapped + part_quest) / part_total * 100):.1f}%"
+                    })
+                
+                summary_df = pd.DataFrame(summary_data)
+                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                
+                # Field type breakdown
+                st.markdown("#### Field Type Distribution")
+                type_cols = st.columns(4)
+                field_types_count = {}
+                for field in st.session_state.fields:
+                    field_types_count[field.field_type] = field_types_count.get(field.field_type, 0) + 1
+                
+                for idx, (ftype, count) in enumerate(sorted(field_types_count.items())):
+                    with type_cols[idx % 4]:
+                        st.metric(ftype.capitalize(), count)
+                
+                # Export summary button
+                st.markdown("---")
+                if st.button("📊 Export Complete Summary", use_container_width=True):
+                    summary_report = f"USCIS Form {st.session_state.form_info.get('form_number')} - Field Mapping Summary\n"
+                    summary_report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    summary_report += "="*60 + "\n\n"
+                    
+                    summary_report += "PART SUMMARY:\n"
+                    summary_report += summary_df.to_string(index=False)
+                    summary_report += "\n\nFIELD TYPE DISTRIBUTION:\n"
+                    for ftype, count in sorted(field_types_count.items()):
+                        summary_report += f"{ftype.capitalize()}: {count}\n"
+                    
+                    st.download_button(
+                        "💾 Download Summary Report",
+                        summary_report,
+                        f"{st.session_state.form_info.get('form_number', 'form')}_summary.txt",
+                        mime="text/plain"
+                    )
     
     # Fields section
     if st.session_state.pdf_processed:
         st.markdown("---")
         st.markdown("### 📝 Extracted Fields")
         
-        # Search
-        search_query = st.text_input("🔍 Search fields...", placeholder="Enter field name or label")
-        
-        # Tabs for parts
-        if st.session_state.fields_by_part:
-            tabs = st.tabs(list(st.session_state.fields_by_part.keys()))
+        # Advanced Filters Section
+        with st.container():
+            st.markdown("#### 🔍 Filter Options")
+            filter_cols = st.columns([2, 1, 1, 1, 1])
             
-            for idx, (part_name, fields) in enumerate(st.session_state.fields_by_part.items()):
-                with tabs[idx]:
-                    # Filter fields based on search
-                    filtered_fields = fields
-                    if search_query:
-                        query_lower = search_query.lower()
-                        filtered_fields = [f for f in fields if query_lower in f.field_label.lower() or query_lower in f.widget_name.lower()]
+            with filter_cols[0]:
+                search_query = st.text_input("Search fields", placeholder="Enter field name or label (e.g., 'name', 'address', 'ssn')", label_visibility="collapsed")
+            
+            with filter_cols[1]:
+                # Part filter
+                all_parts = ["All Parts"] + list(st.session_state.fields_by_part.keys())
+                selected_part = st.selectbox("Part", all_parts, key="part_filter")
+            
+            with filter_cols[2]:
+                # Status filter
+                status_options = ["All Status", "✅ Mapped", "📋 Questionnaire", "⚪ Unmapped"]
+                selected_status = st.selectbox("Status", status_options, key="status_filter")
+            
+            with filter_cols[3]:
+                # Field type filter
+                field_types = ["All Types"] + list(set(f.field_type for f in st.session_state.fields))
+                selected_type = st.selectbox("Type", field_types, key="type_filter")
+            
+            with filter_cols[4]:
+                # Page range filter
+                page_options = ["All Pages"] + [f"Page {i}" for i in range(1, st.session_state.form_info.get('pages', 1) + 1)]
+                selected_page = st.selectbox("Page", page_options, key="page_filter")
+        
+        st.markdown("---")
+        
+        # Apply filters
+        filtered_fields = st.session_state.fields.copy()
+        
+        # Search filter
+        if search_query:
+            query_lower = search_query.lower()
+            filtered_fields = [f for f in filtered_fields if query_lower in f.field_label.lower() or query_lower in f.widget_name.lower()]
+        
+        # Part filter
+        if selected_part != "All Parts":
+            part_num = int(selected_part.split()[1])
+            filtered_fields = [f for f in filtered_fields if f.part_number == part_num]
+        
+        # Status filter
+        if selected_status != "All Status":
+            if "Mapped" in selected_status:
+                filtered_fields = [f for f in filtered_fields if f.is_mapped]
+            elif "Questionnaire" in selected_status:
+                filtered_fields = [f for f in filtered_fields if f.to_questionnaire and not f.is_mapped]
+            elif "Unmapped" in selected_status:
+                filtered_fields = [f for f in filtered_fields if not f.is_mapped and not f.to_questionnaire]
+        
+        # Type filter
+        if selected_type != "All Types":
+            filtered_fields = [f for f in filtered_fields if f.field_type == selected_type]
+        
+        # Page filter
+        if selected_page != "All Pages":
+            page_num = int(selected_page.split()[1])
+            filtered_fields = [f for f in filtered_fields if f.page == page_num]
+        
+        # Display filter results count and stats
+        filter_stats_cols = st.columns(4)
+        with filter_stats_cols[0]:
+            st.info(f"📊 Showing {len(filtered_fields)} of {len(st.session_state.fields)} fields")
+        
+        # Quick stats for filtered fields
+        filtered_mapped = sum(1 for f in filtered_fields if f.is_mapped)
+        filtered_quest = sum(1 for f in filtered_fields if f.to_questionnaire and not f.is_mapped)
+        filtered_unmapped = len(filtered_fields) - filtered_mapped - filtered_quest
+        
+        with filter_stats_cols[1]:
+            st.success(f"✅ {filtered_mapped} Mapped")
+        with filter_stats_cols[2]:
+            st.warning(f"📋 {filtered_quest} Questionnaire")
+        with filter_stats_cols[3]:
+            st.info(f"⚪ {filtered_unmapped} Unmapped")
+        
+        # View options
+        view_cols = st.columns([3, 1])
+        with view_cols[0]:
+            # Option to show/hide mapped fields for cleaner view
+            show_mapped = st.checkbox("Show mapped fields", value=True)
+            if not show_mapped:
+                filtered_fields = [f for f in filtered_fields if not f.is_mapped]
+        
+        with view_cols[1]:
+            view_mode = st.radio("View Mode", ["Detailed", "Table"], horizontal=True)
+        
+        # Display fields
+        if not filtered_fields:
+            st.warning("No fields match the selected filters.")
+        else:
+            # Sort fields by part and page
+            filtered_fields.sort(key=lambda f: (f.part_number, f.page, f.field_label))
+            
+            if view_mode == "Table":
+                # Table view for quick overview
+                table_data = []
+                type_icons = {
+                    "text": "📝",
+                    "checkbox": "☑️",
+                    "radio": "⭕",
+                    "dropdown": "📋",
+                    "signature": "✍️",
+                    "button": "🔘",
+                    "list": "📃"
+                }
+                
+                for field in filtered_fields:
+                    icon = type_icons.get(field.field_type, "📄")
+                    table_data.append({
+                        "Part": f"Part {field.part_number}",
+                        "Field": f"{icon} {field.field_label}",
+                        "Type": field.field_type,
+                        "Page": field.page,
+                        "Status": field.get_status(),
+                        "Mapping": field.db_mapping or "-"
+                    })
+                
+                df = pd.DataFrame(table_data)
+                st.dataframe(df, use_container_width=True, hide_index=True, height=600)
+                
+                # Bulk operations
+                st.markdown("#### Bulk Operations")
+                bulk_cols = st.columns(3)
+                with bulk_cols[0]:
+                    if st.button("Move All Visible Unmapped to Questionnaire", use_container_width=True):
+                        count = 0
+                        for field in filtered_fields:
+                            if not field.is_mapped and not field.to_questionnaire:
+                                field.to_questionnaire = True
+                                count += 1
+                        st.success(f"Moved {count} fields to questionnaire!")
+                        st.rerun()
+                
+            else:
+                # Detailed view with individual controls
+                current_part = None
+                for field in filtered_fields:
+                    # Show part header when it changes
+                    if field.part_number != current_part:
+                        current_part = field.part_number
+                        st.markdown("---")
+                        st.markdown(f"#### 📑 Part {current_part}")
+                        # Show part-specific stats
+                        part_fields = [f for f in filtered_fields if f.part_number == current_part]
+                        part_mapped = sum(1 for f in part_fields if f.is_mapped)
+                        part_quest = sum(1 for f in part_fields if f.to_questionnaire and not f.is_mapped)
+                        st.caption(f"Total: {len(part_fields)} fields | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {len(part_fields) - part_mapped - part_quest}")
                     
-                    if not filtered_fields:
-                        st.info("No fields found matching your search.")
-                        continue
-                    
-                    # Display fields as dataframe for better performance
-                    fields_data = []
-                    for field in filtered_fields:
-                        fields_data.append({
-                            "Label": field.field_label,
-                            "Type": field.field_type,
-                            "Page": field.page,
-                            "Status": field.get_status(),
-                            "field_obj": field  # Keep reference for later
-                        })
-                    
-                    df = pd.DataFrame(fields_data)
-                    
-                    # Display fields with mapping controls
-                    for idx, row in df.iterrows():
-                        field = row['field_obj']
+                    # Field container
+                    with st.container():
+                        col1, col2, col3 = st.columns([3, 3, 1])
                         
-                        with st.container():
-                            col1, col2, col3 = st.columns([3, 3, 1])
+                        with col1:
+                            # Field type icon
+                            type_icons = {
+                                "text": "📝",
+                                "checkbox": "☑️",
+                                "radio": "⭕",
+                                "dropdown": "📋",
+                                "signature": "✍️",
+                                "button": "🔘",
+                                "list": "📃"
+                            }
+                            icon = type_icons.get(field.field_type, "📄")
                             
-                            with col1:
-                                st.markdown(f"**{field.field_label}**")
-                                st.caption(f"Type: {field.field_type} | Page: {field.page}")
-                            
-                            with col2:
-                                if field.field_type == 'text' and not field.to_questionnaire:
-                                    # Database mapping dropdown
-                                    mapping_key = f"mapping_{field.field_id}"
-                                    current_value = field.db_mapping or ""
-                                    
-                                    options = [""] + ["📋 Move to Questionnaire"] + extractor.db_paths
-                                    
-                                    # Find index of current value
-                                    try:
-                                        index = options.index(current_value) if current_value in options else 0
-                                    except:
+                            st.markdown(f"{icon} **{field.field_label}**")
+                            field_info = f"Type: **{field.field_type}** | Page: **{field.page}** | ID: `{field.field_id}`"
+                            st.caption(field_info)
+                        
+                        with col2:
+                            if field.field_type == 'text' and not field.to_questionnaire:
+                                # Database mapping dropdown
+                                mapping_key = f"mapping_{field.field_id}"
+                                current_value = field.db_mapping or ""
+                                
+                                options = ["-- Select Mapping --"] + ["📋 Move to Questionnaire"] + extractor.db_paths
+                                
+                                # Find index of current value
+                                try:
+                                    if current_value in extractor.db_paths:
+                                        index = options.index(current_value)
+                                    else:
                                         index = 0
-                                    
-                                    selected = st.selectbox(
-                                        "Map to",
-                                        options,
-                                        index=index,
-                                        key=mapping_key,
-                                        label_visibility="collapsed"
-                                    )
-                                    
-                                    if selected != current_value:
-                                        if selected == "📋 Move to Questionnaire":
-                                            field.to_questionnaire = True
-                                            field.is_mapped = False
-                                            field.db_mapping = None
-                                        elif selected:
-                                            field.db_mapping = selected
-                                            field.is_mapped = True
-                                            field.to_questionnaire = False
-                                        else:
-                                            field.db_mapping = None
-                                            field.is_mapped = False
-                                        st.rerun()
-                                else:
-                                    # Questionnaire checkbox
-                                    quest_key = f"quest_{field.field_id}"
-                                    include = st.checkbox(
-                                        "Include in Questionnaire",
-                                        value=field.to_questionnaire,
-                                        key=quest_key
-                                    )
-                                    if include != field.to_questionnaire:
-                                        field.to_questionnaire = include
-                                        st.rerun()
+                                except:
+                                    index = 0
+                                
+                                selected = st.selectbox(
+                                    "Map to",
+                                    options,
+                                    index=index,
+                                    key=mapping_key,
+                                    label_visibility="collapsed"
+                                )
+                                
+                                if selected != current_value and selected != "-- Select Mapping --":
+                                    if selected == "📋 Move to Questionnaire":
+                                        field.to_questionnaire = True
+                                        field.is_mapped = False
+                                        field.db_mapping = None
+                                    elif selected:
+                                        field.db_mapping = selected
+                                        field.is_mapped = True
+                                        field.to_questionnaire = False
+                                    st.rerun()
+                            else:
+                                # Questionnaire checkbox
+                                quest_key = f"quest_{field.field_id}"
+                                include = st.checkbox(
+                                    "Include in Questionnaire",
+                                    value=field.to_questionnaire,
+                                    key=quest_key
+                                )
+                                if include != field.to_questionnaire:
+                                    field.to_questionnaire = include
+                                    st.rerun()
+                        
+                        with col3:
+                            status = field.get_status()
+                            if "Mapped" in status:
+                                st.success(status)
+                            elif "Questionnaire" in status:
+                                st.warning(status)
+                            else:
+                                st.info(status)
+                    
+                    # Add separator between fields
+                    st.markdown("<hr style='margin: 0.5rem 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
+                # Show part header when it changes
+                if field.part_number != current_part:
+                    current_part = field.part_number
+                    st.markdown("---")
+                    st.markdown(f"#### 📑 Part {current_part}")
+                    # Show part-specific stats
+                    part_fields = [f for f in filtered_fields if f.part_number == current_part]
+                    part_mapped = sum(1 for f in part_fields if f.is_mapped)
+                    part_quest = sum(1 for f in part_fields if f.to_questionnaire and not f.is_mapped)
+                    st.caption(f"Total: {len(part_fields)} fields | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {len(part_fields) - part_mapped - part_quest}")
+                
+                # Field container
+                with st.container():
+                    col1, col2, col3 = st.columns([3, 3, 1])
+                    
+                    with col1:
+                        # Field type icon
+                        type_icons = {
+                            "text": "📝",
+                            "checkbox": "☑️",
+                            "radio": "⭕",
+                            "dropdown": "📋",
+                            "signature": "✍️",
+                            "button": "🔘",
+                            "list": "📃"
+                        }
+                        icon = type_icons.get(field.field_type, "📄")
+                        
+                        st.markdown(f"{icon} **{field.field_label}**")
+                        field_info = f"Type: **{field.field_type}** | Page: **{field.page}** | ID: `{field.field_id}`"
+                        st.caption(field_info)
+                    
+                    with col2:
+                        if field.field_type == 'text' and not field.to_questionnaire:
+                            # Database mapping dropdown
+                            mapping_key = f"mapping_{field.field_id}"
+                            current_value = field.db_mapping or ""
                             
-                            with col3:
-                                status = field.get_status()
-                                if "Mapped" in status:
-                                    st.success(status)
-                                elif "Questionnaire" in status:
-                                    st.warning(status)
+                            options = ["-- Select Mapping --"] + ["📋 Move to Questionnaire"] + extractor.db_paths
+                            
+                            # Find index of current value
+                            try:
+                                if current_value in extractor.db_paths:
+                                    index = options.index(current_value)
                                 else:
-                                    st.info(status)
+                                    index = 0
+                            except:
+                                index = 0
+                            
+                            selected = st.selectbox(
+                                "Map to",
+                                options,
+                                index=index,
+                                key=mapping_key,
+                                label_visibility="collapsed"
+                            )
+                            
+                            if selected != current_value and selected != "-- Select Mapping --":
+                                if selected == "📋 Move to Questionnaire":
+                                    field.to_questionnaire = True
+                                    field.is_mapped = False
+                                    field.db_mapping = None
+                                elif selected:
+                                    field.db_mapping = selected
+                                    field.is_mapped = True
+                                    field.to_questionnaire = False
+                                st.rerun()
+                        else:
+                            # Questionnaire checkbox
+                            quest_key = f"quest_{field.field_id}"
+                            include = st.checkbox(
+                                "Include in Questionnaire",
+                                value=field.to_questionnaire,
+                                key=quest_key
+                            )
+                            if include != field.to_questionnaire:
+                                field.to_questionnaire = include
+                                st.rerun()
+                    
+                    with col3:
+                        status = field.get_status()
+                        if "Mapped" in status:
+                            st.success(status)
+                        elif "Questionnaire" in status:
+                            st.warning(status)
+                        else:
+                            st.info(status)
+                
+                # Add separator between fields
+                st.markdown("<hr style='margin: 0.5rem 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
         
         # Export section
         st.markdown("---")
@@ -864,9 +1276,21 @@ def main():
         
         with export_cols[0]:
             st.markdown("#### TypeScript Export")
-            if st.button("📄 Generate TypeScript", use_container_width=True):
+            st.markdown("Generate TypeScript mappings for your application")
+            
+            ts_cols = st.columns(2)
+            with ts_cols[0]:
+                gen_ts = st.button("📄 Generate TypeScript", use_container_width=True, key="gen_ts")
+            with ts_cols[1]:
+                preview_ts = st.checkbox("Preview code", key="preview_ts")
+            
+            if gen_ts or st.session_state.get('ts_generated'):
+                st.session_state.ts_generated = True
                 ts_content = extractor.generate_typescript()
-                st.code(ts_content, language="typescript")
+                
+                if preview_ts:
+                    with st.expander("TypeScript Preview", expanded=True):
+                        st.code(ts_content, language="typescript", line_numbers=True)
                 
                 # Download button
                 st.download_button(
@@ -874,14 +1298,27 @@ def main():
                     data=ts_content,
                     file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
                     mime="text/plain",
-                    use_container_width=True
+                    use_container_width=True,
+                    type="primary"
                 )
         
         with export_cols[1]:
             st.markdown("#### JSON Export")
-            if st.button("📋 Generate JSON", use_container_width=True):
+            st.markdown("Generate JSON configuration for questionnaires")
+            
+            json_cols = st.columns(2)
+            with json_cols[0]:
+                gen_json = st.button("📋 Generate JSON", use_container_width=True, key="gen_json")
+            with json_cols[1]:
+                preview_json = st.checkbox("Preview code", key="preview_json")
+            
+            if gen_json or st.session_state.get('json_generated'):
+                st.session_state.json_generated = True
                 json_content = extractor.generate_json()
-                st.code(json_content, language="json")
+                
+                if preview_json:
+                    with st.expander("JSON Preview", expanded=True):
+                        st.code(json_content, language="json", line_numbers=True)
                 
                 # Download button
                 st.download_button(
@@ -889,38 +1326,82 @@ def main():
                     data=json_content,
                     file_name=f"{st.session_state.form_info.get('form_number', 'form')}.json",
                     mime="application/json",
-                    use_container_width=True
+                    use_container_width=True,
+                    type="primary"
                 )
     
     # Sidebar
     with st.sidebar:
-        st.markdown("### 📚 About")
+        st.markdown("### 📚 USCIS Form Reader")
         st.markdown("""
-        This tool extracts fields from USCIS PDF forms and maps them to database objects.
+        **Extract • Map • Export**
         
-        **Features:**
-        - 🔍 Automatic field extraction
-        - 🎯 Smart field mapping
-        - 📋 Questionnaire management
-        - 📄 TypeScript/JSON export
-        - ⚡ Auto-mapping capabilities
-        
-        **Supported Forms:**
-        - I-90 (Green Card Replacement)
-        - I-129 (Nonimmigrant Worker)
-        - I-485 (Adjustment of Status)
-        - I-765 (Employment Authorization)
-        - And many more...
+        This tool intelligently processes USCIS PDF forms and maps fields to your database structure.
         """)
         
         st.markdown("---")
-        st.markdown("### 🔧 Settings")
         
-        if st.button("🔄 Reset Application", use_container_width=True):
-            for key in ['fields', 'fields_by_part', 'form_info', 'pdf_processed']:
+        # Quick stats in sidebar
+        if st.session_state.pdf_processed:
+            st.markdown("### 📊 Current Session")
+            st.metric("Form", st.session_state.form_info.get('form_number', 'Unknown'))
+            
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            questionnaire = sum(1 for f in st.session_state.fields if f.to_questionnaire and not f.is_mapped)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Total Fields", total)
+                st.metric("Questionnaire", questionnaire)
+            with col2:
+                st.metric("Mapped", mapped)
+                st.metric("Unmapped", total - mapped - questionnaire)
+        
+        st.markdown("---")
+        
+        st.markdown("### 💡 Tips")
+        st.markdown("""
+        - **Auto-map** uses intelligent matching
+        - **Filters** help focus on specific fields
+        - **Table view** for bulk operations
+        - **Export** to TypeScript or JSON
+        """)
+        
+        st.markdown("---")
+        
+        st.markdown("### 🔧 Actions")
+        
+        if st.button("🔄 Reset Application", use_container_width=True, type="secondary"):
+            for key in ['fields', 'fields_by_part', 'form_info', 'pdf_processed', 'show_summary', 'ts_generated', 'json_generated']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.rerun()
+        
+        if st.session_state.pdf_processed:
+            if st.button("📊 Download Field Report", use_container_width=True):
+                # Create a detailed report
+                report = f"USCIS Form Field Report\n"
+                report += f"Form: {st.session_state.form_info.get('form_number')}\n"
+                report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                report += f"{'='*50}\n\n"
+                
+                for part_name, fields in st.session_state.fields_by_part.items():
+                    report += f"{part_name}\n{'-'*len(part_name)}\n"
+                    for field in fields:
+                        report += f"  {field.field_label}\n"
+                        report += f"    Type: {field.field_type} | Page: {field.page}\n"
+                        report += f"    Status: {field.get_status()}\n"
+                        if field.db_mapping:
+                            report += f"    Mapping: {field.db_mapping}\n"
+                        report += "\n"
+                
+                st.download_button(
+                    label="💾 Save Report",
+                    data=report,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}_report.txt",
+                    mime="text/plain"
+                )
 
 if __name__ == "__main__":
     main()
