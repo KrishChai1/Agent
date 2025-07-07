@@ -1,11 +1,11 @@
-import streamlit as st
-import json
+ import streamlit as st
 import re
+import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="🗂️ USCIS Smart Mapper", layout="wide")
-st.title("🗂️ USCIS Form AI Mapper — FINAL FIXED VERSION ✅")
+st.set_page_config(page_title="USCIS Form Smart Mapper", layout="wide")
+st.title("🗂️ USCIS Form Part-by-Part Smart Mapper — FINAL FULL DB VERSION ✅")
 
 # -------------------------------------------------------------------
 # Build flattened DB attributes list from uploaded objects
@@ -123,7 +123,7 @@ def extract_parts(text):
     # Merge "continued" lines into same part
     text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"\1", text, flags=re.IGNORECASE)
 
-    part_pattern = r"(Part\s+\d+\.?.*?)(?=Part\s+\d+\.|$)"
+    part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
     matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
 
     parts = {}
@@ -135,7 +135,7 @@ def extract_parts(text):
     return parts
 
 # -------------------------------------------------------------------
-# Final improved field extraction logic
+# Improved field extraction
 # -------------------------------------------------------------------
 def extract_fields(part_content):
     lines = part_content.split("\n")
@@ -153,8 +153,8 @@ def extract_fields(part_content):
         cleaned_lines.append(buffer.strip())
 
     # After merging
-    simple_pattern = r"(\d+\.\s+.+)"
     subfield_pattern = r"(\d+\.[a-z](?:\.[a-z])?\.\s+.+)"
+    simple_pattern = r"(\d+\.\s+.+)"
 
     subfields = [line for line in cleaned_lines if re.match(subfield_pattern, line, flags=re.IGNORECASE)]
     simplefields = [line for line in cleaned_lines if re.match(simple_pattern, line) and line not in subfields]
@@ -162,7 +162,7 @@ def extract_fields(part_content):
     all_fields = subfields + simplefields
     return all_fields
 
-uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
+uploaded_file = st.file_uploader("📄 Upload a USCIS PDF", type=["pdf"])
 
 if uploaded_file:
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
@@ -175,57 +175,50 @@ if uploaded_file:
     final_mappings = {}
     questionnaire_fields = []
 
-    st.header("🗂️ Review & Edit All Parts (Full, Sequential View)")
+    st.header("🗂️ Review & Edit Parts (Sequential Full View)")
 
     for part_name, part_content in parts.items():
         st.subheader(part_name)
         fields = extract_fields(part_content)
 
         if not fields:
-            st.warning(f"No numbered fields found in {part_name}.")
+            st.warning(f"⚠️ No numbered fields found in {part_name}.")
             continue
 
-        for i, field_label in enumerate(fields):
-            col1, col2, col3 = st.columns([4, 4, 2])
+        part_fields = []
+
+        for i, field in enumerate(fields):
+            col1, col2 = st.columns([4, 3])
             with col1:
-                st.text_input("Field Label", field_label, key=f"label_{part_name}_{i}", disabled=True)
+                st.markdown(f"**{field}**")
             with col2:
-                selected_db = st.selectbox(
-                    "DB Field",
+                chosen = st.selectbox(
+                    "Map to DB Object",
                     db_fields,
                     index=db_fields.index("None (Move to Questionnaire)"),
-                    key=f"db_{part_name}_{i}"
+                    key=f"{part_name}_{i}"
                 )
-            with col3:
-                move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{part_name}_{i}")
+            part_fields.append({"field": field, "mapping": chosen})
 
-            field_data = {
-                "label": field_label,
-                "db_field": selected_db if not move_to_q else "Questionnaire"
-            }
+        final_mappings[part_name] = part_fields
 
-            if move_to_q or selected_db == "None (Move to Questionnaire)":
-                questionnaire_fields.append(field_data)
-            else:
-                if part_name not in final_mappings:
-                    final_mappings[part_name] = []
-                final_mappings[part_name].append(field_data)
-
-    # Generate outputs
-    ts_content = "// Auto-generated TypeScript mappings\nexport const formMappings = " + json.dumps(final_mappings, indent=2) + ";"
-    ts_filename = f"uscis_mappings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ts"
-
-    questionnaire_json = {
-        "questionnaire_fields": questionnaire_fields,
-        "generated_at": datetime.now().isoformat()
-    }
-    json_filename = f"uscis_questionnaire_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    # Prepare JSON output
+    json_data = {"parts": final_mappings, "generated_at": datetime.now().isoformat()}
+    json_str = json.dumps(json_data, indent=2)
 
     st.header("⬇️ Download Files")
-    st.download_button("💾 Download TypeScript Mapping", data=ts_content, file_name=ts_filename, mime="text/plain")
-    st.download_button("💾 Download Questionnaire JSON", data=json.dumps(questionnaire_json, indent=2), file_name=json_filename, mime="application/json")
+    st.download_button("📥 Download JSON Mapping", data=json_str, file_name="uscis_mapping.json", mime="application/json")
 
-    st.success("✅ All parts displayed fully and sequentially. Download your files above!")
+    # TypeScript stub
+    ts_stub = "export interface FormFields {\n"
+    for part, fields in final_mappings.items():
+        for f in fields:
+            if f["mapping"] != "None (Move to Questionnaire)":
+                ts_stub += f"  {f['mapping'].replace('.', '_').replace(':', '').replace(' ', '_')}: string;\n"
+    ts_stub += "}\n"
+    st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
+
+    st.success("✅ All parts parsed, fields mapped, and downloads ready!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
