@@ -2,15 +2,24 @@ import streamlit as st
 import json
 import re
 import fitz  # PyMuPDF
+import os
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
-from openai import OpenAI
 from abc import ABC, abstractmethod
 import time
 import hashlib
 from datetime import datetime
 import traceback
+
+# Try to import OpenAI
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
+    st.warning("OpenAI library not installed. Install with: pip install openai")
 
 # Configure page
 st.set_page_config(
@@ -144,15 +153,37 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Initialize OpenAI client
-@st.cache_resource
 def get_openai_client():
-    """Get OpenAI client from secrets"""
+    """Get OpenAI client from secrets or environment"""
+    if not OPENAI_AVAILABLE:
+        return None
+        
     try:
-        api_key = st.secrets.get("OPENAI_API_KEY", None)
+        # Try multiple ways to get the API key
+        api_key = None
+        
+        # Method 1: Direct access
+        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
+            api_key = st.secrets['OPENAI_API_KEY']
+        
+        # Method 2: Using get method
+        if not api_key:
+            api_key = st.secrets.get('OPENAI_API_KEY', None)
+        
+        # Method 3: Try lowercase
+        if not api_key:
+            api_key = st.secrets.get('openai_api_key', None)
+        
+        # Method 4: Environment variable
+        if not api_key:
+            import os
+            api_key = os.environ.get('OPENAI_API_KEY', None)
+        
         if api_key:
             return OpenAI(api_key=api_key)
         return None
-    except Exception:
+    except Exception as e:
+        st.error(f"Error loading OpenAI client: {str(e)}")
         return None
 
 # Enhanced Database structure
@@ -244,10 +275,13 @@ class ExtractedField:
         else:
             self.field_id = f"pt{self.part_number}_field_{self.name[:10]}"
         
-        # Generate field hash
+        # Generate field hash for true uniqueness
         if not self.field_hash:
-            content = f"{self.name}_{self.part}_{self.page}_{self.item_number}_{self.label}"
+            content = f"{self.name}_{self.part}_{self.page}_{self.item_number}_{self.label}_{time.time()}"
             self.field_hash = hashlib.md5(content.encode()).hexdigest()[:12]
+        
+        # Append hash to field_id to ensure uniqueness
+        self.field_id = f"{self.field_id}_{self.field_hash[:6]}"
         
         # Set questionnaire key
         self.questionnaire_key = self.field_id
@@ -337,7 +371,8 @@ class ResearchAgent(Agent):
     
     def __init__(self):
         super().__init__("Research Agent", "Field Extraction & Analysis")
-        self.client = get_openai_client()
+        # Try to get client from session state first, then from secrets
+        self.client = st.session_state.get('openai_client', None) or get_openai_client()
     
     def execute(self, pdf_file, use_ai: bool = True) -> Optional[FormStructure]:
         """Extract fields with intelligent parsing"""
@@ -959,7 +994,8 @@ class AIMappingAgent(Agent):
     
     def __init__(self):
         super().__init__("AI Mapping Agent", "Intelligent Field Mapping")
-        self.client = get_openai_client()
+        # Try to get client from session state first, then from secrets
+        self.client = st.session_state.get('openai_client', None) or get_openai_client()
         
         # Enhanced mapping patterns
         self.mapping_patterns = {
@@ -1152,7 +1188,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
                            and not f.db_path and not f.is_questionnaire]
             
             if unmapped_text:
-                for field in unmapped_text[:5]:  # Show first 5
+                for idx, field in enumerate(unmapped_text[:5]):  # Show first 5
                     with st.container():
                         label = f"{field.item_number}. {field.label}" if field.item_number else field.label
                         st.text(label)
@@ -1174,7 +1210,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
                             selected = st.selectbox(
                                 "Map to",
                                 db_options,
-                                key=f"manual_map_{field.field_id}",
+                                key=f"manual_map_{field.field_id}_{idx}_{part_name.replace(' ', '_')}",
                                 label_visibility="collapsed"
                             )
                             
@@ -1194,7 +1230,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
                                     st.rerun()
                         
                         with col_b:
-                            if st.button("→ Quest", key=f"quest_btn_{field.field_id}"):
+                            if st.button("→ Quest", key=f"quest_btn_{field.field_id}_{idx}_{part_name.replace(' ', '_')}"):
                                 field.is_questionnaire = True
                                 field.manually_assigned = True
                                 field.manual_assignment_type = "questionnaire"
@@ -1210,7 +1246,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
             conditional = [f for f in fields if f.type in ["checkbox", "radio"]]
             
             if conditional:
-                for field in conditional[:10]:  # Show first 10
+                for idx, field in enumerate(conditional[:10]):  # Show first 10
                     col_a, col_b = st.columns([3, 1])
                     with col_a:
                         label = f"{field.item_number}. {field.label}" if field.item_number else field.label
@@ -1223,7 +1259,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
                         is_quest = st.checkbox(
                             "Quest", 
                             value=field.is_questionnaire,
-                            key=f"cond_quest_{field.field_id}"
+                            key=f"cond_quest_{field.field_id}_{idx}_{part_name.replace(' ', '_')}"
                         )
                         if is_quest != field.is_questionnaire:
                             field.is_questionnaire = is_quest
@@ -1486,17 +1522,77 @@ def main():
         st.session_state.selected_part = None
     
     # Check for OpenAI API key
-    openai_available = get_openai_client() is not None
+    openai_client = st.session_state.get('openai_client', None) or get_openai_client()
+    openai_available = openai_client is not None
     
     # Sidebar
     with st.sidebar:
         st.markdown("## ⚙️ Configuration")
         
-        if openai_available:
+        # Debug info for API key
+        if st.checkbox("Show Debug Info", value=False):
+            st.markdown("### 🔍 Debug Information")
+            try:
+                # Check if secrets exist
+                if hasattr(st, 'secrets'):
+                    st.info("✅ Secrets object exists")
+                    
+                    # Show available keys (without values)
+                    secret_keys = list(st.secrets.keys()) if hasattr(st.secrets, 'keys') else []
+                    if secret_keys:
+                        st.write("Available keys:", secret_keys)
+                    else:
+                        st.warning("No keys found in secrets")
+                else:
+                    st.error("❌ Secrets object not found")
+                    
+                # Check environment
+                import os
+                env_key = os.environ.get('OPENAI_API_KEY', None)
+                if env_key:
+                    st.info("✅ Found in environment variables")
+            except Exception as e:
+                st.error(f"Debug error: {str(e)}")
+        
+        if not OPENAI_AVAILABLE:
+            st.error("❌ OpenAI library not installed")
+            st.markdown("""
+            **Installation Required:**
+            ```bash
+            pip install openai
+            ```
+            
+            Or add to requirements.txt:
+            ```
+            openai>=1.0.0
+            ```
+            """)
+            openai_available = False
+        elif openai_available:
             st.success("✅ OpenAI API Key configured")
         else:
-            st.warning("⚠️ OpenAI API Key not found in secrets")
-            st.info("Add OPENAI_API_KEY to your secrets for AI features")
+            st.warning("⚠️ OpenAI API Key not found")
+            with st.expander("Setup Instructions"):
+                st.markdown("""
+                **Option 1: Streamlit Secrets**
+                1. Create `.streamlit/secrets.toml` in your project
+                2. Add: `OPENAI_API_KEY = "your-key"`
+                
+                **Option 2: Manual Entry**
+                Enter your API key below (temporary)
+                """)
+                
+                manual_key = st.text_input("OpenAI API Key", type="password", key="manual_api_key")
+                if manual_key and OPENAI_AVAILABLE:
+                    # Try to create client with manual key
+                    try:
+                        test_client = OpenAI(api_key=manual_key)
+                        # Store in session state
+                        st.session_state['openai_client'] = test_client
+                        st.success("✅ API Key accepted!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Invalid API key: {str(e)}")
         
         st.markdown("### 🤖 Agent Settings")
         use_ai = st.checkbox("Use AI Enhancement", value=openai_available, disabled=not openai_available)
