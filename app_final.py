@@ -7,9 +7,6 @@ from datetime import datetime
 st.set_page_config(page_title="USCIS Form Smart Mapper", layout="wide")
 st.title("🗂️ USCIS Form Part-by-Part Smart Mapper — FINAL FULL DB VERSION ✅")
 
-# -------------------------------------------------------------------
-# Build flattened DB attributes list from uploaded objects
-# -------------------------------------------------------------------
 def build_db_attributes():
     attributes = []
 
@@ -116,16 +113,10 @@ def build_db_attributes():
 
 db_fields = build_db_attributes()
 
-# -------------------------------------------------------------------
-# Extract parts starting from Part 1, including "continued" logic
-# -------------------------------------------------------------------
 def extract_parts(text):
-    # Merge "continued" lines into same part
     text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"\1", text, flags=re.IGNORECASE)
-
     part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
     matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
-
     parts = {}
     for match in matches:
         lines = match.strip().split("\n", 1)
@@ -134,33 +125,13 @@ def extract_parts(text):
         parts[part_title] = part_content
     return parts
 
-# -------------------------------------------------------------------
-# Improved field extraction
-# -------------------------------------------------------------------
 def extract_fields(part_content):
-    lines = part_content.split("\n")
-    cleaned_lines = []
-    buffer = ""
-    for line in lines:
-        line = line.strip()
-        if re.match(r"^\d+\.[a-z](?:\.[a-z])?\.", line, flags=re.IGNORECASE) or re.match(r"^\d+\.", line):
-            if buffer:
-                cleaned_lines.append(buffer.strip())
-            buffer = line
-        else:
-            buffer += " " + line
-    if buffer:
-        cleaned_lines.append(buffer.strip())
-
-    # After merging
-    subfield_pattern = r"(\d+\.[a-z](?:\.[a-z])?\.\s+.+)"
-    simple_pattern = r"(\d+\.\s+.+)"
-
-    subfields = [line for line in cleaned_lines if re.match(subfield_pattern, line, flags=re.IGNORECASE)]
-    simplefields = [line for line in cleaned_lines if re.match(simple_pattern, line) and line not in subfields]
-
-    all_fields = subfields + simplefields
-    return all_fields
+    part_content_clean = re.sub(r'\n', ' ', part_content)
+    part_content_clean = re.sub(r'\s+', ' ', part_content_clean)
+    field_pattern = r"(\d+\.(?:[a-z]\.)?\s+[^0-9]+?)(?=\d+\.(?:[a-z]\.)?\s|$)"
+    matches = re.findall(field_pattern, part_content_clean, flags=re.IGNORECASE)
+    fields = [m.strip() for m in matches]
+    return fields
 
 uploaded_file = st.file_uploader("📄 Upload a USCIS PDF", type=["pdf"])
 
@@ -173,7 +144,6 @@ if uploaded_file:
     parts = extract_parts(text)
 
     final_mappings = {}
-    questionnaire_fields = []
 
     st.header("🗂️ Review & Edit Parts (Sequential Full View)")
 
@@ -202,14 +172,12 @@ if uploaded_file:
 
         final_mappings[part_name] = part_fields
 
-    # Prepare JSON output
     json_data = {"parts": final_mappings, "generated_at": datetime.now().isoformat()}
     json_str = json.dumps(json_data, indent=2)
 
     st.header("⬇️ Download Files")
     st.download_button("📥 Download JSON Mapping", data=json_str, file_name="uscis_mapping.json", mime="application/json")
 
-    # TypeScript stub
     ts_stub = "export interface FormFields {\n"
     for part, fields in final_mappings.items():
         for f in fields:
