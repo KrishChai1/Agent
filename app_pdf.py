@@ -1,27 +1,36 @@
-import streamlit as st
+#!/usr/bin/env python3
+"""
+Smart USCIS Form Reader - Fixed Version
+This version properly handles all imports and global variables
+"""
+
+# Standard library imports first
+import os
 import json
 import re
-import fitz  # PyMuPDF
-import os
+import time
+import hashlib
+import traceback
+from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
 from abc import ABC, abstractmethod
-import time
-import hashlib
-from datetime import datetime
-import traceback
 
-# Configure page first
-st.set_page_config(
-    page_title="Smart USCIS Form Reader - Multi-Agent System",
-    page_icon="🤖",
-    layout="wide"
-)
+# Third-party imports with error handling
+import streamlit as st
 
-# Global variable for OpenAI availability - must be defined before any function that uses it
+# Initialize globals BEFORE any usage
 OPENAI_AVAILABLE = False
 OpenAI = None
+
+# Try to import PyMuPDF
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+    fitz = None
 
 # Try to import OpenAI
 try:
@@ -31,7 +40,7 @@ except ImportError:
     OPENAI_AVAILABLE = False
     OpenAI = None
 
-# Configure page
+# Configure page - AFTER all imports and globals
 st.set_page_config(
     page_title="Smart USCIS Form Reader - Multi-Agent System",
     page_icon="🤖",
@@ -162,14 +171,62 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Show warning if OpenAI is not available
+# Show warnings for missing dependencies
+if not PYMUPDF_AVAILABLE:
+    st.error("❌ PyMuPDF not installed. Please run: `pip install PyMuPDF`")
+    st.stop()
+
 if not OPENAI_AVAILABLE:
     st.warning("⚠️ OpenAI library not installed. The app will work with limited features. To enable AI features, install with: `pip install openai`")
 
-# Initialize OpenAI client
+# Enhanced Database structure
+UNIVERSAL_DB_STRUCTURE = {
+    "beneficiary": {
+        "PersonalInfo": ["beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName", 
+                        "beneficiaryDateOfBirth", "beneficiaryGender", "beneficiarySsn",
+                        "alienNumber", "alienRegistrationNumber", "uscisOnlineAccountNumber",
+                        "beneficiaryCountryOfBirth", "beneficiaryCitizenOfCountry",
+                        "maritalStatus", "numberOfChildren"],
+        "MailingAddress": ["addressStreet", "addressCity", "addressState", "addressZip", 
+                          "addressCountry", "addressAptSteFlrNumber", "addressNumber", "addressType",
+                          "inCareOfName", "addressProvince", "addressPostalCode"],
+        "PhysicalAddress": ["physicalAddressStreet", "physicalAddressCity", "physicalAddressState", 
+                           "physicalAddressZip", "physicalAddressCountry", "physicalAddressAptSteFlrNumber"],
+        "ContactInfo": ["daytimeTelephoneNumber", "mobileTelephoneNumber", "emailAddress",
+                       "workPhone", "eveningPhone", "faxNumber"],
+        "PassportDetails": ["passportNumber", "passportIssueCountry", "passportIssueDate", 
+                           "passportExpiryDate", "travelDocumentNumber"],
+        "VisaDetails": ["currentNonimmigrantStatus", "dateStatusExpires", "visaNumber",
+                       "visaIssueDate", "consulateLocation", "i94ArrivalDepartureNumber",
+                       "dateOfLastArrival", "durationOfStatus"]
+    },
+    "petitioner": {
+        "PersonalInfo": ["familyName", "givenName", "middleName", "companyOrOrganizationName",
+                        "petitionerType", "dateOfBirth", "ssn", "ein"],
+        "ContactInfo": ["daytimeTelephoneNumber", "mobileTelephoneNumber", "emailAddress",
+                       "workPhone", "faxNumber"],
+        "Address": ["addressStreet", "addressCity", "addressState", "addressZip", 
+                   "addressCountry", "addressNumber", "addressType"]
+    },
+    "case": {
+        "ProcessingInfo": ["requestedAction", "extensionDate", "changeOfStatusTo", 
+                          "reinstatementToStudentStatus", "numberOfPeopleInApplication"],
+        "RelatedForms": ["basedOnExtensionGrantedToFamily", "separatePetitionFiled",
+                        "formType", "receiptNumber", "dateFiledPreviousForm"],
+        "SchoolInfo": ["schoolName", "sevisIdNumber"]
+    }
+}
+
+# Initialize session state for custom fields
+if 'custom_db_fields' not in st.session_state:
+    st.session_state.custom_db_fields = {}
+
+# Initialize OpenAI client function
 def get_openai_client():
     """Get OpenAI client from secrets or environment"""
-    if not OPENAI_AVAILABLE:
+    global OPENAI_AVAILABLE, OpenAI
+    
+    if not OPENAI_AVAILABLE or not OpenAI:
         return None
         
     try:
@@ -214,66 +271,27 @@ def get_openai_client():
                 # Handle proxy issue on Streamlit Cloud
                 if 'proxies' in str(e):
                     # Try alternative initialization
-                    import openai
-                    openai.api_key = api_key
-                    # Return a wrapper that mimics the client interface
-                    class OpenAIWrapper:
-                        def __init__(self):
-                            self.chat = self
-                            self.completions = self
+                    try:
+                        import openai
+                        openai.api_key = api_key
+                        # Return a wrapper that mimics the client interface
+                        class OpenAIWrapper:
+                            def __init__(self):
+                                self.chat = self
+                                self.completions = self
+                            
+                            def create(self, **kwargs):
+                                return openai.ChatCompletion.create(**kwargs)
                         
-                        def create(self, **kwargs):
-                            return openai.ChatCompletion.create(**kwargs)
-                    
-                    return OpenAIWrapper()
+                        return OpenAIWrapper()
+                    except:
+                        return None
                 else:
-                    raise e
+                    return None
         return None
     except Exception as e:
         # Don't show error here, handle it in the UI
         return None
-
-# Enhanced Database structure
-UNIVERSAL_DB_STRUCTURE = {
-    "beneficiary": {
-        "PersonalInfo": ["beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName", 
-                        "beneficiaryDateOfBirth", "beneficiaryGender", "beneficiarySsn",
-                        "alienNumber", "alienRegistrationNumber", "uscisOnlineAccountNumber",
-                        "beneficiaryCountryOfBirth", "beneficiaryCitizenOfCountry",
-                        "maritalStatus", "numberOfChildren"],
-        "MailingAddress": ["addressStreet", "addressCity", "addressState", "addressZip", 
-                          "addressCountry", "addressAptSteFlrNumber", "addressNumber", "addressType",
-                          "inCareOfName", "addressProvince", "addressPostalCode"],
-        "PhysicalAddress": ["physicalAddressStreet", "physicalAddressCity", "physicalAddressState", 
-                           "physicalAddressZip", "physicalAddressCountry", "physicalAddressAptSteFlrNumber"],
-        "ContactInfo": ["daytimeTelephoneNumber", "mobileTelephoneNumber", "emailAddress",
-                       "workPhone", "eveningPhone", "faxNumber"],
-        "PassportDetails": ["passportNumber", "passportIssueCountry", "passportIssueDate", 
-                           "passportExpiryDate", "travelDocumentNumber"],
-        "VisaDetails": ["currentNonimmigrantStatus", "dateStatusExpires", "visaNumber",
-                       "visaIssueDate", "consulateLocation", "i94ArrivalDepartureNumber",
-                       "dateOfLastArrival", "durationOfStatus"]
-    },
-    "petitioner": {
-        "PersonalInfo": ["familyName", "givenName", "middleName", "companyOrOrganizationName",
-                        "petitionerType", "dateOfBirth", "ssn", "ein"],
-        "ContactInfo": ["daytimeTelephoneNumber", "mobileTelephoneNumber", "emailAddress",
-                       "workPhone", "faxNumber"],
-        "Address": ["addressStreet", "addressCity", "addressState", "addressZip", 
-                   "addressCountry", "addressNumber", "addressType"]
-    },
-    "case": {
-        "ProcessingInfo": ["requestedAction", "extensionDate", "changeOfStatusTo", 
-                          "reinstatementToStudentStatus", "numberOfPeopleInApplication"],
-        "RelatedForms": ["basedOnExtensionGrantedToFamily", "separatePetitionFiled",
-                        "formType", "receiptNumber", "dateFiledPreviousForm"],
-        "SchoolInfo": ["schoolName", "sevisIdNumber"]
-    }
-}
-
-# Initialize session state for custom fields
-if 'custom_db_fields' not in st.session_state:
-    st.session_state.custom_db_fields = {}
 
 @dataclass
 class ExtractedField:
@@ -1219,155 +1237,6 @@ class AIMappingAgent(Agent):
             self.log(f"AI mapping error: {str(e)}", "warning")
             return 0
 
-# Manual Assignment UI
-def render_manual_assignment(form_structure: FormStructure, part_name: str):
-    """Render manual assignment interface"""
-    st.markdown("### 🔧 Manual Field Assignment")
-    
-    fields = form_structure.parts.get(part_name, [])
-    if not fields:
-        st.warning("No fields in this part")
-        return
-    
-    # Create tabs
-    tab1, tab2 = st.tabs(["📝 Assign Individual Fields", "⚡ Bulk Operations"])
-    
-    with tab1:
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            st.markdown("**Unmapped Text Fields:**")
-            
-            # Get unmapped text fields
-            unmapped_text = [f for f in fields if f.type in ["text", "number", "date"] 
-                           and not f.db_path and not f.is_questionnaire]
-            
-            if unmapped_text:
-                for idx, field in enumerate(unmapped_text[:5]):  # Show first 5
-                    with st.container():
-                        label = f"{field.item_number}. {field.label}" if field.item_number else field.label
-                        st.text(label)
-                        
-                        col_a, col_b = st.columns([3, 1])
-                        with col_a:
-                            # Database path selector
-                            db_options = ["-- Select --", "→ Move to Questionnaire", "---"]
-                            
-                            # Add paths grouped by object
-                            for obj in ["beneficiary", "petitioner", "case"]:
-                                if obj in UNIVERSAL_DB_STRUCTURE:
-                                    db_options.append(f"═══ {obj.upper()} ═══")
-                                    for cat, fields_list in UNIVERSAL_DB_STRUCTURE[obj].items():
-                                        for field_name in fields_list[:10]:  # Show first 10
-                                            path = f"{obj}.{cat}.{field_name}" if cat else f"{obj}.{field_name}"
-                                            db_options.append(f"  {path}")
-                            
-                            selected = st.selectbox(
-                                "Map to",
-                                db_options,
-                                key=f"manual_map_{field.field_id}_{idx}_{part_name.replace(' ', '_')}",
-                                label_visibility="collapsed"
-                            )
-                            
-                            if selected and selected != "-- Select --" and not selected.startswith("═══"):
-                                if selected == "→ Move to Questionnaire":
-                                    field.is_questionnaire = True
-                                    field.manually_assigned = True
-                                    field.manual_assignment_type = "questionnaire"
-                                    form_structure.questionnaire_fields += 1
-                                    st.rerun()
-                                elif selected != "---":
-                                    field.db_path = selected.strip()
-                                    field.manually_assigned = True
-                                    field.manual_assignment_type = "database"
-                                    form_structure.manually_assigned_fields += 1
-                                    form_structure.mapped_fields += 1
-                                    st.rerun()
-                        
-                        with col_b:
-                            if st.button("→ Quest", key=f"quest_btn_{field.field_id}_{idx}_{part_name.replace(' ', '_')}"):
-                                field.is_questionnaire = True
-                                field.manually_assigned = True
-                                field.manual_assignment_type = "questionnaire"
-                                form_structure.questionnaire_fields += 1
-                                st.rerun()
-            else:
-                st.info("All text fields are mapped or assigned")
-        
-        with col2:
-            st.markdown("**Conditional Fields (Checkboxes/Radios):**")
-            
-            # Get conditional fields
-            conditional = [f for f in fields if f.type in ["checkbox", "radio"]]
-            
-            if conditional:
-                for idx, field in enumerate(conditional[:10]):  # Show first 10
-                    col_a, col_b = st.columns([3, 1])
-                    with col_a:
-                        label = f"{field.item_number}. {field.label}" if field.item_number else field.label
-                        if field.type == "checkbox":
-                            st.markdown(f'<div class="checkbox-field">{label}</div>', unsafe_allow_html=True)
-                        else:
-                            st.markdown(f'<div class="radio-field">{label}</div>', unsafe_allow_html=True)
-                    
-                    with col_b:
-                        is_quest = st.checkbox(
-                            "Quest", 
-                            value=field.is_questionnaire,
-                            key=f"cond_quest_{field.field_id}_{idx}_{part_name.replace(' ', '_')}"
-                        )
-                        if is_quest != field.is_questionnaire:
-                            field.is_questionnaire = is_quest
-                            if is_quest:
-                                field.manually_assigned = True
-                                field.manual_assignment_type = "questionnaire"
-                                form_structure.questionnaire_fields += 1
-                            st.rerun()
-            else:
-                st.info("No conditional fields found")
-    
-    with tab2:
-        st.markdown("**Bulk Assignment Operations:**")
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if st.button("📋 All Unmapped → Questionnaire", use_container_width=True):
-                count = 0
-                for field in fields:
-                    if not field.db_path and not field.is_questionnaire and not field.manually_assigned:
-                        field.is_questionnaire = True
-                        field.manually_assigned = True
-                        field.manual_assignment_type = "questionnaire"
-                        count += 1
-                form_structure.questionnaire_fields += count
-                st.success(f"✅ Moved {count} fields to questionnaire")
-                st.rerun()
-        
-        with col2:
-            if st.button("☑️ All Checkboxes → Questionnaire", use_container_width=True):
-                count = 0
-                for field in fields:
-                    if field.type == "checkbox" and not field.is_questionnaire:
-                        field.is_questionnaire = True
-                        field.manually_assigned = True
-                        field.manual_assignment_type = "questionnaire"
-                        count += 1
-                form_structure.questionnaire_fields += count
-                st.success(f"✅ Moved {count} checkboxes")
-                st.rerun()
-        
-        with col3:
-            if st.button("🔄 Reset Manual Assignments", use_container_width=True):
-                count = 0
-                for field in fields:
-                    if field.manually_assigned:
-                        field.manually_assigned = False
-                        field.manual_assignment_type = ""
-                        count += 1
-                st.success(f"✅ Reset {count} assignments")
-                st.rerun()
-
 # Field Display
 def render_field_card(field: ExtractedField, idx: int, part_name: str):
     """Render field card with all details"""
@@ -1803,9 +1672,6 @@ def main():
                 options=list(form_structure.parts.keys()),
                 index=0
             )
-            
-            # Manual assignment section
-            render_manual_assignment(form_structure, selected_part)
             
             # Display fields
             if selected_part:
