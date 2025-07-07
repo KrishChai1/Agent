@@ -114,7 +114,7 @@ def build_db_attributes():
 db_fields = build_db_attributes()
 
 def extract_parts(text):
-    text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"\1", text, flags=re.IGNORECASE)
+    text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"", text, flags=re.IGNORECASE)
     part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
     matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
     parts = {}
