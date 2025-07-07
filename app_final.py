@@ -50,7 +50,7 @@ if uploaded_file:
             short_prompt = f"""
             Extract field labels and example values from this USCIS form part.
             Suggest a likely DB object for each field: Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner, or None.
-            Return strictly valid JSON only, no extra text. Format:
+            Return **strict valid JSON only**, no commentary, no markdown. Format:
             {{
               "Field Label": {{"value": "example value", "suggested_db": "Beneficiary"}},
               ...
@@ -62,19 +62,31 @@ if uploaded_file:
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are an expert USCIS parser. Reply strictly in valid JSON only. No commentary."},
+                    {"role": "system", "content": "You are a precise USCIS parser. Reply strictly in valid JSON only. No explanations, no markdown, no comments."},
                     {"role": "user", "content": short_prompt}
                 ],
                 temperature=0
             )
-            raw_content = response.choices[0].message.content
+            raw_content = response.choices[0].message.content.strip()
 
+            # Try direct JSON parse first
             try:
                 fields_dict = json.loads(raw_content)
             except json.JSONDecodeError:
-                st.error(f"⚠️ Could not parse JSON for {part_name}. Showing raw output below for manual review.")
-                st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
-                continue
+                # Try to extract JSON content using regex as fallback
+                match = re.search(r"(\{.*\})", raw_content, re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                    try:
+                        fields_dict = json.loads(json_str)
+                    except json.JSONDecodeError:
+                        st.error(f"⚠️ Still couldn't parse JSON for {part_name}. Showing raw output below for manual review.")
+                        st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
+                        continue
+                else:
+                    st.error(f"⚠️ No JSON structure found in AI output for {part_name}. Showing raw output below.")
+                    st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
+                    continue
 
             with st.expander(f"📄 {part_name}", expanded=False):
                 for field_label, field_info in fields_dict.items():
