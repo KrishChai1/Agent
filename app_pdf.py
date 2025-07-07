@@ -18,7 +18,6 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    st.warning("OpenAI not installed. Running without AI assistance.")
 
 # Configure page
 st.set_page_config(
@@ -27,7 +26,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
 # CSS styling
 st.markdown("""
 <style>
@@ -73,6 +71,10 @@ st.markdown("""
     .status-unmapped {
         background: #f8d7da;
         color: #721c24;
+    }
+    /* Fix for select box width */
+    .stSelectbox > div > div {
+        width: 100% !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -249,6 +251,11 @@ class FieldExtractor:
                 'errors': []
             }
             
+            # Clear any existing widget keys to prevent duplicates
+            for key in list(st.session_state.keys()):
+                if key.startswith(('map_', 'quest_', 'manual_', 'apply_')):
+                    del st.session_state[key]
+            
             start_time = time.time()
             
             # Read PDF
@@ -264,12 +271,12 @@ class FieldExtractor:
             status_text = st.empty()
             
             all_fields = []
-            seen_widgets = set()
             
             # Build part mapping first
             part_mapping = self._analyze_document_structure(doc)
             
             # Extract fields page by page
+            field_counter = 0  # Global counter for unique IDs
             for page_num in range(len(doc)):
                 progress = (page_num + 1) / len(doc)
                 progress_bar.progress(progress)
@@ -289,14 +296,12 @@ class FieldExtractor:
                         for widget in widgets:
                             try:
                                 if widget and hasattr(widget, 'field_name') and widget.field_name:
-                                    widget_id = f"{widget.field_name}_{page_num}"
-                                    if widget_id not in seen_widgets:
-                                        seen_widgets.add(widget_id)
-                                        field = self._create_field_from_widget(
-                                            widget, part_info, page_num + 1
-                                        )
-                                        if field:
-                                            all_fields.append(field)
+                                    field_counter += 1
+                                    field = self._create_field_from_widget(
+                                        widget, part_info, page_num + 1, field_counter
+                                    )
+                                    if field:
+                                        all_fields.append(field)
                             except Exception as e:
                                 st.session_state.extraction_stats['errors'].append(
                                     f"Page {page_num + 1}: {str(e)}"
@@ -425,7 +430,7 @@ class FieldExtractor:
         
         return part_mapping
     
-    def _create_field_from_widget(self, widget, part_info: dict, page: int) -> Optional[PDFField]:
+    def _create_field_from_widget(self, widget, part_info: dict, page: int, field_counter: int) -> Optional[PDFField]:
         """Create field from widget"""
         try:
             widget_name = widget.field_name or ""
@@ -443,13 +448,17 @@ class FieldExtractor:
             item_match = re.search(r'(\d+\.?[a-z]?)', field_info['label'])
             item_number = item_match.group(1) if item_match else ""
             
-            # Create unique field ID
-            field_id = f"P{part_info['number']}_{field_info['key']}"
+            # Create truly unique field ID using counter
+            field_id = f"field_{field_counter}_{part_info['number']}_{page}"
             
             # Get value
             value = ""
             if hasattr(widget, 'field_value') and widget.field_value:
                 value = str(widget.field_value)
+            
+            # Ensure label is not empty
+            if not field_info['label']:
+                field_info['label'] = f"Field {field_counter}"
             
             return PDFField(
                 widget_name=widget_name,
@@ -471,6 +480,14 @@ class FieldExtractor:
     
     def _extract_field_info(self, widget_name: str) -> dict:
         """Extract field information from widget name"""
+        # Handle empty widget name
+        if not widget_name:
+            return {
+                'key': 'unnamed',
+                'label': 'Unnamed Field',
+                'original': ''
+            }
+        
         # Clean widget name
         clean_name = widget_name
         
@@ -498,6 +515,12 @@ class FieldExtractor:
         
         # Generate human-readable label
         field_label = self._generate_field_label(last_part)
+        
+        # Ensure we have non-empty values
+        if not field_key:
+            field_key = f"field_{abs(hash(widget_name)) % 10000}"
+        if not field_label:
+            field_label = last_part or "Unnamed Field"
         
         return {
             'key': field_key,
@@ -835,13 +858,9 @@ def render_mapping_interface(extractor: FieldExtractor):
                                 st.rerun()
                             
                             # Manual entry option
-                            manual_key = f"manual_{field.field_id}"
-                            if manual_key not in st.session_state:
-                                st.session_state[manual_key] = ""
-                            
                             manual = st.text_input(
                                 "Or enter custom path",
-                                key=manual_key,
+                                key=f"manual_{field.field_id}",
                                 placeholder="e.g., customer.custom.fieldName",
                                 label_visibility="collapsed"
                             )
@@ -850,6 +869,7 @@ def render_mapping_interface(extractor: FieldExtractor):
                                 field.db_mapping = manual
                                 field.is_mapped = True
                                 field.to_questionnaire = False
+                                st.success(f"Mapped to: {manual}")
                                 st.rerun()
                         else:
                             # For non-text fields
@@ -954,8 +974,9 @@ def main():
                 if st.session_state.pdf_processed:
                     if st.button("🔄 Reset", type="secondary", use_container_width=True):
                         # Clear all session state
+                        keys_to_keep = ['debug_mode']
                         for key in list(st.session_state.keys()):
-                            if key != 'debug_mode':
+                            if key not in keys_to_keep:
                                 del st.session_state[key]
                         extractor.init_session_state()
                         st.rerun()
