@@ -1,6 +1,6 @@
 import streamlit as st
 import json
-import fitz  # PyMuPDF for PDF parsing
+import fitz  # PyMuPDF
 import openai
 from io import BytesIO
 
@@ -11,8 +11,10 @@ st.set_page_config(page_title="USCIS Form Parser", layout="wide")
 st.title("📄 USCIS Form Smart Parser")
 
 st.write("""
-Upload a USCIS form (PDF). The app will extract fields, let you review or map them,
-and prepare a structured JSON output for your database or questionnaires.
+Upload a **USCIS form PDF**, extract fields using AI, and map them:
+- Map to your database objects (TS JSON)
+- Or move them to a questionnaire JSON
+- Download both JSONs separately
 """)
 
 # Upload file
@@ -29,10 +31,9 @@ if uploaded_file:
     st.subheader("🔎 Extracted Raw Text Preview")
     st.text_area("PDF Text", text, height=300)
 
-    # Send to OpenAI to get key-value pairs (basic example)
     prompt = f"""
     You are an expert USCIS form parser. Extract all identifiable fields as JSON keys with example values from this text.
-    Ignore formatting details and just focus on fields.
+    Ignore formatting details and focus on field names and sample values only.
     Text:
     {text}
     """
@@ -54,38 +55,48 @@ if uploaded_file:
             except:
                 parsed_json = {"raw_text": parsed_content}
 
-            st.subheader("🗂️ Parsed JSON")
+            st.subheader("🗂️ Parsed JSON (Preview)")
             st.json(parsed_json)
 
-            # Map fields manually
-            st.subheader("🔧 Map Fields to Database Objects")
+            # Initialize containers for TS and Questionnaire
+            ts_json = {}
+            questionnaire_json = {}
 
-            mapped_json = {}
+            st.subheader("🔧 Map Fields")
+
             for key, value in parsed_json.items():
-                col1, col2 = st.columns([2, 2])
+                col1, col2, col3 = st.columns([2, 2, 2])
                 with col1:
-                    st.write(f"**Field:** {key}")
-                    st.text_input("Value", value, key=f"value_{key}")
+                    st.markdown(f"**Field:** `{key}`")
                 with col2:
-                    db_obj = st.selectbox(
+                    selected_object = st.selectbox(
                         "Map to DB Object",
-                        ["Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner", "Questionnaire"],
-                        index=7,
+                        ["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"],
                         key=f"map_{key}"
                     )
-                    mapped_json[key] = {
-                        "value": value,
-                        "mapped_to": db_obj
-                    }
+                with col3:
+                    move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{key}")
 
-            # Download button
-            json_str = json.dumps(mapped_json, indent=2)
+                if move_to_q or selected_object == "None":
+                    questionnaire_json[key] = value
+                else:
+                    ts_json[key] = {"value": value, "mapped_to": selected_object}
+
+            # Download buttons
+            ts_str = json.dumps(ts_json, indent=2)
+            q_str = json.dumps(questionnaire_json, indent=2)
+
             st.download_button(
-                "📥 Download Mapped JSON",
-                data=json_str,
-                file_name="uscis_form_mapped.json",
+                "📥 Download TS JSON",
+                data=ts_str,
+                file_name="ts_mapped.json",
+                mime="application/json"
+            )
+            st.download_button(
+                "📥 Download Questionnaire JSON",
+                data=q_str,
+                file_name="questionnaire.json",
                 mime="application/json"
             )
 
-            st.success("✔ JSON ready! You can download it now.")
-
+            st.success("✔ JSON files ready for download!")
