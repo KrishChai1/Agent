@@ -5126,3 +5126,4400 @@ def main():
 
 if __name__ == "__main__":
     main()
+, '', key)
+    
+    def _generate_field_label(self, name: str) -> str:
+        """Generate human-readable label"""
+        # Remove common suffixes first
+        cleaned_name = re.sub(r'(?i)(checkbox|check|box|field|text)\d*
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        # Track used keys to avoid duplicates
+        used_keys = set()
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key if available and unique
+                key = field.question_key if field.question_key else field.field_key
+                
+                # Ensure unique key
+                base_key = key
+                counter = 1
+                while key in used_keys:
+                    key = f"{base_key}_{counter}"
+                    counter += 1
+                
+                used_keys.add(key)
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Track used names to avoid duplicates
+                used_names = set()
+                
+                # Add fields
+                for idx, field in enumerate(quest_fields):
+                    # Use question_key if available and unique, otherwise generate unique name
+                    if field.question_key and field.question_key not in used_names:
+                        control_name = field.question_key
+                    else:
+                        # Generate unique name
+                        base_name = field.field_key
+                        counter = 1
+                        control_name = base_name
+                        while control_name in used_names:
+                            control_name = f"{base_name}_{counter}"
+                            counter += 1
+                    
+                    used_names.add(control_name)
+                    
+                    control = {
+                        "name": control_name,
+                        "label": field.field_label if not field.item_number else f"{field.item_number}. {field.field_label}",
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = control_name
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    type_class = f"field-type {field.field_type}"
+                    meta_parts = [
+                        f'<span class="{type_class}">{field.field_type.upper()}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        quest_key_short = field.question_key.split('_')[-1] if '_' in field.question_key else field.question_key
+                        meta_parts.append(f'Quest: {quest_key_short}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
+, '', key)
+        key = re.sub(r'_+
+    
+    def _generate_field_label(self, name: str) -> str:
+        """Generate human-readable label"""
+        # Common label mappings
+        label_map = {
+            'familyname': 'Family Name (Last Name)',
+            'lastname': 'Last Name',
+            'givenname': 'Given Name (First Name)', 
+            'firstname': 'First Name',
+            'middlename': 'Middle Name',
+            'anumber': 'Alien Registration Number (A-Number)',
+            'uscisaccount': 'USCIS Online Account Number',
+            'dateofbirth': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'email': 'Email Address',
+            'phone': 'Phone Number',
+            'daytimephone': 'Daytime Phone Number',
+            'mobile': 'Mobile Phone Number',
+            'street': 'Street Address',
+            'city': 'City or Town',
+            'state': 'State',
+            'zip': 'ZIP Code',
+            'country': 'Country',
+            'barnumber': 'Bar Number',
+            'statebarnumber': 'State Bar Number',
+            'lawfirm': 'Law Firm Name',
+            'lawfirmname': 'Law Firm Name',
+            'licensingauthority': 'Licensing Authority',
+            'workphone': 'Work Phone Number',
+            'faxnumber': 'Fax Number'
+        }
+        
+        # Check for exact match
+        name_lower = name.lower().replace('_', '').replace('-', '').replace(' ', '')
+        for key, label in label_map.items():
+            if key in name_lower or name_lower in key:
+                return label
+        
+        # Convert to title case
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+        label = label.replace('_', ' ').replace('-', ' ')
+        label = ' '.join(label.split())
+        label = label.title()
+        
+        return label
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key for questionnaire items
+                key = field.question_key if field.question_key else field.field_key
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Add fields
+                for field in quest_fields:
+                    control = {
+                        "name": field.field_key,
+                        "label": field.field_label,
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = field.field_key
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    meta_parts = [
+                        f'<span class="field-type">{field.field_type}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        meta_parts.append(f'Quest: {field.question_key}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
+, '', key)  # Remove trailing underscores
+        
+        # Common abbreviations
+        abbreviations = {
+            'family_name': 'familyName',
+            'last_name': 'lastName',
+            'given_name': 'givenName',
+            'first_name': 'firstName',
+            'middle_name': 'middleName',
+            'date_of_birth': 'dob',
+            'social_security': 'ssn',
+            'alien_number': 'aNumber',
+            'email_address': 'email',
+            'phone_number': 'phone',
+            'street_address': 'street',
+            'zip_code': 'zip',
+            'state_bar_number': 'stateBarNumber',
+            'law_firm_name': 'lawFirmName',
+            'licensing_authority': 'licensingAuthority'
+        }
+        
+        key_lower = key.lower()
+        for pattern, replacement in abbreviations.items():
+            if pattern in key_lower:
+                return replacement
+        
+        # Convert to camelCase
+        parts = key.split('_')
+        if len(parts) > 1:
+            key = parts[0].lower() + ''.join(p.capitalize() for p in parts[1:] if p)
+        else:
+            key = key.lower() if key else 'field'
+        
+        # Ensure we have a valid key
+        if not key or key.isdigit():
+            key = 'field'
+        
+        # Limit length
+        if len(key) > 30:
+            key = key[:30]
+        
+        return key
+    
+    def _generate_field_label(self, name: str) -> str:
+        """Generate human-readable label"""
+        # Common label mappings
+        label_map = {
+            'familyname': 'Family Name (Last Name)',
+            'lastname': 'Last Name',
+            'givenname': 'Given Name (First Name)', 
+            'firstname': 'First Name',
+            'middlename': 'Middle Name',
+            'anumber': 'Alien Registration Number (A-Number)',
+            'uscisaccount': 'USCIS Online Account Number',
+            'dateofbirth': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'email': 'Email Address',
+            'phone': 'Phone Number',
+            'daytimephone': 'Daytime Phone Number',
+            'mobile': 'Mobile Phone Number',
+            'street': 'Street Address',
+            'city': 'City or Town',
+            'state': 'State',
+            'zip': 'ZIP Code',
+            'country': 'Country',
+            'barnumber': 'Bar Number',
+            'statebarnumber': 'State Bar Number',
+            'lawfirm': 'Law Firm Name',
+            'lawfirmname': 'Law Firm Name',
+            'licensingauthority': 'Licensing Authority',
+            'workphone': 'Work Phone Number',
+            'faxnumber': 'Fax Number'
+        }
+        
+        # Check for exact match
+        name_lower = name.lower().replace('_', '').replace('-', '').replace(' ', '')
+        for key, label in label_map.items():
+            if key in name_lower or name_lower in key:
+                return label
+        
+        # Convert to title case
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+        label = label.replace('_', ' ').replace('-', ' ')
+        label = ' '.join(label.split())
+        label = label.title()
+        
+        return label
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key for questionnaire items
+                key = field.question_key if field.question_key else field.field_key
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Add fields
+                for field in quest_fields:
+                    control = {
+                        "name": field.field_key,
+                        "label": field.field_label,
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = field.field_key
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    meta_parts = [
+                        f'<span class="field-type">{field.field_type}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        meta_parts.append(f'Quest: {field.question_key}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
+, '', name)
+        cleaned_name = cleaned_name.strip('_- ')
+        
+        # If the name is just a number or empty after cleaning, use a generic label
+        if not cleaned_name or cleaned_name.isdigit():
+            return f"Field {name}" if name and not name.isdigit() else "Field"
+        
+        # Common label mappings
+        label_map = {
+            'familyname': 'Family Name (Last Name)',
+            'lastname': 'Last Name',
+            'givenname': 'Given Name (First Name)', 
+            'firstname': 'First Name',
+            'middlename': 'Middle Name',
+            'anumber': 'Alien Registration Number (A-Number)',
+            'uscisaccount': 'USCIS Online Account Number',
+            'dateofbirth': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'email': 'Email Address',
+            'phone': 'Phone Number',
+            'daytimephone': 'Daytime Phone Number',
+            'mobile': 'Mobile Phone Number',
+            'street': 'Street Address',
+            'city': 'City or Town',
+            'state': 'State',
+            'zip': 'ZIP Code',
+            'country': 'Country',
+            'barnumber': 'Bar Number',
+            'statebarnumber': 'State Bar Number',
+            'lawfirm': 'Law Firm Name',
+            'lawfirmname': 'Law Firm Name',
+            'licensingauthority': 'Licensing Authority',
+            'workphone': 'Work Phone Number',
+            'faxnumber': 'Fax Number',
+            'aptstefloornumber': 'Apt/Ste/Floor Number',
+            'incareof': 'In Care Of',
+            'yearsresiding': 'Years Residing',
+            'monthsresiding': 'Months Residing'
+        }
+        
+        # Check for exact match
+        name_lower = cleaned_name.lower().replace('_', '').replace('-', '').replace(' ', '')
+        for key, label in label_map.items():
+            if key in name_lower or name_lower in key:
+                return label
+        
+        # Convert to title case
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', cleaned_name)
+        label = label.replace('_', ' ').replace('-', ' ')
+        label = ' '.join(label.split())
+        
+        # Title case but preserve certain acronyms
+        words = label.split()
+        formatted_words = []
+        acronyms = ['USCIS', 'US', 'USA', 'SSN', 'EIN', 'ID']
+        
+        for word in words:
+            upper_word = word.upper()
+            if upper_word in acronyms:
+                formatted_words.append(upper_word)
+            else:
+                formatted_words.append(word.title())
+        
+        label = ' '.join(formatted_words)
+        
+        return label
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key for questionnaire items
+                key = field.question_key if field.question_key else field.field_key
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Add fields
+                for field in quest_fields:
+                    control = {
+                        "name": field.field_key,
+                        "label": field.field_label,
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = field.field_key
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    meta_parts = [
+                        f'<span class="field-type">{field.field_type}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        meta_parts.append(f'Quest: {field.question_key}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
+, '', key)
+        key = re.sub(r'_+
+    
+    def _generate_field_label(self, name: str) -> str:
+        """Generate human-readable label"""
+        # Common label mappings
+        label_map = {
+            'familyname': 'Family Name (Last Name)',
+            'lastname': 'Last Name',
+            'givenname': 'Given Name (First Name)', 
+            'firstname': 'First Name',
+            'middlename': 'Middle Name',
+            'anumber': 'Alien Registration Number (A-Number)',
+            'uscisaccount': 'USCIS Online Account Number',
+            'dateofbirth': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'email': 'Email Address',
+            'phone': 'Phone Number',
+            'daytimephone': 'Daytime Phone Number',
+            'mobile': 'Mobile Phone Number',
+            'street': 'Street Address',
+            'city': 'City or Town',
+            'state': 'State',
+            'zip': 'ZIP Code',
+            'country': 'Country',
+            'barnumber': 'Bar Number',
+            'statebarnumber': 'State Bar Number',
+            'lawfirm': 'Law Firm Name',
+            'lawfirmname': 'Law Firm Name',
+            'licensingauthority': 'Licensing Authority',
+            'workphone': 'Work Phone Number',
+            'faxnumber': 'Fax Number'
+        }
+        
+        # Check for exact match
+        name_lower = name.lower().replace('_', '').replace('-', '').replace(' ', '')
+        for key, label in label_map.items():
+            if key in name_lower or name_lower in key:
+                return label
+        
+        # Convert to title case
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+        label = label.replace('_', ' ').replace('-', ' ')
+        label = ' '.join(label.split())
+        label = label.title()
+        
+        return label
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key for questionnaire items
+                key = field.question_key if field.question_key else field.field_key
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Add fields
+                for field in quest_fields:
+                    control = {
+                        "name": field.field_key,
+                        "label": field.field_label,
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = field.field_key
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    meta_parts = [
+                        f'<span class="field-type">{field.field_type}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        meta_parts.append(f'Quest: {field.question_key}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
+, '', key)  # Remove trailing underscores
+        
+        # Common abbreviations
+        abbreviations = {
+            'family_name': 'familyName',
+            'last_name': 'lastName',
+            'given_name': 'givenName',
+            'first_name': 'firstName',
+            'middle_name': 'middleName',
+            'date_of_birth': 'dob',
+            'social_security': 'ssn',
+            'alien_number': 'aNumber',
+            'email_address': 'email',
+            'phone_number': 'phone',
+            'street_address': 'street',
+            'zip_code': 'zip',
+            'state_bar_number': 'stateBarNumber',
+            'law_firm_name': 'lawFirmName',
+            'licensing_authority': 'licensingAuthority'
+        }
+        
+        key_lower = key.lower()
+        for pattern, replacement in abbreviations.items():
+            if pattern in key_lower:
+                return replacement
+        
+        # Convert to camelCase
+        parts = key.split('_')
+        if len(parts) > 1:
+            key = parts[0].lower() + ''.join(p.capitalize() for p in parts[1:] if p)
+        else:
+            key = key.lower() if key else 'field'
+        
+        # Ensure we have a valid key
+        if not key or key.isdigit():
+            key = 'field'
+        
+        # Limit length
+        if len(key) > 30:
+            key = key[:30]
+        
+        return key
+    
+    def _generate_field_label(self, name: str) -> str:
+        """Generate human-readable label"""
+        # Common label mappings
+        label_map = {
+            'familyname': 'Family Name (Last Name)',
+            'lastname': 'Last Name',
+            'givenname': 'Given Name (First Name)', 
+            'firstname': 'First Name',
+            'middlename': 'Middle Name',
+            'anumber': 'Alien Registration Number (A-Number)',
+            'uscisaccount': 'USCIS Online Account Number',
+            'dateofbirth': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'email': 'Email Address',
+            'phone': 'Phone Number',
+            'daytimephone': 'Daytime Phone Number',
+            'mobile': 'Mobile Phone Number',
+            'street': 'Street Address',
+            'city': 'City or Town',
+            'state': 'State',
+            'zip': 'ZIP Code',
+            'country': 'Country',
+            'barnumber': 'Bar Number',
+            'statebarnumber': 'State Bar Number',
+            'lawfirm': 'Law Firm Name',
+            'lawfirmname': 'Law Firm Name',
+            'licensingauthority': 'Licensing Authority',
+            'workphone': 'Work Phone Number',
+            'faxnumber': 'Fax Number'
+        }
+        
+        # Check for exact match
+        name_lower = name.lower().replace('_', '').replace('-', '').replace(' ', '')
+        for key, label in label_map.items():
+            if key in name_lower or name_lower in key:
+                return label
+        
+        # Convert to title case
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+        label = label.replace('_', ' ').replace('-', ' ')
+        label = ' '.join(label.split())
+        label = label.title()
+        
+        return label
+    
+    def _map_widget_type(self, widget_type: int) -> str:
+        """Map PDF widget type to field type"""
+        type_map = {
+            1: "button",
+            2: "checkbox",
+            3: "radio",
+            4: "text",
+            5: "dropdown",
+            6: "list",
+            7: "signature"
+        }
+        return type_map.get(widget_type, "text")
+    
+    def suggest_mapping(self, field: PDFField) -> Optional[str]:
+        """Suggest database mapping for field"""
+        label_lower = field.field_label.lower()
+        key_lower = field.field_key.lower()
+        
+        # Try pattern matching with both label and key
+        for pattern, suggestions in self.field_patterns.items():
+            if re.search(pattern, label_lower) or re.search(pattern, key_lower):
+                # Return first matching suggestion
+                for suggestion in suggestions:
+                    if suggestion in self.db_paths:
+                        return suggestion
+        
+        # Try exact field name matching
+        for db_path in self.db_paths:
+            path_parts = db_path.split('.')
+            field_name = path_parts[-1].lower()
+            
+            # Check both label and key
+            if field_name in label_lower.replace(' ', '').lower() or field_name in key_lower:
+                return db_path
+        
+        return None
+    
+    def generate_typescript(self) -> str:
+        """Generate TypeScript export"""
+        form_name = st.session_state.form_info.get('form_number', 'Form').replace('-', '')
+        
+        # Group fields
+        sections = {
+            'customerData': {},
+            'beneficiaryData': {},
+            'attorneyData': {},
+            'questionnaireData': {},
+            'caseData': {},
+            'defaultData': {},
+            'conditionalData': {}
+        }
+        
+        for field in st.session_state.fields:
+            if field.is_mapped and field.db_mapping:
+                # Determine section
+                if field.db_mapping.startswith('customer.'):
+                    section = 'customerData'
+                elif field.db_mapping.startswith('beneficiary.'):
+                    section = 'beneficiaryData'
+                elif field.db_mapping.startswith('attorney.') or field.db_mapping.startswith('attorneyLawfirmDetails.'):
+                    section = 'attorneyData'
+                elif field.db_mapping.startswith('case.'):
+                    section = 'caseData'
+                else:
+                    continue
+                
+                # Add field
+                suffix = self._get_ts_suffix(field.field_type)
+                sections[section][field.field_key] = f"{field.db_mapping}{suffix}"
+            
+            elif field.to_questionnaire:
+                # Use question_key for questionnaire items
+                key = field.question_key if field.question_key else field.field_key
+                sections['questionnaireData'][key] = f"{field.field_key}:ConditionBox"
+        
+        # Generate TypeScript
+        ts = f'export const {form_name} = {{\n'
+        ts += f'    "formname": "{form_name}",\n'
+        
+        # Add sections
+        for section_name, fields in sections.items():
+            if section_name == 'conditionalData':
+                continue  # Handle separately
+            
+            if fields:
+                ts += f'    "{section_name}": {{\n'
+                field_entries = []
+                for key, value in fields.items():
+                    field_entries.append(f'        "{key}": "{value}"')
+                ts += ',\n'.join(field_entries)
+                ts += '\n    },\n'
+            else:
+                ts += f'    "{section_name}": null,\n'
+        
+        # Add conditional data (empty for now)
+        ts += '    "conditionalData": {},\n'
+        
+        # Add PDF name
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
+        ts += f'export default {form_name};'
+        
+        return ts
+    
+    def _get_ts_suffix(self, field_type: str) -> str:
+        """Get TypeScript suffix for field type"""
+        suffix_map = {
+            'text': ':TextBox',
+            'checkbox': ':CheckBox',
+            'radio': ':RadioBox',
+            'dropdown': ':DropdownBox',
+            'signature': ':SignatureBox',
+            'date': ':Date',
+            'button': ':ButtonBox'
+        }
+        return suffix_map.get(field_type, ':TextBox')
+    
+    def generate_json(self) -> str:
+        """Generate JSON export for questionnaire"""
+        controls = []
+        
+        # Add fields by part
+        for part_name, fields in st.session_state.fields_by_part.items():
+            # Get part info
+            part_info = st.session_state.part_structure.get(part_name, {})
+            
+            # Get questionnaire fields
+            quest_fields = [f for f in fields if f.to_questionnaire]
+            
+            if quest_fields:
+                # Add part title
+                title_text = f"{part_name}"
+                if part_info.get('title'):
+                    title_text += f": {part_info['title']}"
+                
+                controls.append({
+                    "name": f"{part_name.lower().replace(' ', '_')}_title",
+                    "label": title_text,
+                    "type": "title",
+                    "validators": {},
+                    "style": {"col": "12"}
+                })
+                
+                # Add fields
+                for field in quest_fields:
+                    control = {
+                        "name": field.field_key,
+                        "label": field.field_label,
+                        "type": "colorSwitch" if field.field_type in ["checkbox", "radio"] else field.field_type,
+                        "validators": {}
+                    }
+                    
+                    # Add field-specific properties
+                    if field.field_type == "text":
+                        control["style"] = {"col": "7"}
+                    elif field.field_type in ["checkbox", "radio"]:
+                        control["style"] = {"col": "12"}
+                        if field.field_type == "radio":
+                            control["id"] = field.field_key
+                            control["value"] = "1"
+                    
+                    controls.append(control)
+        
+        return json.dumps({"controls": controls}, indent=2)
+
+def render_mapping_interface(extractor: FieldExtractor):
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
+    
+    # Top controls
+    with st.container():
+        st.markdown('<div class="part-selector">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+        
+        with col1:
+            # Part selector
+            part_options = ['All Parts'] + list(st.session_state.fields_by_part.keys())
+            selected_part = st.selectbox(
+                "📑 Select Part",
+                part_options,
+                index=part_options.index(st.session_state.selected_part) if st.session_state.selected_part in part_options else 0,
+                key="part_selector"
+            )
+            st.session_state.selected_part = selected_part
+        
+        with col2:
+            # Mapping filter
+            mapping_filter = st.selectbox(
+                "🔍 Filter by Status",
+                ["All Fields", "Mapped", "Unmapped", "Questionnaire"],
+                key="mapping_filter_select"
+            )
+            st.session_state.mapping_filter = mapping_filter.lower().replace(' fields', '').replace(' ', '_')
+        
+        with col3:
+            # Database browser toggle
+            st.session_state.show_db_browser = st.checkbox(
+                "🗂️ Show DB Browser",
+                value=st.session_state.show_db_browser,
+                help="Show database structure browser"
+            )
+        
+        with col4:
+            # Field count
+            if selected_part == 'All Parts':
+                total_fields = len(st.session_state.fields)
+            else:
+                total_fields = len(st.session_state.fields_by_part.get(selected_part, []))
+            
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            st.metric("Progress", f"{mapped}/{total_fields}", f"{mapped/total_fields*100:.0f}%")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Quick actions
+    st.markdown("### ⚡ Quick Actions")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
+            fields_to_map = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            mapped_count = 0
+            for field in fields_to_map:
+                if not field.is_mapped and not field.to_questionnaire and field.field_type == 'text':
+                    suggestion = extractor.suggest_mapping(field)
+                    if suggestion:
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+            st.success(f"Auto-mapped {mapped_count} fields!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if field.field_type in ['checkbox', 'radio'] and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    field.is_mapped = False
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset Current View", use_container_width=True):
+            fields_to_reset = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            for field in fields_to_reset:
+                field.is_mapped = False
+                field.db_mapping = None
+                field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
+            st.rerun()
+    
+    with col4:
+        unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
+            fields_to_move = st.session_state.fields
+            if st.session_state.selected_part != 'All Parts':
+                fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
+            
+            count = 0
+            for field in fields_to_move:
+                if not field.is_mapped and not field.to_questionnaire:
+                    field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
+            st.rerun()
+    
+    # Database object browser
+    if st.session_state.show_db_browser:
+        with st.expander("🗂️ Database Structure Browser", expanded=True):
+            st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
+            
+            # Create tabs for each main object
+            tabs = st.tabs(list(DB_OBJECTS.keys()))
+            
+            for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
+                with tab:
+                    for sub_obj, fields in DB_OBJECTS[obj_name].items():
+                        if sub_obj:
+                            st.markdown(f"**{sub_obj}:**")
+                        
+                        # Display fields in columns
+                        field_cols = st.columns(3)
+                        for j, field in enumerate(fields):
+                            col_idx = j % 3
+                            with field_cols[col_idx]:
+                                if sub_obj:
+                                    path = f"{obj_name}.{sub_obj}.{field}"
+                                else:
+                                    path = f"{obj_name}.{field}"
+                                
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
+                                    st.code(path, language="text")
+    
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
+    
+    # Get parts to display
+    if st.session_state.selected_part == 'All Parts':
+        parts_to_show = st.session_state.fields_by_part.items()
+    else:
+        parts_to_show = [(st.session_state.selected_part, 
+                         st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
+    
+    # Display each part
+    for part_name, fields in parts_to_show:
+        # Filter fields based on mapping filter
+        if st.session_state.mapping_filter == 'mapped':
+            display_fields = [f for f in fields if f.is_mapped]
+        elif st.session_state.mapping_filter == 'unmapped':
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+        elif st.session_state.mapping_filter == 'questionnaire':
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
+        
+        if not display_fields:
+            continue
+        
+        # Get part info
+        part_info = st.session_state.part_structure.get(part_name, {})
+        
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
+                    
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    
+                    # Build field metadata
+                    meta_parts = [
+                        f'<span class="field-type">{field.field_type}</span>',
+                        f'Field: {field.field_key}',
+                        f'Page {field.page}'
+                    ]
+                    
+                    # Only show quest key if it's different from field key
+                    if field.to_questionnaire and field.question_key and field.question_key != field.field_key:
+                        meta_parts.append(f'Quest: {field.question_key}')
+                    
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        {' • '.join(meta_parts)}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
+                    
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
+                        
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
+                        
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
+                        else:
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
+                        
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
+                                field.is_mapped = True
+                                field.to_questionnaire = False
+                            st.rerun()
+                    
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
+
+def main():
+    """Main application"""
+    st.markdown("# 🤖 USCIS Form Reader Pro")
+    st.markdown("### Complete PDF Form Field Extraction & Mapping Solution")
+    
+    # Initialize extractor
+    extractor = FieldExtractor()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## ⚙️ Settings")
+        st.session_state.debug_mode = st.checkbox("Debug Mode", value=False)
+        
+        if st.session_state.pdf_processed:
+            st.markdown("---")
+            st.markdown("### 📊 Statistics")
+            stats = st.session_state.extraction_stats
+            st.metric("Total Pages", stats.get('total_pages', 0))
+            st.metric("Total Parts", stats.get('total_parts', 0))
+            st.metric("Total Fields", stats.get('total_fields', 0))
+            st.metric("Extraction Time", f"{stats.get('extraction_time', 0):.2f}s")
+            
+            if stats.get('errors'):
+                st.warning(f"{len(stats['errors'])} errors occurred")
+                with st.expander("View Errors"):
+                    for error in stats['errors']:
+                        st.text(error)
+            
+            # Field summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            st.markdown("---")
+            st.markdown("### 📈 Mapping Progress")
+            st.metric("Mapped to DB", f"{mapped} ({mapped/total*100:.1f}%)")
+            st.metric("In Questionnaire", f"{quest} ({quest/total*100:.1f}%)")
+            st.metric("Unmapped", f"{total - mapped - quest}")
+            
+            # Progress bar
+            progress = (mapped + quest) / total if total > 0 else 0
+            st.progress(progress)
+            
+            # Part breakdown
+            st.markdown("---")
+            st.markdown("### 📑 Parts Overview")
+            for part_name, part_info in st.session_state.part_structure.items():
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
+    
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
+    
+    with tab1:
+        st.markdown("## Upload USCIS PDF Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a USCIS PDF form",
+            type=['pdf'],
+            help="Upload any fillable USCIS form (I-90, I-129, G-28, etc.)",
+            key="pdf_uploader"
+        )
+        
+        if uploaded_file:
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                if st.button("🚀 Extract Fields by Parts", type="primary", use_container_width=True):
+                    with st.spinner("Analyzing PDF structure and extracting fields by parts..."):
+                        if extractor.extract_from_pdf(uploaded_file):
+                            st.success(f"""
+                            ✅ Successfully extracted {len(st.session_state.fields)} fields from {st.session_state.form_info.get('form_number', 'form')}!
+                            
+                            Found {len(st.session_state.fields_by_part)} parts with fields.
+                            """)
+                            
+                            # Show extraction summary
+                            with st.expander("📊 Extraction Summary", expanded=True):
+                                for part_name, fields in st.session_state.fields_by_part.items():
+                                    part_info = st.session_state.part_structure.get(part_name, {})
+                                    
+                                    st.write(f"**{part_name}** {part_info.get('title', '')}")
+                                    st.write(f"- Fields: {len(fields)}")
+                                    st.write(f"- Pages: {', '.join(map(str, part_info.get('pages', [])))}")
+                                    
+                                    # Field type breakdown
+                                    types = defaultdict(int)
+                                    for field in fields:
+                                        types[field.field_type] += 1
+                                    
+                                    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in types.items()])
+                                    st.caption(f"Field types: {type_summary}")
+                                    st.divider()
+            
+            with col2:
+                if st.session_state.pdf_processed:
+                    if st.button("🔄 Reset", type="secondary", use_container_width=True):
+                        # Clear all session state
+                        for key in list(st.session_state.keys()):
+                            if key != 'debug_mode':
+                                del st.session_state[key]
+                        extractor.init_session_state()
+                        st.rerun()
+    
+    with tab2:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            render_mapping_interface(extractor)
+    
+    with tab3:
+        if not st.session_state.pdf_processed:
+            st.info("👆 Please upload and extract a PDF form first.")
+        else:
+            st.markdown("## 📥 Export & Download")
+            
+            # Summary
+            total = len(st.session_state.fields)
+            mapped = sum(1 for f in st.session_state.fields if f.is_mapped)
+            quest = sum(1 for f in st.session_state.fields if f.to_questionnaire)
+            
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Fields", total)
+            col2.metric("Mapped to Database", mapped)
+            col3.metric("In Questionnaire", quest)
+            
+            st.markdown("---")
+            
+            # Export options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 📄 TypeScript Export")
+                st.markdown("Database mappings for your application")
+                
+                ts_code = extractor.generate_typescript()
+                
+                st.download_button(
+                    label="⬇️ Download TypeScript File",
+                    data=ts_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                    mime="text/typescript",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview TypeScript"):
+                    st.code(ts_code, language="typescript")
+            
+            with col2:
+                st.markdown("### 📋 JSON Export")
+                st.markdown("Questionnaire configuration")
+                
+                json_code = extractor.generate_json()
+                
+                st.download_button(
+                    label="⬇️ Download JSON File",
+                    data=json_code,
+                    file_name=f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                
+                with st.expander("Preview JSON"):
+                    st.code(json_code, language="json")
+            
+            # Combined export
+            st.markdown("---")
+            if st.button("📦 Download Both Files", type="primary", use_container_width=True):
+                st.markdown("### Downloads Ready:")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "TypeScript (.ts)",
+                        extractor.generate_typescript(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}.ts",
+                        mime="text/typescript"
+                    )
+                with col2:
+                    st.download_button(
+                        "JSON (.json)",
+                        extractor.generate_json(),
+                        f"{st.session_state.form_info.get('form_number', 'form')}-questionnaire.json",
+                        mime="application/json"
+                    )
+
+if __name__ == "__main__":
+    main()
