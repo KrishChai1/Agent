@@ -68,32 +68,38 @@ if uploaded_file:
 
             st.subheader("🧩 Part-by-Part Review & Mapping")
 
-            # Iterate parts
-            for part_name, fields in parts_json.items():
-                with st.expander(f"📄 {part_name}", expanded=False):
-                    for field_name, field_data in fields.items():
-                        value = field_data.get("value", "")
-                        suggested_db = field_data.get("suggested_db", "")
+           for part_name, fields in parts_json.items():
+    with st.expander(f"📄 {part_name}", expanded=False):
 
-                        col1, col2, col3 = st.columns([3, 3, 2])
-                        with col1:
-                            st.markdown(f"**{field_name}**")
-                            st.text_input("Value", value, key=f"val_{part_name}_{field_name}")
+        if isinstance(fields, dict):
+            for field_name, field_data in fields.items():
+                value = field_data.get("value", "") if isinstance(field_data, dict) else ""
+                suggested_db = field_data.get("suggested_db", "") if isinstance(field_data, dict) else "None"
 
-                        with col2:
-                            selected_db = st.selectbox(
-                                "Assign to DB Object",
-                                ["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"],
-                                index=["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"].index(suggested_db if suggested_db in ["Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"] else "None"),
-                                key=f"db_{part_name}_{field_name}"
-                            )
-                        with col3:
-                            move_to_q = st.checkbox("Questionnaire", key=f"q_{part_name}_{field_name}")
+                col1, col2, col3 = st.columns([3, 3, 2])
+                with col1:
+                    st.markdown(f"**{field_name}**")
+                    st.text_input("Value", value, key=f"val_{part_name}_{field_name}")
 
-                        if move_to_q or selected_db == "None":
-                            questionnaire_json[field_name] = value
-                        else:
-                            ts_json[field_name] = {"value": value, "mapped_to": selected_db}
+                with col2:
+                    selected_db = st.selectbox(
+                        "Assign to DB Object",
+                        ["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"],
+                        index=["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"].index(
+                            suggested_db if suggested_db in ["Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"] else "None"
+                        ),
+                        key=f"db_{part_name}_{field_name}"
+                    )
+                with col3:
+                    move_to_q = st.checkbox("Questionnaire", key=f"q_{part_name}_{field_name}")
+
+                if move_to_q or selected_db == "None":
+                    questionnaire_json[field_name] = value
+                else:
+                    ts_json[field_name] = {"value": value, "mapped_to": selected_db}
+        else:
+            st.warning(f"⚠️ Skipping {part_name}: Expected a dictionary, got {type(fields).__name__}.")
+
 
             # Download buttons
             ts_str = json.dumps(ts_json, indent=2)
