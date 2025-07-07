@@ -204,13 +204,13 @@ DB_OBJECTS = {
 @dataclass
 class PDFField:
     """Represents a unique field from PDF"""
-    widget_name: str
-    field_id: str
-    part_number: int
-    part_name: str  # Added to store the actual part name
-    field_label: str
-    field_type: str
-    page: int
+    widget_name: str = ""
+    field_id: str = ""
+    part_number: int = 1
+    part_name: str = "Part 1"
+    field_label: str = "Unnamed Field"
+    field_type: str = "text"
+    page: int = 1
     value: str = ""
     db_mapping: Optional[str] = None
     is_mapped: bool = False
@@ -400,7 +400,16 @@ class USCISExtractor:
                 page = doc[page_num]
                 
                 # Get part info for this page
-                part_info = part_mapping.get(page_num, {'number': 1, 'name': 'Part 1', 'title': 'General Information'})
+                part_info = part_mapping.get(page_num, {
+                    'number': 1, 
+                    'name': 'Part 1', 
+                    'title': 'General Information'
+                })
+                
+                # Ensure part_info has all required fields
+                part_info['number'] = part_info.get('number', 1)
+                part_info['name'] = part_info.get('name', 'Part 1')
+                part_info['title'] = part_info.get('title', 'General Information')
                 
                 # Skip attorney/preparer sections
                 if self._is_skippable_section(part_info.get('title', '')):
@@ -441,8 +450,12 @@ class USCISExtractor:
             progress_bar.empty()
             doc.close()
             
-            # Sort fields
-            all_fields.sort(key=lambda f: (f.part_number, f.page, f.field_label))
+            # Sort fields with None-safe sorting
+            all_fields.sort(key=lambda f: (
+                f.part_number or 0, 
+                f.page or 0, 
+                f.field_label or ""
+            ))
             st.session_state.fields = all_fields
             
             # Group by part
@@ -553,25 +566,30 @@ class USCISExtractor:
     
     def _create_field(self, widget, part_num: int, part_name: str, page: int) -> PDFField:
         """Create field object from widget"""
-        field_name = widget.field_name
-        field_type = self._get_field_type(widget.field_type)
+        field_name = widget.field_name or ""
+        field_type = self._get_field_type(widget.field_type if hasattr(widget, 'field_type') else 4)
         
         # Generate unique field ID
         field_hash = hashlib.md5(f"{field_name}_{part_num}_{page}".encode()).hexdigest()[:8]
         field_id = f"P{part_num}_{field_hash}"
         
         # Extract human-readable label
-        label = self._extract_smart_label(field_name)
+        label = self._extract_smart_label(field_name) if field_name else "Unnamed Field"
+        
+        # Get field value safely
+        field_value = ""
+        if hasattr(widget, 'field_value') and widget.field_value:
+            field_value = str(widget.field_value)
         
         return PDFField(
             widget_name=field_name,
             field_id=field_id,
-            part_number=part_num,
-            part_name=part_name,
+            part_number=part_num or 1,
+            part_name=part_name or "Part 1",
             field_label=label,
             field_type=field_type,
-            page=page,
-            value=widget.field_value or ''
+            page=page or 1,
+            value=field_value
         )
     
     def _get_field_type(self, widget_type: int) -> str:
@@ -589,6 +607,9 @@ class USCISExtractor:
     
     def _extract_smart_label(self, field_name: str) -> str:
         """Extract readable label with smart parsing"""
+        if not field_name:
+            return "Unnamed Field"
+            
         # Remove common prefixes
         clean = re.sub(r'form\d*\[?\d*\]?\.|#subform\[?\d*\]?\.|Page\d+\[?\d*\]?\.', '', field_name)
         clean = re.sub(r'Part\d+\[?\d*\]?\.', '', clean)
@@ -746,7 +767,7 @@ export const {form_name} = {{
         # Add database mappings
         for obj, obj_fields in sorted(db_fields.items()):
             ts += f'\n  {obj}Data: {{\n'
-            for field in sorted(obj_fields, key=lambda f: f.field_label):
+            for field in sorted(obj_fields, key=lambda f: f.field_label or ""):
                 suffix = ":TextBox" if field.field_type == "text" else f":{field.field_type.capitalize()}Box"
                 ts += f'    "{field.field_id}": "{field.db_mapping}{suffix}",\n'
             ts += '  },\n'
@@ -754,7 +775,7 @@ export const {form_name} = {{
         # Add questionnaire data
         if quest_fields:
             ts += '\n  questionnaireData: {\n'
-            for field in sorted(quest_fields, key=lambda f: (f.part_number, f.page)):
+            for field in sorted(quest_fields, key=lambda f: (f.part_number or 0, f.page or 0)):
                 ts += f'    "{field.field_id}": {{\n'
                 ts += f'      description: "{field.field_label}",\n'
                 ts += f'      type: "{field.field_type}",\n'
@@ -802,7 +823,7 @@ export default """ + form_name + ";"
             "controls": []
         }
         
-        for part_name in sorted(parts.keys(), key=lambda x: int(re.search(r'\d+', x).group() if re.search(r'\d+', x) else 0)):
+        for part_name in sorted(parts.keys(), key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 0):
             part_fields = parts[part_name]
             part_control = {
                 "group_name": part_name,
@@ -811,7 +832,7 @@ export default """ + form_name + ";"
                 "group_definition": []
             }
             
-            for field in sorted(part_fields, key=lambda f: (f.page, f.field_label)):
+            for field in sorted(part_fields, key=lambda f: (f.page or 0, f.field_label or "")):
                 field_def = {
                     "id": field.field_id,
                     "name": field.widget_name,
@@ -1311,19 +1332,19 @@ FIELD DETAILS BY PART
                     
                     if mapped_fields:
                         report += "MAPPED TO DATABASE:\n"
-                        for f in mapped_fields:
+                        for f in sorted(mapped_fields, key=lambda x: x.field_label or ""):
                             report += f"  - {f.field_label} [{f.field_type}] → {f.db_mapping}\n"
                         report += "\n"
                     
                     if quest_fields:
                         report += "QUESTIONNAIRE:\n"
-                        for f in quest_fields:
+                        for f in sorted(quest_fields, key=lambda x: x.field_label or ""):
                             report += f"  - {f.field_label} [{f.field_type}]\n"
                         report += "\n"
                     
                     if unmapped_fields:
                         report += "UNMAPPED:\n"
-                        for f in unmapped_fields:
+                        for f in sorted(unmapped_fields, key=lambda x: x.field_label or ""):
                             report += f"  - {f.field_label} [{f.field_type}]\n"
                         report += "\n"
                 
@@ -1435,7 +1456,7 @@ FIELD BREAKDOWN BY PART
                 for part, fields in st.session_state.fields_by_part.items():
                     report += f"\n{part} ({len(fields)} fields)\n"
                     report += "-" * len(part) + "\n"
-                    for f in fields:
+                    for f in sorted(fields, key=lambda x: (x.page or 0, x.field_label or "")):
                         report += f"  - {f.field_label} [{f.field_type}] - {f.get_status()}\n"
                 
                 st.download_button(
