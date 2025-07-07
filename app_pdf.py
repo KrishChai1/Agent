@@ -11,14 +11,25 @@ import time
 import hashlib
 from datetime import datetime
 import traceback
-import openai
-openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=[{"role": "user", "content": "Hello"}]
+# Configure page first
+st.set_page_config(
+    page_title="Smart USCIS Form Reader - Multi-Agent System",
+    page_icon="🤖",
+    layout="wide"
 )
 
+# Global variable for OpenAI availability - must be defined before any function that uses it
+OPENAI_AVAILABLE = False
+OpenAI = None
+
+# Try to import OpenAI
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
 
 # Configure page
 st.set_page_config(
@@ -151,6 +162,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Show warning if OpenAI is not available
+if not OPENAI_AVAILABLE:
+    st.warning("⚠️ OpenAI library not installed. The app will work with limited features. To enable AI features, install with: `pip install openai`")
+
 # Initialize OpenAI client
 def get_openai_client():
     """Get OpenAI client from secrets or environment"""
@@ -161,28 +176,61 @@ def get_openai_client():
         # Try multiple ways to get the API key
         api_key = None
         
-        # Method 1: Direct access
-        if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
-            api_key = st.secrets['OPENAI_API_KEY']
+        # Method 1: Check session state first (for manual entry)
+        if 'openai_api_key' in st.session_state:
+            api_key = st.session_state['openai_api_key']
         
-        # Method 2: Using get method
-        if not api_key:
-            api_key = st.secrets.get('OPENAI_API_KEY', None)
+        # Method 2: Direct access to secrets
+        if not api_key and hasattr(st, 'secrets'):
+            try:
+                api_key = st.secrets['OPENAI_API_KEY']
+            except KeyError:
+                pass
         
-        # Method 3: Try lowercase
+        # Method 3: Using get method
         if not api_key:
-            api_key = st.secrets.get('openai_api_key', None)
+            try:
+                api_key = st.secrets.get('OPENAI_API_KEY', None)
+            except Exception:
+                pass
         
-        # Method 4: Environment variable
+        # Method 4: Try lowercase
         if not api_key:
-            import os
+            try:
+                api_key = st.secrets.get('openai_api_key', None)
+            except Exception:
+                pass
+        
+        # Method 5: Environment variable
+        if not api_key:
             api_key = os.environ.get('OPENAI_API_KEY', None)
         
         if api_key:
-            return OpenAI(api_key=api_key)
+            # Clean initialization without any extra parameters
+            try:
+                client = OpenAI(api_key=api_key)
+                return client
+            except TypeError as e:
+                # Handle proxy issue on Streamlit Cloud
+                if 'proxies' in str(e):
+                    # Try alternative initialization
+                    import openai
+                    openai.api_key = api_key
+                    # Return a wrapper that mimics the client interface
+                    class OpenAIWrapper:
+                        def __init__(self):
+                            self.chat = self
+                            self.completions = self
+                        
+                        def create(self, **kwargs):
+                            return openai.ChatCompletion.create(**kwargs)
+                    
+                    return OpenAIWrapper()
+                else:
+                    raise e
         return None
     except Exception as e:
-        st.error(f"Error loading OpenAI client: {str(e)}")
+        # Don't show error here, handle it in the UI
         return None
 
 # Enhanced Database structure
@@ -371,7 +419,11 @@ class ResearchAgent(Agent):
     def __init__(self):
         super().__init__("Research Agent", "Field Extraction & Analysis")
         # Try to get client from session state first, then from secrets
-        self.client = st.session_state.get('openai_client', None) or get_openai_client()
+        self.client = None
+        if 'openai_client' in st.session_state:
+            self.client = st.session_state['openai_client']
+        else:
+            self.client = get_openai_client()
     
     def execute(self, pdf_file, use_ai: bool = True) -> Optional[FormStructure]:
         """Extract fields with intelligent parsing"""
@@ -994,7 +1046,11 @@ class AIMappingAgent(Agent):
     def __init__(self):
         super().__init__("AI Mapping Agent", "Intelligent Field Mapping")
         # Try to get client from session state first, then from secrets
-        self.client = st.session_state.get('openai_client', None) or get_openai_client()
+        self.client = None
+        if 'openai_client' in st.session_state:
+            self.client = st.session_state['openai_client']
+        else:
+            self.client = get_openai_client()
         
         # Enhanced mapping patterns
         self.mapping_patterns = {
@@ -1313,7 +1369,7 @@ def render_manual_assignment(form_structure: FormStructure, part_name: str):
                 st.rerun()
 
 # Field Display
-def render_field_card(field: ExtractedField, idx: int):
+def render_field_card(field: ExtractedField, idx: int, part_name: str):
     """Render field card with all details"""
     # Determine status
     if field.db_path:
@@ -1371,7 +1427,7 @@ def render_field_card(field: ExtractedField, idx: int):
                 "Map to",
                 options,
                 index=options.index(current) if current in options else 0,
-                key=f"field_map_{field.field_id}_{idx}",
+                key=f"field_map_{field.field_id}_{idx}_{part_name.replace(' ', '_')}",
                 label_visibility="collapsed"
             )
             
@@ -1389,7 +1445,7 @@ def render_field_card(field: ExtractedField, idx: int):
             include = st.checkbox(
                 "Include in Questionnaire",
                 value=field.is_questionnaire,
-                key=f"quest_{field.field_id}_{idx}"
+                key=f"quest_{field.field_id}_{idx}_{part_name.replace(' ', '_')}"
             )
             if include != field.is_questionnaire:
                 field.is_questionnaire = include
@@ -1521,8 +1577,22 @@ def main():
         st.session_state.selected_part = None
     
     # Check for OpenAI API key
-    openai_client = st.session_state.get('openai_client', None) or get_openai_client()
-    openai_available = openai_client is not None
+    openai_client = None
+    openai_available = False
+    
+    # Try to get client
+    if 'openai_client' in st.session_state and st.session_state['openai_client']:
+        openai_client = st.session_state['openai_client']
+        openai_available = True
+    else:
+        try:
+            openai_client = get_openai_client()
+            if openai_client:
+                st.session_state['openai_client'] = openai_client
+                openai_available = True
+        except Exception as e:
+            st.error(f"Error initializing OpenAI: {str(e)}")
+            openai_available = False
     
     # Sidebar
     with st.sidebar:
@@ -1532,24 +1602,36 @@ def main():
         if st.checkbox("Show Debug Info", value=False):
             st.markdown("### 🔍 Debug Information")
             try:
+                # Check OpenAI library
+                st.info(f"OpenAI library available: {OPENAI_AVAILABLE}")
+                
                 # Check if secrets exist
                 if hasattr(st, 'secrets'):
                     st.info("✅ Secrets object exists")
                     
                     # Show available keys (without values)
-                    secret_keys = list(st.secrets.keys()) if hasattr(st.secrets, 'keys') else []
-                    if secret_keys:
-                        st.write("Available keys:", secret_keys)
-                    else:
-                        st.warning("No keys found in secrets")
+                    try:
+                        secret_keys = list(st.secrets.keys()) if hasattr(st.secrets, 'keys') else []
+                        if secret_keys:
+                            st.write("Available keys:", [k for k in secret_keys if 'key' in k.lower() or 'openai' in k.lower()])
+                        else:
+                            st.warning("No keys found in secrets")
+                    except Exception as e:
+                        st.error(f"Error accessing secrets: {str(e)}")
                 else:
                     st.error("❌ Secrets object not found")
                     
                 # Check environment
-                import os
                 env_key = os.environ.get('OPENAI_API_KEY', None)
                 if env_key:
-                    st.info("✅ Found in environment variables")
+                    st.info("✅ Found OPENAI_API_KEY in environment variables")
+                else:
+                    st.warning("❌ OPENAI_API_KEY not in environment")
+                    
+                # Check session state
+                if 'openai_api_key' in st.session_state:
+                    st.info("✅ API key stored in session state")
+                    
             except Exception as e:
                 st.error(f"Debug error: {str(e)}")
         
@@ -1568,30 +1650,58 @@ def main():
             """)
             openai_available = False
         elif openai_available:
-            st.success("✅ OpenAI API Key configured")
+            st.success("✅ OpenAI API Key configured and working!")
         else:
-            st.warning("⚠️ OpenAI API Key not found")
-            with st.expander("Setup Instructions"):
+            st.warning("⚠️ OpenAI API Key not configured")
+            with st.expander("Setup Instructions", expanded=True):
                 st.markdown("""
-                **Option 1: Streamlit Secrets**
-                1. Create `.streamlit/secrets.toml` in your project
-                2. Add: `OPENAI_API_KEY = "your-key"`
+                **Option 1: Add to Streamlit Secrets**
+                1. Go to App Settings → Secrets
+                2. Add: `OPENAI_API_KEY = "sk-..."`
+                3. Reboot the app
                 
-                **Option 2: Manual Entry**
-                Enter your API key below (temporary)
+                **Option 2: Enter API Key Below**
                 """)
                 
-                manual_key = st.text_input("OpenAI API Key", type="password", key="manual_api_key")
-                if manual_key and OPENAI_AVAILABLE:
-                    # Try to create client with manual key
-                    try:
-                        test_client = OpenAI(api_key=manual_key)
-                        # Store in session state
-                        st.session_state['openai_client'] = test_client
-                        st.success("✅ API Key accepted!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Invalid API key: {str(e)}")
+                manual_key = st.text_input(
+                    "Enter OpenAI API Key", 
+                    type="password", 
+                    placeholder="sk-...",
+                    help="Your key will be stored for this session only"
+                )
+                
+                if st.button("Test API Key", type="primary"):
+                    if manual_key and manual_key.startswith('sk-'):
+                        with st.spinner("Testing API key..."):
+                            try:
+                                # Store the key
+                                st.session_state['openai_api_key'] = manual_key
+                                
+                                # Try to create client
+                                test_client = None
+                                if OPENAI_AVAILABLE and OpenAI:
+                                    try:
+                                        test_client = OpenAI(api_key=manual_key)
+                                        # Test the client with a simple request
+                                        response = test_client.chat.completions.create(
+                                            model="gpt-3.5-turbo",
+                                            messages=[{"role": "user", "content": "Say 'test'"}],
+                                            max_tokens=5
+                                        )
+                                        
+                                        # Store in session state
+                                        st.session_state['openai_client'] = test_client
+                                        st.success("✅ API Key is valid and working!")
+                                        time.sleep(1)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"API Key test failed: {str(e)}")
+                                        if 'proxies' in str(e):
+                                            st.info("Note: Proxy issues detected. The app may still work.")
+                            except Exception as e:
+                                st.error(f"Error: {str(e)}")
+                    else:
+                        st.error("Please enter a valid OpenAI API key starting with 'sk-'")
         
         st.markdown("### 🤖 Agent Settings")
         use_ai = st.checkbox("Use AI Enhancement", value=openai_available, disabled=not openai_available)
@@ -1729,7 +1839,7 @@ def main():
                 
                 # Display fields
                 for idx, field in enumerate(fields):
-                    render_field_card(field, idx)
+                    render_field_card(field, idx, selected_part)
         else:
             st.info("👆 Please upload and process a form first")
     
