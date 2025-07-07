@@ -5,6 +5,7 @@ import fitz  # PyMuPDF
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
+from openai import OpenAI
 from abc import ABC, abstractmethod
 import time
 import hashlib
