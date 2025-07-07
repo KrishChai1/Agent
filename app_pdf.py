@@ -442,7 +442,8 @@ class FieldExtractor:
                 ts += f'    "{section_name}": null,\n'
         
         ts += '    "conditionalData": {},\n'
-        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n};\n\n'
+        ts += f'    "pdfName": "{st.session_state.form_info.get("form_number", "Unknown")}"\n'
+        ts += '};\n\n'
         ts += f'export default {form_name};'
         
         return ts
