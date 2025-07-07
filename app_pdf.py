@@ -11,15 +11,14 @@ import time
 import hashlib
 from datetime import datetime
 import traceback
+import openai
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# Try to import OpenAI
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
-    st.warning("OpenAI library not installed. Install with: pip install openai")
+response = openai.ChatCompletion.create(
+    model="gpt-3.5-turbo",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
 
 # Configure page
 st.set_page_config(
