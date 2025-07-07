@@ -1,130 +1,103 @@
 import streamlit as st
 import json
-import fitz  # PyMuPDF
-import openai
 import re
+import fitz  # PyMuPDF
+from datetime import datetime
 
-# Configure OpenAI API key
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# Simulated DB object options (example list; extend as needed)
+db_objects = ["Attorney", "Beneficiary", "Case", "Customer", "LawFirm", "Petitioner", "Other"]
 
-st.set_page_config(page_title="🗂️ USCIS Smart Form Reader", layout="wide")
-st.title("🗂️ USCIS Smart Form Reader & Flexible DB Mapper")
+# Function to extract Parts based on headings (e.g., "Part 1.", "Part 2.")
+def extract_parts_from_text(text):
+    part_pattern = r"(Part\s+\d+\.?\s+[^\n]*)"
+    matches = list(re.finditer(part_pattern, text, re.IGNORECASE))
+    parts = {}
 
-st.markdown("""
-Upload a USCIS PDF form. The app will:
-- Auto-assign each field to a suggested DB object using AI.
-- You can **modify or override** any mapping using dropdowns.
-- Move any field to Questionnaire if you'd like.
-- Download TS JSON and Questionnaire JSON separately.
-""")
+    for i, match in enumerate(matches):
+        part_title = match.group(1).strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        part_content = text[start:end].strip()
+        parts[part_title] = part_content
 
-uploaded_file = st.file_uploader("📄 Upload USCIS form (PDF)", type=["pdf"])
+    return parts
+
+# Function to auto-assign DB object (very basic simulation)
+def auto_assign_db_object(label):
+    for obj in db_objects:
+        if obj.lower() in label.lower():
+            return obj
+    return "Questionnaire"
+
+# Streamlit UI
+st.set_page_config(page_title="📄 USCIS Form Smart Reader", layout="wide")
+st.title("📄 USCIS Form Smart Reader & Mapper")
+st.write("Upload a USCIS PDF form, parse it by parts, map fields to DB objects, and export TypeScript & JSON files.")
+
+uploaded_file = st.file_uploader("Upload a USCIS PDF form", type=["pdf"])
 
 if uploaded_file:
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    text = ""
+    full_text = ""
     for page in pdf:
-        text += page.get_text()
-    pdf.close()
+        full_text += page.get_text()
 
-    st.subheader("📄 Extracted Text Preview")
-    st.text_area("Form Text", text, height=300)
+    parts = extract_parts_from_text(full_text)
 
-    parts = re.split(r"(Part\s\d+)", text)
-    grouped_parts = {}
+    final_mappings = {}
+    questionnaire_fields = []
 
-    for i in range(1, len(parts), 2):
-        part_title = parts[i].strip()
-        part_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
-        grouped_parts[part_title] = part_content
+    st.header("🗂️ Review and Map Parts & Fields")
+    for part_name, part_content in parts.items():
+        with st.expander(part_name, expanded=True):
+            lines = [line.strip() for line in part_content.split("\n") if line.strip()]
+            part_mappings = []
 
-    db_objects = ["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"]
+            for i, line in enumerate(lines):
+                # Simulate line as field label
+                default_mapping = auto_assign_db_object(line)
+                col1, col2, col3 = st.columns([4, 3, 3])
+                with col1:
+                    st.text(line[:80])  # Show first 80 chars
+                with col2:
+                    selected_obj = st.selectbox(
+                        f"DB Object for field {i+1} in {part_name}",
+                        options=["Questionnaire"] + db_objects,
+                        index=db_objects.index(default_mapping) + 1 if default_mapping in db_objects else 0,
+                        key=f"{part_name}_{i}_select"
+                    )
+                with col3:
+                    move_to_q = st.checkbox("Move to Questionnaire", key=f"{part_name}_{i}_q")
+                
+                field_data = {
+                    "label": line,
+                    "db_object": selected_obj if not move_to_q else "Questionnaire",
+                }
 
-    ts_json = {}
-    questionnaire_json = {}
-
-    if st.button("🔍 Parse & Auto-Assign (Editable)"):
-        for part_name, part_text in grouped_parts.items():
-            st.write(f"Processing: **{part_name}**")
-
-            short_prompt = f"""
-            Extract field labels and example values from this USCIS form part.
-            Suggest a likely DB object for each field: Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner, or None.
-            Return **strict valid JSON only**, no commentary, no markdown. Format:
-            {{
-              "Field Label": {{"value": "example value", "suggested_db": "Beneficiary"}},
-              ...
-            }}
-            Text:
-            {part_text[:3000]}
-            """
-
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a precise USCIS parser. Reply strictly in valid JSON only. No explanations, no markdown, no comments."},
-                    {"role": "user", "content": short_prompt}
-                ],
-                temperature=0
-            )
-            raw_content = response.choices[0].message.content.strip()
-
-            # Try direct JSON parse first
-            try:
-                fields_dict = json.loads(raw_content)
-            except json.JSONDecodeError:
-                # Try to extract JSON content using regex as fallback
-                match = re.search(r"(\{.*\})", raw_content, re.DOTALL)
-                if match:
-                    json_str = match.group(1)
-                    try:
-                        fields_dict = json.loads(json_str)
-                    except json.JSONDecodeError:
-                        st.error(f"⚠️ Still couldn't parse JSON for {part_name}. Showing raw output below for manual review.")
-                        st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
-                        continue
+                if move_to_q or selected_obj == "Questionnaire":
+                    questionnaire_fields.append(field_data)
                 else:
-                    st.error(f"⚠️ No JSON structure found in AI output for {part_name}. Showing raw output below.")
-                    st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
-                    continue
+                    part_mappings.append(field_data)
 
-            with st.expander(f"📄 {part_name}", expanded=False):
-                for field_label, field_info in fields_dict.items():
-                    value = field_info.get("value", "")
-                    suggested_db = field_info.get("suggested_db", "None")
+            final_mappings[part_name] = part_mappings
 
-                    col1, col2, col3 = st.columns([4, 3, 3])
-                    with col1:
-                        st.text_input("Field Label", field_label, key=f"label_{part_name}_{field_label}", disabled=True)
-                    with col2:
-                        selected_db = st.selectbox(
-                            "DB Object",
-                            db_objects,
-                            index=db_objects.index(suggested_db) if suggested_db in db_objects else 0,
-                            key=f"db_{part_name}_{field_label}"
-                        )
-                    with col3:
-                        move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{part_name}_{field_label}")
+    # Generate TS and JSON outputs
+    ts_content = "// Auto-generated TypeScript mappings\nexport const formMappings = " + json.dumps(final_mappings, indent=2) + ";"
+    ts_filename = f"uscis_form_mappings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ts"
 
-                    if move_to_q or selected_db == "None":
-                        questionnaire_json[field_label] = {"value": value}
-                    else:
-                        ts_json[field_label] = {"value": value, "mapped_to": selected_db}
+    questionnaire_json = {
+        "questionnaire_fields": questionnaire_fields,
+        "generated_at": datetime.now().isoformat()
+    }
+    json_filename = f"uscis_questionnaire_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
-        ts_str = json.dumps(ts_json, indent=2)
-        q_str = json.dumps(questionnaire_json, indent=2)
+    st.header("⬇️ Download Outputs")
 
-        st.download_button(
-            "📥 Download TS JSON (DB Mappings)",
-            data=ts_str,
-            file_name="ts_mapped.json",
-            mime="application/json"
-        )
-        st.download_button(
-            "📥 Download Questionnaire JSON",
-            data=q_str,
-            file_name="questionnaire.json",
-            mime="application/json"
-        )
+    st.download_button("💾 Download TypeScript Mapping", data=ts_content, file_name=ts_filename, mime="text/plain")
+    st.download_button("💾 Download Questionnaire JSON", data=json.dumps(questionnaire_json, indent=2), file_name=json_filename, mime="application/json")
 
-        st.success("✔ JSON files ready for download!")
+    st.success("✅ Parts and fields parsed successfully. You can download files above.")
+
+else:
+    st.info("📥 Please upload a USCIS PDF form to get started.")
+
