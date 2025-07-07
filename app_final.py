@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 from datetime import datetime
 
 st.set_page_config(page_title="🗂️ USCIS Smart Mapper", layout="wide")
-st.title("🗂️ USCIS Form AI Mapper — Final Correct Version")
+st.title("🗂️ USCIS Form AI Mapper — FINAL FIXED VERSION ✅")
 
 # -------------------------------------------------------------------
 # Build flattened DB attributes list from uploaded objects
@@ -135,17 +135,31 @@ def extract_parts(text):
     return parts
 
 # -------------------------------------------------------------------
-# Extract subfields (handles 1., 1.a., 1.a.b., etc.)
+# Final improved field extraction logic
 # -------------------------------------------------------------------
 def extract_fields(part_content):
-    simple_pattern = r"(\d+\.\s+[^\n]+)"
-    subfield_pattern = r"(\d+\.[a-z](?:\.[a-z])?\.\s+[^\n]+)"
+    lines = part_content.split("\n")
+    cleaned_lines = []
+    buffer = ""
+    for line in lines:
+        line = line.strip()
+        if re.match(r"^\d+\.[a-z](?:\.[a-z])?\.", line, flags=re.IGNORECASE) or re.match(r"^\d+\.", line):
+            if buffer:
+                cleaned_lines.append(buffer.strip())
+            buffer = line
+        else:
+            buffer += " " + line
+    if buffer:
+        cleaned_lines.append(buffer.strip())
 
-    subfields = re.findall(subfield_pattern, part_content, flags=re.IGNORECASE)
-    simplefields = re.findall(simple_pattern, part_content)
+    # After merging
+    simple_pattern = r"(\d+\.\s+.+)"
+    subfield_pattern = r"(\d+\.[a-z](?:\.[a-z])?\.\s+.+)"
 
-    all_fields = set(subfields + simplefields)
-    all_fields = sorted(all_fields, key=lambda x: part_content.find(x))
+    subfields = [line for line in cleaned_lines if re.match(subfield_pattern, line, flags=re.IGNORECASE)]
+    simplefields = [line for line in cleaned_lines if re.match(simple_pattern, line) and line not in subfields]
+
+    all_fields = subfields + simplefields
     return all_fields
 
 uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
