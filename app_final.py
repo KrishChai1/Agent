@@ -2,16 +2,14 @@ import streamlit as st
 import json
 import re
 import fitz  # PyMuPDF
-import openai
 from datetime import datetime
 
-# Configure OpenAI
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-
 st.set_page_config(page_title="🗂️ USCIS Smart Mapper", layout="wide")
-st.title("🗂️ USCIS Form AI Mapper with Complete Part View")
+st.title("🗂️ USCIS Form AI Mapper — Correct Parts & Subfields")
 
-# --- Helper to build DB attribute list ---
+# -------------------------------------------------------------------
+# Build flattened DB attributes list from uploaded objects
+# -------------------------------------------------------------------
 def build_db_attributes():
     attributes = []
 
@@ -118,10 +116,16 @@ def build_db_attributes():
 
 db_fields = build_db_attributes()
 
-# --- Part extraction ---
+# -------------------------------------------------------------------
+# Extract parts starting from Part 1
+# -------------------------------------------------------------------
 def extract_parts(text):
+    # Merge "continued" lines into same part
+    text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"\1", text, flags=re.IGNORECASE)
+
     part_pattern = r"(Part\s+\d+\.?.*?)(?=Part\s+\d+\.|$)"
     matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
+
     parts = {}
     for match in matches:
         lines = match.strip().split("\n", 1)
@@ -130,9 +134,11 @@ def extract_parts(text):
         parts[part_title] = part_content
     return parts
 
-# --- Field extraction inside parts ---
+# -------------------------------------------------------------------
+# Extract subfields (handles 1., 1.a, 1.b etc.)
+# -------------------------------------------------------------------
 def extract_fields(part_content):
-    field_pattern = r"(\d+\.\s+[^\n]+)"
+    field_pattern = r"(\d+\.[a-zA-Z]?\s+[^\n]+)"
     fields = re.findall(field_pattern, part_content)
     return fields
 
@@ -149,7 +155,7 @@ if uploaded_file:
     final_mappings = {}
     questionnaire_fields = []
 
-    st.header("🗂️ Review & Edit All Parts Sequentially (Full View)")
+    st.header("🗂️ Review & Edit All Parts (Full, Sequential View)")
 
     for part_name, part_content in parts.items():
         st.subheader(part_name)
@@ -185,6 +191,7 @@ if uploaded_file:
                     final_mappings[part_name] = []
                 final_mappings[part_name].append(field_data)
 
+    # Generate outputs
     ts_content = "// Auto-generated TypeScript mappings\nexport const formMappings = " + json.dumps(final_mappings, indent=2) + ";"
     ts_filename = f"uscis_mappings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ts"
 
@@ -198,7 +205,7 @@ if uploaded_file:
     st.download_button("💾 Download TypeScript Mapping", data=ts_content, file_name=ts_filename, mime="text/plain")
     st.download_button("💾 Download Questionnaire JSON", data=json.dumps(questionnaire_json, indent=2), file_name=json_filename, mime="application/json")
 
-    st.success("✅ All parts shown sequentially. Download your files above!")
+    st.success("✅ All parts displayed fully and sequentially. Download your files above!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
