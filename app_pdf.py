@@ -108,11 +108,20 @@ st.markdown("""
         margin-top: 0.25rem;
     }
     .part-header {
-        background: #f0f0f0;
-        padding: 0.75rem;
-        border-radius: 4px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
         margin-bottom: 1rem;
         font-weight: 600;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .part-expander {
+        background: white;
+        border: 2px solid #e0e0e0;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+        padding: 0.5rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -902,10 +911,10 @@ class FieldExtractor:
         return json.dumps({"controls": controls}, indent=2)
 
 def render_mapping_interface(extractor: FieldExtractor):
-    """Render the enhanced field mapping interface"""
-    st.markdown("## 🎯 Field Mapping")
+    """Render the enhanced field mapping interface organized by parts"""
+    st.markdown("## 🎯 Field Mapping by Parts")
     
-    # Part selector and filters
+    # Top controls
     with st.container():
         st.markdown('<div class="part-selector">', unsafe_allow_html=True)
         
@@ -956,7 +965,7 @@ def render_mapping_interface(extractor: FieldExtractor):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("🤖 Auto-Map Current Part", use_container_width=True):
+        if st.button("🤖 Auto-Map Current View", use_container_width=True):
             fields_to_map = st.session_state.fields
             if st.session_state.selected_part != 'All Parts':
                 fields_to_map = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
@@ -973,7 +982,7 @@ def render_mapping_interface(extractor: FieldExtractor):
             st.rerun()
     
     with col2:
-        if st.button("📋 Checkboxes → Quest", use_container_width=True):
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True):
             fields_to_move = st.session_state.fields
             if st.session_state.selected_part != 'All Parts':
                 fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
@@ -984,11 +993,11 @@ def render_mapping_interface(extractor: FieldExtractor):
                     field.to_questionnaire = True
                     field.is_mapped = False
                     count += 1
-            st.success(f"Moved {count} fields!")
+            st.success(f"Moved {count} fields to questionnaire!")
             st.rerun()
     
     with col3:
-        if st.button("🔄 Reset Part", use_container_width=True):
+        if st.button("🔄 Reset Current View", use_container_width=True):
             fields_to_reset = st.session_state.fields
             if st.session_state.selected_part != 'All Parts':
                 fields_to_reset = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
@@ -997,32 +1006,35 @@ def render_mapping_interface(extractor: FieldExtractor):
                 field.is_mapped = False
                 field.db_mapping = None
                 field.to_questionnaire = field.field_type in ['checkbox', 'radio', 'button']
+            st.success("Reset complete!")
             st.rerun()
     
     with col4:
         unmapped = sum(1 for f in st.session_state.fields if not f.is_mapped and not f.to_questionnaire)
-        if st.button(f"📋 Unmapped → Quest ({unmapped})", use_container_width=True):
+        if st.button(f"📋 All Unmapped → Quest ({unmapped})", use_container_width=True):
             fields_to_move = st.session_state.fields
             if st.session_state.selected_part != 'All Parts':
                 fields_to_move = st.session_state.fields_by_part.get(st.session_state.selected_part, [])
             
+            count = 0
             for field in fields_to_move:
                 if not field.is_mapped and not field.to_questionnaire:
                     field.to_questionnaire = True
+                    count += 1
+            st.success(f"Moved {count} fields to questionnaire!")
             st.rerun()
     
     # Database object browser
     if st.session_state.show_db_browser:
         with st.expander("🗂️ Database Structure Browser", expanded=True):
             st.markdown("### Available Database Paths")
+            st.caption("Click any path to copy it")
             
             # Create tabs for each main object
             tabs = st.tabs(list(DB_OBJECTS.keys()))
             
             for i, (obj_name, tab) in enumerate(zip(DB_OBJECTS.keys(), tabs)):
                 with tab:
-                    st.markdown(f"**{obj_name}** object fields:")
-                    
                     for sub_obj, fields in DB_OBJECTS[obj_name].items():
                         if sub_obj:
                             st.markdown(f"**{sub_obj}:**")
@@ -1037,141 +1049,171 @@ def render_mapping_interface(extractor: FieldExtractor):
                                 else:
                                     path = f"{obj_name}.{field}"
                                 
-                                if st.button(path, key=f"copy_{path}", use_container_width=True):
+                                if st.button(f"📋 {field}", key=f"copy_{path}", use_container_width=True):
                                     st.code(path, language="text")
-                                    st.info(f"Path copied: {path}")
     
-    # Field mapping interface
-    st.markdown("### 📝 Field Mappings")
+    # Field mapping interface organized by parts
+    st.markdown("### 📝 Field Mappings by Part")
     
-    # Get fields to display
+    # Get parts to display
     if st.session_state.selected_part == 'All Parts':
         parts_to_show = st.session_state.fields_by_part.items()
     else:
         parts_to_show = [(st.session_state.selected_part, 
                          st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
     
-    # Global field counter for unique keys
-    field_counter = 0
-    
+    # Display each part
     for part_name, fields in parts_to_show:
         # Filter fields based on mapping filter
         if st.session_state.mapping_filter == 'mapped':
-            fields = [f for f in fields if f.is_mapped]
+            display_fields = [f for f in fields if f.is_mapped]
         elif st.session_state.mapping_filter == 'unmapped':
-            fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
+            display_fields = [f for f in fields if not f.is_mapped and not f.to_questionnaire]
         elif st.session_state.mapping_filter == 'questionnaire':
-            fields = [f for f in fields if f.to_questionnaire]
+            display_fields = [f for f in fields if f.to_questionnaire]
+        else:
+            display_fields = fields
         
-        if not fields:
+        if not display_fields:
             continue
         
         # Get part info
         part_info = st.session_state.part_structure.get(part_name, {})
         
-        with st.expander(f"**{part_name}** {part_info.get('title', '')} ({len(fields)} fields)", expanded=True):
-            # Show part info
-            if part_info:
-                st.markdown(f'<div class="part-header">Pages: {", ".join(map(str, part_info.get("pages", [])))}</div>', 
-                          unsafe_allow_html=True)
-            
-            for field in fields:
-                field_counter += 1
-                unique_key_suffix = f"{field.field_id}_{field_counter}"
+        # Part header with stats
+        part_mapped = sum(1 for f in fields if f.is_mapped)
+        part_quest = sum(1 for f in fields if f.to_questionnaire)
+        part_unmapped = len(fields) - part_mapped - part_quest
+        
+        with st.container():
+            st.markdown(f'''
+            <div class="part-header">
+                <strong>{part_name}</strong> {part_info.get('title', '')} 
+                <br>
+                <small>Total: {len(fields)} | Mapped: {part_mapped} | Questionnaire: {part_quest} | Unmapped: {part_unmapped}</small>
+                <br>
+                <small>Pages: {', '.join(map(str, part_info.get('pages', [])))}</small>
+            </div>
+            ''', unsafe_allow_html=True)
+        
+        # Display fields for this part
+        for idx, field in enumerate(display_fields):
+            with st.container():
+                st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
                 
-                # Create mapping row
-                with st.container():
-                    st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # Field info
+                    display_label = field.field_label
+                    if field.item_number:
+                        display_label = f"{field.item_number}. {display_label}"
                     
-                    col1, col2 = st.columns([1, 1])
+                    st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
+                    st.markdown(f"""
+                    <div class="field-meta">
+                        <span class="field-type">{field.field_type}</span>
+                        Key: {field.field_key} • Page {field.page}
+                        {f' • Quest Key: {field.question_key}' if field.to_questionnaire else ''}
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    # Create unique key for this field
+                    unique_key = f"{part_name}_{field.field_id}_{idx}"
                     
-                    with col1:
-                        # Field info
-                        display_label = field.field_label
-                        if field.item_number:
-                            display_label = f"{field.item_number}. {display_label}"
+                    col2a, col2b = st.columns([3, 1])
+                    
+                    with col2a:
+                        # Database mapping dropdown
+                        grouped_options = {
+                            "Actions": ["-- Select Database Field --", "📋 Move to Questionnaire"],
+                            "beneficiary": [],
+                            "petitioner": [],
+                            "customer": [],
+                            "attorney": [],
+                            "attorneyLawfirmDetails": [],
+                            "case": [],
+                            "employment": []
+                        }
                         
-                        st.markdown(f'<div class="field-label">{display_label}</div>', unsafe_allow_html=True)
-                        st.markdown(f"""
-                        <div class="field-meta">
-                            <span class="field-type">{field.field_type}</span>
-                            Key: {field.field_key} • Page {field.page}
-                            {f' • Quest Key: {field.question_key}' if field.to_questionnaire else ''}
-                        </div>
-                        """, unsafe_allow_html=True)
+                        # Group database paths
+                        for path in extractor.db_paths:
+                            obj_name = path.split('.')[0]
+                            if obj_name in grouped_options:
+                                grouped_options[obj_name].append(path)
                         
-                        # Status badge
-                        status = field.get_status()
-                        if "Mapped" in status:
-                            badge_class = "status-mapped"
-                        elif "Questionnaire" in status:
-                            badge_class = "status-questionnaire"
+                        # Build flat list with separators
+                        options = []
+                        for group, items in grouped_options.items():
+                            if items:
+                                if options:  # Add separator between groups
+                                    options.append(f"── {group} ──")
+                                options.extend(items)
+                        
+                        # Current selection
+                        if field.is_mapped and field.db_mapping:
+                            current_value = field.db_mapping
+                        elif field.to_questionnaire:
+                            current_value = "📋 Move to Questionnaire"
                         else:
-                            badge_class = "status-unmapped"
+                            # Try to get suggestion
+                            suggestion = extractor.suggest_mapping(field)
+                            current_value = suggestion if suggestion else "-- Select Database Field --"
                         
-                        st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', unsafe_allow_html=True)
-                    
-                    with col2:
-                        if field.field_type == 'text':
-                            # Database mapping options
-                            # Dropdown for database paths
-                            options = ["-- Select Database Field --", "📋 Move to Questionnaire", "─────────────────"] + extractor.db_paths
-                            
-                            # Current selection
-                            if field.is_mapped and field.db_mapping:
-                                current_value = field.db_mapping
-                            elif field.to_questionnaire:
-                                current_value = "📋 Move to Questionnaire"
-                            else:
-                                current_value = "-- Select Database Field --"
-                            
-                            selected = st.selectbox(
-                                "Mapping",
-                                options,
-                                index=options.index(current_value) if current_value in options else 0,
-                                key=f"map_{unique_key_suffix}",
-                                label_visibility="collapsed"
-                            )
-                            
-                            # Handle selection
-                            if selected != current_value and selected != "─────────────────":
-                                if selected == "📋 Move to Questionnaire":
-                                    field.to_questionnaire = True
-                                    field.is_mapped = False
-                                    field.db_mapping = None
-                                elif selected != "-- Select Database Field --":
-                                    field.db_mapping = selected
-                                    field.is_mapped = True
-                                    field.to_questionnaire = False
-                                st.rerun()
-                            
-                            # Manual entry
-                            manual_key = f"manual_{unique_key_suffix}"
-                            manual = st.text_input(
-                                "Or enter custom path",
-                                key=manual_key,
-                                placeholder="e.g., customer.custom.fieldName",
-                                label_visibility="collapsed"
-                            )
-                            
-                            if manual and st.button("Apply", key=f"apply_{unique_key_suffix}"):
-                                field.db_mapping = manual
+                        # Find index
+                        try:
+                            current_index = options.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        selected = st.selectbox(
+                            "Database Mapping",
+                            options,
+                            index=current_index,
+                            key=f"map_{unique_key}",
+                            label_visibility="collapsed"
+                        )
+                        
+                        # Handle selection
+                        if selected != current_value and not selected.startswith("──"):
+                            if selected == "📋 Move to Questionnaire":
+                                field.to_questionnaire = True
+                                field.is_mapped = False
+                                field.db_mapping = None
+                            elif selected != "-- Select Database Field --":
+                                field.db_mapping = selected
                                 field.is_mapped = True
                                 field.to_questionnaire = False
-                                st.rerun()
-                        
-                        else:
-                            # For non-text fields
-                            include = st.checkbox(
-                                "Include in Questionnaire",
-                                value=field.to_questionnaire,
-                                key=f"quest_{unique_key_suffix}"
-                            )
-                            if include != field.to_questionnaire:
-                                field.to_questionnaire = include
-                                st.rerun()
+                            st.rerun()
                     
-                    st.markdown('</div>', unsafe_allow_html=True)
+                    with col2b:
+                        # Quick questionnaire toggle
+                        if st.button("📋", key=f"quest_btn_{unique_key}", 
+                                   help="Quick add to questionnaire",
+                                   use_container_width=True):
+                            field.to_questionnaire = True
+                            field.is_mapped = False
+                            field.db_mapping = None
+                            st.rerun()
+                
+                with col3:
+                    # Status
+                    status = field.get_status()
+                    if "Mapped" in status:
+                        badge_class = "status-mapped"
+                    elif "Questionnaire" in status:
+                        badge_class = "status-questionnaire"
+                    else:
+                        badge_class = "status-unmapped"
+                    
+                    st.markdown(f'<span class="status-badge {badge_class}">{status}</span>', 
+                              unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Add spacing between parts
+        st.markdown("<br>", unsafe_allow_html=True)
 
 def main():
     """Main application"""
@@ -1220,7 +1262,10 @@ def main():
             st.markdown("---")
             st.markdown("### 📑 Parts Overview")
             for part_name, part_info in st.session_state.part_structure.items():
-                st.text(f"{part_name}: {part_info['field_count']} fields")
+                fields = st.session_state.fields_by_part.get(part_name, [])
+                mapped = sum(1 for f in fields if f.is_mapped)
+                quest = sum(1 for f in fields if f.to_questionnaire)
+                st.caption(f"{part_name}: {len(fields)} fields ({mapped} mapped, {quest} quest)")
     
     # Main tabs
     tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export & Download"])
