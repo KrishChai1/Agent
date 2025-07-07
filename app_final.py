@@ -7,54 +7,54 @@ from io import BytesIO
 # Configure OpenAI API key
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-st.set_page_config(page_title="🗂️ USCIS Smart Form Reader", layout="wide")
-st.title("🗂️ USCIS Smart Form Reader & DB Mapper")
+st.set_page_config(page_title="🗂️ USCIS Smart Form Mapper", layout="wide")
+st.title("🗂️ USCIS Smart Form Reader & DB Object Mapper")
 
 st.markdown("""
-Upload a USCIS form (PDF). This app will:
-- Extract fields **part by part** (e.g., Part 1, Part 2).
-- **Auto-assign each field** to a database object (Attorney, Beneficiary, etc.).
-- Allow you to override assignments or move fields to a questionnaire.
-- Download separate JSON files for DB (TS) and Questionnaire fields.
+Upload a USCIS PDF form, extract fields **part by part**, auto-map to DB objects, or assign manually.
+- Move unmapped or checkbox-type fields to Questionnaire JSON.
+- Download ready-made TS and Questionnaire JSON files.
 """)
 
 # Upload PDF
-uploaded_file = st.file_uploader("📤 Upload USCIS form (PDF)", type=["pdf"])
+uploaded_file = st.file_uploader("📄 Upload USCIS form (PDF)", type=["pdf"])
 
 if uploaded_file:
-    # Extract text from PDF
+    # Extract text
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     text = ""
     for page in pdf:
         text += page.get_text()
     pdf.close()
 
-    st.subheader("🔎 Extracted Text Preview")
-    st.text_area("PDF Text", text, height=300)
+    st.subheader("📄 Extracted Text Preview")
+    st.text_area("Form Text", text, height=300)
 
-    # Prompt for AI parsing
+    # Define DB object options (example set)
+    db_objects = ["Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner", "None"]
+
     prompt = f"""
-    You are an expert USCIS form parsing assistant. 
-    Split this text into logical parts (e.g., Part 1, Part 2).
-    For each part, extract fields as key-value pairs and suggest a DB object (Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner). 
-    Example output:
+    You are an expert at extracting structured fields from USCIS forms.
+    Please break this text into logical parts (e.g., Part 1, Part 2). 
+    For each part, list fields with labels and suggest one DB object (Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner).
+    Provide JSON format: 
     {{
-        "Part 1": {{
-            "Family Name": {{"value": "Doe", "suggested_db": "Beneficiary"}},
-            ...
-        }},
-        ...
+      "Part 1": {{
+          "Field Label": {{"value": "", "suggested_db": "Attorney"}},
+          ...
+      }},
+      ...
     }}
-    Text:
+    Here is the text:
     {text}
     """
 
-    if st.button("🔍 Extract & Auto-Map Fields"):
-        with st.spinner("Analyzing form and auto-mapping..."):
+    if st.button("🔍 Parse & Auto-Map"):
+        with st.spinner("Parsing with AI..."):
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a precise USCIS form parsing and mapping expert."},
+                    {"role": "system", "content": "You are a precise USCIS form parsing and mapping assistant."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0
@@ -63,21 +63,20 @@ if uploaded_file:
 
             try:
                 parts_json = json.loads(parsed_content)
-            except:
-                st.error("❌ Could not parse AI response as JSON. Showing raw response below for reference.")
+            except json.JSONDecodeError:
+                st.error("❌ AI response is not valid JSON. Showing raw output for debugging.")
                 st.text_area("Raw AI Response", parsed_content, height=300)
                 st.stop()
 
             ts_json = {}
             questionnaire_json = {}
 
-            st.subheader("🧩 Part-by-Part Review & Mapping")
+            st.subheader("🧩 Review & Adjust Mappings Part by Part")
 
             for part_name, fields in parts_json.items():
                 with st.expander(f"📄 {part_name}", expanded=False):
-
                     if isinstance(fields, dict):
-                        for field_name, field_data in fields.items():
+                        for field_label, field_data in fields.items():
                             if isinstance(field_data, dict):
                                 value = field_data.get("value", "")
                                 suggested_db = field_data.get("suggested_db", "None")
@@ -85,30 +84,26 @@ if uploaded_file:
                                 value = ""
                                 suggested_db = "None"
 
-                            col1, col2, col3 = st.columns([3, 3, 2])
+                            col1, col2, col3 = st.columns([4, 3, 3])
                             with col1:
-                                st.markdown(f"**{field_name}**")
-                                value_input = st.text_input("Value", value, key=f"val_{part_name}_{field_name}")
-
+                                st.text_input("Field Label", field_label, key=f"label_{part_name}_{field_label}", disabled=True)
                             with col2:
                                 selected_db = st.selectbox(
-                                    "Assign to DB Object",
-                                    ["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"],
-                                    index=["None", "Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"].index(
-                                        suggested_db if suggested_db in ["Attorney", "Beneficiary", "Case", "Customer", "Lawfirm", "LCA", "Petitioner"] else "None"
-                                    ),
-                                    key=f"db_{part_name}_{field_name}"
+                                    "DB Object",
+                                    db_objects,
+                                    index=db_objects.index(suggested_db) if suggested_db in db_objects else db_objects.index("None"),
+                                    key=f"db_{part_name}_{field_label}"
                                 )
-
                             with col3:
-                                move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{part_name}_{field_name}")
+                                move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{part_name}_{field_label}")
 
+                            # Update mappings
                             if move_to_q or selected_db == "None":
-                                questionnaire_json[field_name] = value_input
+                                questionnaire_json[field_label] = {"value": value}
                             else:
-                                ts_json[field_name] = {"value": value_input, "mapped_to": selected_db}
+                                ts_json[field_label] = {"value": value, "mapped_to": selected_db}
                     else:
-                        st.warning(f"⚠️ Skipping {part_name}: Expected a dictionary but got {type(fields).__name__}.")
+                        st.warning(f"⚠️ Skipping {part_name}: Unexpected structure.")
 
             # Download buttons
             ts_str = json.dumps(ts_json, indent=2)
@@ -128,3 +123,4 @@ if uploaded_file:
             )
 
             st.success("✔ JSON files ready for download!")
+
