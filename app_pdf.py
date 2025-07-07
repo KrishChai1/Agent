@@ -657,6 +657,37 @@ class USCISExtractor:
         for key, label in label_map.items():
             if key in clean_lower:
                 return label
+    
+    def auto_map_with_ai(self) -> int:
+        """Auto-map fields using AI suggestions"""
+        mapped_count = 0
+        unmapped_text_fields = [
+            f for f in st.session_state.fields 
+            if not f.is_mapped and not f.to_questionnaire and f.field_type == 'text'
+        ]
+        
+        if not unmapped_text_fields:
+            return 0
+        
+        # Get AI suggestions
+        with st.spinner("🤖 AI is analyzing fields..."):
+            for field in unmapped_text_fields:
+                suggestion, confidence = self.ai_mapper.get_field_mapping_suggestion(field, self.db_paths)
+                
+                if suggestion:
+                    field.ai_suggestion = suggestion
+                    field.confidence = confidence
+                    
+                    # Auto-apply if very confident
+                    if confidence >= 0.85 and suggestion != "questionnaire":
+                        field.db_mapping = suggestion
+                        field.is_mapped = True
+                        mapped_count += 1
+                    elif confidence >= 0.85 and suggestion == "questionnaire":
+                        field.to_questionnaire = True
+                        mapped_count += 1
+        
+        return mapped_count
         
         # Smart case conversion
         # Handle camelCase
