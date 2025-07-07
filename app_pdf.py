@@ -567,8 +567,9 @@ class FieldExtractor:
             item_match = re.search(r'(\d+\.?[a-z]?)', field_info['label'])
             item_number = item_match.group(1) if item_match else ""
             
-            # Create unique field ID
-            field_id = f"P{part_info['number']}_{field_info['key']}_{page}"
+            # Create unique field ID with hash to ensure uniqueness
+            unique_hash = hashlib.md5(widget_name.encode()).hexdigest()[:8]
+            field_id = f"P{part_info['number']}_{field_info['key']}_{page}_{unique_hash}"
             
             # Get value
             value = ""
@@ -1030,6 +1031,9 @@ def render_mapping_interface(extractor: FieldExtractor):
         parts_to_show = [(st.session_state.selected_part, 
                          st.session_state.fields_by_part.get(st.session_state.selected_part, []))]
     
+    # Global field counter for unique keys
+    field_counter = 0
+    
     for part_name, fields in parts_to_show:
         # Filter fields based on mapping filter
         if st.session_state.mapping_filter == 'mapped':
@@ -1044,6 +1048,9 @@ def render_mapping_interface(extractor: FieldExtractor):
         
         with st.expander(f"**{part_name}** ({len(fields)} fields)", expanded=True):
             for field in fields:
+                field_counter += 1
+                unique_key_suffix = f"{field.field_id}_{field_counter}"
+                
                 # Create mapping row
                 with st.container():
                     st.markdown('<div class="mapping-row">', unsafe_allow_html=True)
@@ -1093,7 +1100,7 @@ def render_mapping_interface(extractor: FieldExtractor):
                                     "Mapping",
                                     options,
                                     index=options.index(current_value) if current_value in options else 0,
-                                    key=f"map_{field.field_id}",
+                                    key=f"map_{unique_key_suffix}",
                                     label_visibility="collapsed"
                                 )
                                 
@@ -1112,13 +1119,13 @@ def render_mapping_interface(extractor: FieldExtractor):
                             with subcol2:
                                 # AI suggestion button
                                 if st.session_state.ai_suggestions_enabled and OPENAI_AVAILABLE:
-                                    if st.button("🤖", key=f"ai_{field.field_id}", help="Get AI suggestion"):
+                                    if st.button("🤖", key=f"ai_{unique_key_suffix}", help="Get AI suggestion"):
                                         suggestion, confidence = extractor.get_ai_suggestion(field)
                                         if suggestion:
                                             st.info(f"AI suggests: {suggestion} (confidence: {confidence:.0%})")
                             
                             # Manual entry
-                            manual_key = f"manual_{field.field_id}"
+                            manual_key = f"manual_{unique_key_suffix}"
                             manual = st.text_input(
                                 "Or enter custom path",
                                 key=manual_key,
@@ -1126,7 +1133,7 @@ def render_mapping_interface(extractor: FieldExtractor):
                                 label_visibility="collapsed"
                             )
                             
-                            if manual and st.button("Apply", key=f"apply_{field.field_id}"):
+                            if manual and st.button("Apply", key=f"apply_{unique_key_suffix}"):
                                 field.db_mapping = manual
                                 field.is_mapped = True
                                 field.to_questionnaire = False
@@ -1146,7 +1153,7 @@ def render_mapping_interface(extractor: FieldExtractor):
                             include = st.checkbox(
                                 "Include in Questionnaire",
                                 value=field.to_questionnaire,
-                                key=f"quest_{field.field_id}"
+                                key=f"quest_{unique_key_suffix}"
                             )
                             if include != field.to_questionnaire:
                                 field.to_questionnaire = include
