@@ -409,11 +409,13 @@ class USCISExtractor:
                 
                 # Get widgets
                 widgets = page.widgets()
-                widget_count = len(widgets) if widgets else 0
-                self._log(f"Page {page_num + 1}: Found {widget_count} widgets in {part_info['name']}")
-                
                 if widgets:
-                    for widget in widgets:
+                    # Convert generator to list
+                    widget_list = list(widgets)
+                    widget_count = len(widget_list)
+                    self._log(f"Page {page_num + 1}: Found {widget_count} widgets in {part_info['name']}")
+                    
+                    for widget in widget_list:
                         if widget and hasattr(widget, 'field_name') and widget.field_name:
                             # Check if we've seen this field
                             if widget.field_name not in self.seen_fields:
@@ -433,6 +435,8 @@ class USCISExtractor:
                                 
                                 all_fields.append(field)
                                 self._log(f"  - Field: {field.field_label} ({field.field_type})")
+                else:
+                    self._log(f"Page {page_num + 1}: No widgets found")
             
             progress_bar.empty()
             doc.close()
