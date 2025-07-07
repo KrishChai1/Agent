@@ -126,6 +126,25 @@ st.markdown("""
         border-radius: 8px;
         margin: 1rem 0;
     }
+    .questionnaire-key {
+        background: #fff3cd;
+        color: #856404;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-family: monospace;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
+    .field-type-badge {
+        background: #e3f2fd;
+        color: #1976d2;
+        padding: 0.2rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        display: inline-block;
+        margin-left: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -229,6 +248,7 @@ class ExtractedField:
     questionnaire_name: str = ""
     questionnaire_key: str = ""
     control_type: str = ""
+    questionnaire_type: str = ":ConditionBox"  # Default for checkboxes/radios
     
     # Debug info
     debug_info: Dict = field(default_factory=dict)
@@ -242,6 +262,20 @@ class ExtractedField:
         # Generate widget ID
         if not self.widget_id:
             self.widget_id = f"{self.part_number}_{self.field_hash}"
+        
+        # Update questionnaire key to match format pt{part}_{item}
+        if self.item_number:
+            # Convert item number like "1.a" to "1a"
+            item_clean = self.item_number.replace('.', '')
+            self.questionnaire_key = f"pt{self.part_number}_{item_clean}"
+        else:
+            self.questionnaire_key = f"pt{self.part_number}_{self.name[:10]}"
+        
+        # Set questionnaire type based on field type
+        if self.type == "text" and self.is_questionnaire:
+            self.questionnaire_type = ":SingleBox"
+        elif self.type in ["checkbox", "radio"]:
+            self.questionnaire_type = ":ConditionBox"
 
 @dataclass
 class FormStructure:
@@ -596,11 +630,13 @@ class AIEnhancedPDFReader(Agent):
             
             # Generate questionnaire names
             if item_number:
-                quest_name = f"{item_number.replace('.', '_')}"
-                quest_key = f"pt{part_number}_{item_number.replace('.', '')}"
+                # For fields with item numbers, use the number
+                quest_name = item_number.replace('.', '_')
             else:
-                quest_name = f"field_{field_count}"
-                quest_key = f"pt{part_number}_field{field_count}"
+                # For fields without item numbers, use a clean version of the name
+                quest_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_name)[:20]
+                if not quest_name:
+                    quest_name = f"field_{field_count}"
             
             # Determine control type for questionnaire
             control_type_map = {
@@ -625,7 +661,6 @@ class AIEnhancedPDFReader(Agent):
                 raw_name=raw_name,
                 is_questionnaire=field_type in ["checkbox", "radio"],
                 questionnaire_name=quest_name,
-                questionnaire_key=quest_key,
                 control_type=control_type_map.get(field_type, 'text'),
                 ai_confidence=0.8 if page_text and self.api_key else 0.0,
                 debug_info={
@@ -668,7 +703,6 @@ class AIEnhancedPDFReader(Agent):
                         raw_name=field_name,
                         is_questionnaire=field_type in ["checkbox", "radio"],
                         questionnaire_name=f"field_{field_count}",
-                        questionnaire_key=f"pt{part_number}_field{field_count}",
                         debug_info={'annot_type': annot.type[0]}
                     )
                     fields.append(field)
@@ -935,6 +969,7 @@ class UniversalMappingAgent(Agent):
             r'mobile.*(?:phone|number)|cell.*(?:phone|number)': 'beneficiary.ContactInfo.mobileTelephoneNumber',
             r'email.*address|e[\s-]?mail': 'beneficiary.ContactInfo.emailAddress',
             r'fax.*number': 'attorney.attorneyInfo.faxNumber',
+            r'work.*phone': 'attorney.attorneyInfo.workPhone',
             
             # Address
             r'street.*address|address.*line.*1': 'beneficiary.MailingAddress.addressStreet',
@@ -1086,6 +1121,7 @@ class UniversalExportAgent(Agent):
         
         # Track conditional relationships
         conditional_groups = defaultdict(list)
+        radio_groups = defaultdict(list)
         
         # Process fields
         for part_name, fields in form_structure.parts.items():
@@ -1107,36 +1143,45 @@ class UniversalExportAgent(Agent):
                         sections[section][key] = f"{field.db_path}{suffix}"
                 
                 elif field.is_questionnaire:
-                    # Add to questionnaire
-                    sections['questionnaireData'][field.questionnaire_key] = f"{field.questionnaire_name}:ConditionBox"
+                    # Add to questionnaire with proper suffix
+                    sections['questionnaireData'][field.questionnaire_key] = f"{field.questionnaire_name}{field.questionnaire_type}"
                     
                     # Track conditionals
                     if field.type == "radio":
-                        group_name = re.sub(r'\d+.*', '', field.questionnaire_name)
-                        conditional_groups[group_name].append(field)
+                        # Extract base name for radio group
+                        base_name = re.sub(r'_?\d+[a-z]?$', '', field.questionnaire_name)
+                        radio_groups[base_name].append(field)
+                    elif field.type == "checkbox" and field.is_conditional:
+                        conditional_groups[field.questionnaire_name] = field
         
-        # Generate conditional data
-        for group, fields in conditional_groups.items():
+        # Generate conditional data for checkboxes
+        for checkbox_name, field in conditional_groups.items():
+            sections['conditionalData'][field.questionnaire_key] = {
+                "condition": f"{field.questionnaire_name}==true",
+                "conditionTrue": "true",
+                "conditionFalse": "",
+                "conditionType": "CheckBox",
+                "conditionParam": "",
+                "conditionData": ""
+            }
+        
+        # Generate conditional data for radio groups
+        for group_name, fields in radio_groups.items():
             for field in fields:
-                if field.type == "radio":
-                    value = field.item_number.split('.')[0] if field.item_number else "1"
-                    sections['conditionalData'][field.questionnaire_key] = {
-                        "condition": f"{group}=={value}",
-                        "conditionTrue": value,
-                        "conditionFalse": "",
-                        "conditionType": "CheckBox",
-                        "conditionParam": "",
-                        "conditionData": ""
-                    }
-                elif field.type == "checkbox" and field.is_conditional:
-                    sections['conditionalData'][field.questionnaire_key] = {
-                        "condition": f"{field.questionnaire_name}==true",
-                        "conditionTrue": "true",
-                        "conditionFalse": "",
-                        "conditionType": "CheckBox",
-                        "conditionParam": "",
-                        "conditionData": ""
-                    }
+                # Extract value from item number or use index
+                if field.item_number:
+                    value = field.item_number.split('.')[0]
+                else:
+                    value = str(fields.index(field) + 1)
+                
+                sections['conditionalData'][field.questionnaire_key] = {
+                    "condition": f"{group_name}=={value}",
+                    "conditionTrue": value,
+                    "conditionFalse": "",
+                    "conditionType": "CheckBox",
+                    "conditionParam": "",
+                    "conditionData": ""
+                }
         
         # Generate TypeScript
         ts = f'export const {form_name} = {{\n'
@@ -1196,8 +1241,9 @@ class UniversalExportAgent(Agent):
                 
                 for field in quest_fields:
                     if field.type == "radio":
-                        group = re.sub(r'\d+.*', '', field.questionnaire_name)
-                        radio_groups[group].append(field)
+                        # Extract base name for grouping
+                        base_name = re.sub(r'_?\d+[a-z]?$', '', field.questionnaire_name)
+                        radio_groups[base_name].append(field)
                     else:
                         # Add non-radio fields
                         control = self._create_control(field)
@@ -1252,7 +1298,9 @@ class UniversalExportAgent(Agent):
         if field.type == "text":
             control["style"] = {"col": "7"}
             if "maxlength" in field.name.lower():
-                control["validators"]["maxLength"] = "50"
+                match = re.search(r'(\d+)', field.name.lower())
+                if match:
+                    control["validators"]["maxLength"] = match.group(1)
         else:
             control["style"] = {"col": "12"}
         
@@ -1264,7 +1312,11 @@ class UniversalExportAgent(Agent):
         if field.item_number:
             label = f"{field.item_number}. {label}"
         
-        value = field.item_number.split('.')[0] if field.item_number else "1"
+        # Extract value from item number
+        if field.item_number:
+            value = field.item_number.split('.')[0]
+        else:
+            value = "1"
         
         return {
             "id": field.questionnaire_name,
@@ -1506,13 +1558,16 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     else:
                         st.markdown(f'**{field.label}**')
                     
-                    # Field metadata
+                    # Field metadata - show part instead of page
                     meta_items = [
                         f"Type: {field.type}",
-                        f"Page: {field.page}"
+                        f"{field.part}"
                     ]
-                    if field.questionnaire_key:
-                        meta_items.append(f"Key: {field.questionnaire_key}")
+                    
+                    # Show questionnaire key
+                    if field.is_questionnaire:
+                        st.markdown(f'<span class="questionnaire-key">{field.questionnaire_key}</span>', 
+                                  unsafe_allow_html=True)
                     
                     st.markdown(f'<div class="field-info">{" • ".join(meta_items)}</div>', 
                               unsafe_allow_html=True)
@@ -1552,6 +1607,7 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                             if selected == "📋 Move to Questionnaire":
                                 field.is_questionnaire = True
                                 field.db_path = None
+                                field.questionnaire_type = ":SingleBox"
                             elif selected != "-- Select Database Field --":
                                 field.db_path = selected
                                 field.is_questionnaire = False
@@ -1717,7 +1773,7 @@ def main():
                                 )
                             
                             st.success(f"✅ Successfully processed {form_structure.form_number}")
-                            st.balloons()
+                            # Removed st.balloons() as requested
                             
                             # Show summary
                             with st.expander("📊 Extraction Summary", expanded=True):
