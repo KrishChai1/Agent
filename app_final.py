@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 from datetime import datetime
 
 st.set_page_config(page_title="🗂️ USCIS Smart Mapper", layout="wide")
-st.title("🗂️ USCIS Form AI Mapper — Correct Parts & Subfields")
+st.title("🗂️ USCIS Form AI Mapper — Final Correct Version")
 
 # -------------------------------------------------------------------
 # Build flattened DB attributes list from uploaded objects
@@ -117,7 +117,7 @@ def build_db_attributes():
 db_fields = build_db_attributes()
 
 # -------------------------------------------------------------------
-# Extract parts starting from Part 1
+# Extract parts starting from Part 1, including "continued" logic
 # -------------------------------------------------------------------
 def extract_parts(text):
     # Merge "continued" lines into same part
@@ -135,12 +135,18 @@ def extract_parts(text):
     return parts
 
 # -------------------------------------------------------------------
-# Extract subfields (handles 1., 1.a, 1.b etc.)
+# Extract subfields (handles 1., 1.a., 1.a.b., etc.)
 # -------------------------------------------------------------------
 def extract_fields(part_content):
-    field_pattern = r"(\d+\.[a-zA-Z]?\s+[^\n]+)"
-    fields = re.findall(field_pattern, part_content)
-    return fields
+    simple_pattern = r"(\d+\.\s+[^\n]+)"
+    subfield_pattern = r"(\d+\.[a-z](?:\.[a-z])?\.\s+[^\n]+)"
+
+    subfields = re.findall(subfield_pattern, part_content, flags=re.IGNORECASE)
+    simplefields = re.findall(simple_pattern, part_content)
+
+    all_fields = set(subfields + simplefields)
+    all_fields = sorted(all_fields, key=lambda x: part_content.find(x))
+    return all_fields
 
 uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
 
