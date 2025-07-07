@@ -11,17 +11,16 @@ st.set_page_config(page_title="🗂️ USCIS Smart Form Reader", layout="wide")
 st.title("🗂️ USCIS Smart Form Reader & Flexible DB Mapper")
 
 st.markdown("""
-Upload a USCIS PDF form, extract fields **part by part**, and auto-assign DB objects using AI.
-- You can **modify or override suggestions** using dropdowns.
-- You can also move any field to Questionnaire JSON manually.
-- Download final TS JSON and Questionnaire JSON.
+Upload a USCIS PDF form. The app will:
+- Auto-assign each field to a suggested DB object using AI.
+- You can **modify or override** any mapping using dropdowns.
+- Move any field to Questionnaire if you'd like.
+- Download TS JSON and Questionnaire JSON separately.
 """)
 
-# Upload PDF
 uploaded_file = st.file_uploader("📄 Upload USCIS form (PDF)", type=["pdf"])
 
 if uploaded_file:
-    # Extract text from PDF
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
     text = ""
     for page in pdf:
@@ -31,7 +30,6 @@ if uploaded_file:
     st.subheader("📄 Extracted Text Preview")
     st.text_area("Form Text", text, height=300)
 
-    # Split text into rough parts
     parts = re.split(r"(Part\s\d+)", text)
     grouped_parts = {}
 
@@ -52,7 +50,7 @@ if uploaded_file:
             short_prompt = f"""
             Extract field labels and example values from this USCIS form part.
             Suggest a likely DB object for each field: Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner, or None.
-            Provide strict valid JSON only, format:
+            Return strictly valid JSON only, no extra text. Format:
             {{
               "Field Label": {{"value": "example value", "suggested_db": "Beneficiary"}},
               ...
@@ -64,7 +62,7 @@ if uploaded_file:
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are an expert at extracting USCIS fields and suggesting DB objects. Provide valid JSON only, no commentary."},
+                    {"role": "system", "content": "You are an expert USCIS parser. Reply strictly in valid JSON only. No commentary."},
                     {"role": "user", "content": short_prompt}
                 ],
                 temperature=0
@@ -74,7 +72,7 @@ if uploaded_file:
             try:
                 fields_dict = json.loads(raw_content)
             except json.JSONDecodeError:
-                st.error(f"⚠️ Could not parse JSON for {part_name}. Showing raw output below so you can copy/adjust manually.")
+                st.error(f"⚠️ Could not parse JSON for {part_name}. Showing raw output below for manual review.")
                 st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
                 continue
 
@@ -101,7 +99,6 @@ if uploaded_file:
                     else:
                         ts_json[field_label] = {"value": value, "mapped_to": selected_db}
 
-        # Download buttons
         ts_str = json.dumps(ts_json, indent=2)
         q_str = json.dumps(questionnaire_json, indent=2)
 
