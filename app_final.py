@@ -7,13 +7,14 @@ import re
 # Configure OpenAI API key
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-st.set_page_config(page_title="🗂️ USCIS Smart Form Mapper", layout="wide")
-st.title("🗂️ USCIS Smart Form Reader & DB Mapper")
+st.set_page_config(page_title="🗂️ USCIS Smart Form Reader", layout="wide")
+st.title("🗂️ USCIS Smart Form Reader & Flexible DB Mapper")
 
 st.markdown("""
-Upload a USCIS PDF form, extract fields **part by part**, auto-map to DB objects, or assign manually.
-- Move unmapped or checkbox-type fields to Questionnaire JSON.
-- Download ready-made TS and Questionnaire JSON files.
+Upload a USCIS PDF form, extract fields **part by part**, and auto-assign DB objects using AI.
+- You can **modify or override suggestions** using dropdowns.
+- You can also move any field to Questionnaire JSON manually.
+- Download final TS JSON and Questionnaire JSON.
 """)
 
 # Upload PDF
@@ -44,15 +45,16 @@ if uploaded_file:
     ts_json = {}
     questionnaire_json = {}
 
-    if st.button("🔍 Parse & Auto-Map Parts"):
+    if st.button("🔍 Parse & Auto-Assign (Editable)"):
         for part_name, part_text in grouped_parts.items():
             st.write(f"Processing: **{part_name}**")
 
             short_prompt = f"""
             Extract field labels and example values from this USCIS form part.
-            Output JSON only, format:
+            Suggest a likely DB object for each field: Attorney, Beneficiary, Case, Customer, Lawfirm, LCA, Petitioner, or None.
+            Provide strict valid JSON only, format:
             {{
-              "Field Label": "Example value",
+              "Field Label": {{"value": "example value", "suggested_db": "Beneficiary"}},
               ...
             }}
             Text:
@@ -62,7 +64,7 @@ if uploaded_file:
             response = openai.ChatCompletion.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are an expert at extracting structured fields from USCIS forms."},
+                    {"role": "system", "content": "You are an expert at extracting USCIS fields and suggesting DB objects. Provide valid JSON only, no commentary."},
                     {"role": "user", "content": short_prompt}
                 ],
                 temperature=0
@@ -72,12 +74,15 @@ if uploaded_file:
             try:
                 fields_dict = json.loads(raw_content)
             except json.JSONDecodeError:
-                st.warning(f"⚠️ Could not parse JSON for {part_name}. Showing raw output.")
+                st.error(f"⚠️ Could not parse JSON for {part_name}. Showing raw output below so you can copy/adjust manually.")
                 st.text_area(f"Raw AI Output for {part_name}", raw_content, height=300)
                 continue
 
             with st.expander(f"📄 {part_name}", expanded=False):
-                for field_label, example_value in fields_dict.items():
+                for field_label, field_info in fields_dict.items():
+                    value = field_info.get("value", "")
+                    suggested_db = field_info.get("suggested_db", "None")
+
                     col1, col2, col3 = st.columns([4, 3, 3])
                     with col1:
                         st.text_input("Field Label", field_label, key=f"label_{part_name}_{field_label}", disabled=True)
@@ -85,16 +90,16 @@ if uploaded_file:
                         selected_db = st.selectbox(
                             "DB Object",
                             db_objects,
-                            index=0,
+                            index=db_objects.index(suggested_db) if suggested_db in db_objects else 0,
                             key=f"db_{part_name}_{field_label}"
                         )
                     with col3:
                         move_to_q = st.checkbox("Move to Questionnaire", key=f"q_{part_name}_{field_label}")
 
                     if move_to_q or selected_db == "None":
-                        questionnaire_json[field_label] = {"value": example_value}
+                        questionnaire_json[field_label] = {"value": value}
                     else:
-                        ts_json[field_label] = {"value": example_value, "mapped_to": selected_db}
+                        ts_json[field_label] = {"value": value, "mapped_to": selected_db}
 
         # Download buttons
         ts_str = json.dumps(ts_json, indent=2)
