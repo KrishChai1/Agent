@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
-import openai
+from openai import OpenAI
 from abc import ABC, abstractmethod
 import time
 import hashlib
@@ -142,6 +142,18 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Initialize OpenAI client
+@st.cache_resource
+def get_openai_client():
+    """Get OpenAI client from secrets"""
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY", None)
+        if api_key:
+            return OpenAI(api_key=api_key)
+        return None
+    except Exception:
+        return None
 
 # Enhanced Database structure
 UNIVERSAL_DB_STRUCTURE = {
@@ -323,11 +335,9 @@ class Agent(ABC):
 class ResearchAgent(Agent):
     """Intelligent field extraction with accurate item number recognition"""
     
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self):
         super().__init__("Research Agent", "Field Extraction & Analysis")
-        self.api_key = api_key
-        if api_key:
-            openai.api_key = api_key
+        self.client = get_openai_client()
     
     def execute(self, pdf_file, use_ai: bool = True) -> Optional[FormStructure]:
         """Extract fields with intelligent parsing"""
@@ -358,14 +368,14 @@ class ResearchAgent(Agent):
                 page_texts.append(text)
             
             # Step 3: AI analysis if available
-            ai_structure = None
-            if use_ai and self.api_key:
-                ai_structure = self._ai_analyze_form_structure(full_text[:8000], form_info['number'])
-                if ai_structure:
-                    self.log("AI form structure analysis completed", "success")
+            ai_parts = None
+            if use_ai and self.client:
+                ai_parts = self._ai_extract_parts(full_text[:15000], form_info['number'])
+                if ai_parts:
+                    self.log("AI part structure analysis completed", "success")
             
             # Step 4: Extract fields intelligently
-            self._extract_fields_smart(form_structure, doc, page_texts, ai_structure)
+            self._extract_fields_smart(form_structure, doc, page_texts, ai_parts)
             
             doc.close()
             
@@ -413,8 +423,114 @@ class ResearchAgent(Agent):
         
         return form_info
     
-    def _extract_fields_smart(self, form_structure: FormStructure, doc, page_texts: List[str], ai_structure: Optional[Dict]):
-        """Smart field extraction with accurate item numbers"""
+    def _ai_extract_parts(self, text: str, form_number: str) -> Optional[Dict[str, Dict]]:
+        """Use AI to extract form parts and their fields"""
+        if not self.client:
+            return None
+        
+        try:
+            prompt = f"""
+            Analyze this USCIS {form_number} form and extract the exact part structure with fields.
+            
+            Text:
+            {text}
+            
+            Extract and return a JSON object with the following structure:
+            {{
+                "Part 1": {{
+                    "title": "Information About You",
+                    "fields": [
+                        {{"item": "1.a", "label": "Family Name (Last Name)", "type": "text"}},
+                        {{"item": "1.b", "label": "Given Name (First Name)", "type": "text"}},
+                        {{"item": "1.c", "label": "Middle Name", "type": "text"}},
+                        {{"item": "2", "label": "Alien Registration Number (A-Number)", "type": "text"}},
+                        {{"item": "3", "label": "USCIS Online Account Number", "type": "text"}}
+                    ]
+                }},
+                "Part 2": {{
+                    "title": "Application Type",
+                    "fields": [
+                        {{"item": "1", "label": "I am applying to", "type": "checkbox"}}
+                    ]
+                }}
+            }}
+            
+            Rules:
+            1. Include ALL parts found in the form
+            2. For each part, include the exact title and all fields
+            3. Use exact item numbers as they appear (e.g., "1.a", "1.b", "2", "10")
+            4. Identify field types: text, checkbox, radio, date, signature
+            5. Include the exact label text for each field
+            
+            Return ONLY valid JSON, no explanation.
+            """
+            
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an expert at analyzing USCIS forms and extracting structured data."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=2000
+            )
+            
+            # Parse response
+            result = json.loads(response.choices[0].message.content)
+            return result
+            
+        except Exception as e:
+            self.log(f"AI part extraction error: {str(e)}", "warning")
+            return None
+    
+    def _extract_fields_smart(self, form_structure: FormStructure, doc, page_texts: List[str], ai_parts: Optional[Dict]):
+        """Smart field extraction with AI-enhanced part detection"""
+        
+        # If we have AI parts, use them
+        if ai_parts:
+            self._extract_using_ai_parts(form_structure, doc, page_texts, ai_parts)
+        else:
+            # Fallback to pattern-based extraction
+            self._extract_using_patterns(form_structure, doc, page_texts)
+    
+    def _extract_using_ai_parts(self, form_structure: FormStructure, doc, page_texts: List[str], ai_parts: Dict):
+        """Extract fields using AI-identified parts"""
+        
+        # Process each part from AI
+        for part_name, part_info in ai_parts.items():
+            part_number = int(re.search(r'Part (\d+)', part_name).group(1)) if 'Part' in part_name else 1
+            part_title = part_info.get('title', '')
+            
+            # Create part if not exists
+            if part_name not in form_structure.parts:
+                form_structure.parts[part_name] = []
+                self.log(f"Processing {part_name}: {part_title}")
+            
+            # Add fields from AI analysis
+            for field_info in part_info.get('fields', []):
+                field = ExtractedField(
+                    name=f"field_{field_info['item'].replace('.', '_')}",
+                    label=field_info['label'],
+                    type=field_info['type'],
+                    page=1,  # Will be updated when we find it in PDF
+                    part=part_name,
+                    part_number=part_number,
+                    part_title=part_title,
+                    item_number=field_info['item']
+                )
+                
+                # Auto-assign checkboxes to questionnaire
+                if field.type in ["checkbox", "radio"]:
+                    field.is_questionnaire = True
+                
+                form_structure.parts[part_name].append(field)
+                form_structure.total_fields += 1
+        
+        # Now try to find these fields in the actual PDF
+        self._match_fields_to_pages(form_structure, doc, page_texts)
+    
+    def _extract_using_patterns(self, form_structure: FormStructure, doc, page_texts: List[str]):
+        """Fallback pattern-based extraction"""
         current_part = None
         current_part_number = 0
         current_part_title = ""
@@ -422,26 +538,44 @@ class ResearchAgent(Agent):
         for page_num, page in enumerate(doc):
             page_text = page_texts[page_num]
             
-            # Detect part changes
-            part_matches = re.finditer(r'Part\s+(\d+)\.?\s*([^\n]+)', page_text, re.IGNORECASE)
-            for match in part_matches:
-                part_num = int(match.group(1))
-                part_title = match.group(2).strip()
-                
-                if part_num != current_part_number:
-                    current_part_number = part_num
-                    current_part = f"Part {part_num}"
-                    current_part_title = part_title
+            # Detect part changes - improved pattern
+            part_patterns = [
+                r'Part\s+(\d+)\.?\s*[-–]\s*([^\n]+)',  # Part 1 - Title
+                r'Part\s+(\d+)\.?\s+([^\n]+)',         # Part 1. Title
+                r'PART\s+(\d+)\.?\s*[-–]\s*([^\n]+)',  # PART 1 - Title
+                r'PART\s+(\d+)\.?\s+([^\n]+)'          # PART 1 Title
+            ]
+            
+            for pattern in part_patterns:
+                part_matches = re.finditer(pattern, page_text, re.IGNORECASE)
+                for match in part_matches:
+                    part_num = int(match.group(1))
+                    part_title = match.group(2).strip()
                     
-                    if current_part not in form_structure.parts:
-                        form_structure.parts[current_part] = []
-                        self.log(f"Found {current_part}: {part_title}")
+                    # Clean title
+                    part_title = re.sub(r'\s+', ' ', part_title)
+                    part_title = part_title.strip('.')
+                    
+                    if part_num != current_part_number:
+                        current_part_number = part_num
+                        current_part = f"Part {part_num}"
+                        current_part_title = part_title
+                        
+                        if current_part not in form_structure.parts:
+                            form_structure.parts[current_part] = []
+                            self.log(f"Found {current_part}: {part_title}")
+                        break
             
             if not current_part:
-                continue
+                # If no part found yet, assume Part 1
+                current_part = "Part 1"
+                current_part_number = 1
+                current_part_title = "General Information"
+                if current_part not in form_structure.parts:
+                    form_structure.parts[current_part] = []
             
             # Extract fields from this page
-            fields = self._extract_page_fields_smart(
+            fields = self._extract_page_fields_enhanced(
                 page, page_num + 1, page_text, current_part, 
                 current_part_number, current_part_title, form_structure.form_number
             )
@@ -451,70 +585,89 @@ class ResearchAgent(Agent):
                 form_structure.parts[current_part].append(field)
                 form_structure.total_fields += 1
     
-    def _extract_page_fields_smart(self, page, page_num: int, text: str, part: str, 
-                                  part_number: int, part_title: str, form_number: str) -> List[ExtractedField]:
-        """Extract fields with accurate item number detection"""
+    def _extract_page_fields_enhanced(self, page, page_num: int, text: str, part: str, 
+                                    part_number: int, part_title: str, form_number: str) -> List[ExtractedField]:
+        """Enhanced field extraction with better patterns"""
         fields = []
         lines = text.split('\n')
         
-        # Pattern for item numbers: "1.", "1.a.", "5.", etc.
-        item_pattern = re.compile(r'^(\d+)(?:\.([a-z]))?\.?\s+(.+)$', re.IGNORECASE)
+        # Enhanced patterns for different field formats
+        patterns = [
+            # Standard item pattern: "1.", "1.a.", "5."
+            (re.compile(r'^(\d+)(?:\.([a-z]))?\.?\s+(.+?)(?:\s*(?:Yes|No)\s*$)?', re.IGNORECASE), 'standard'),
+            # Item with parentheses: "Item Number 1."
+            (re.compile(r'^Item\s+Number\s+(\d+)(?:\.([a-z]))?\.\s*(.+)', re.IGNORECASE), 'item_number'),
+            # Question format: "1. Are you..."
+            (re.compile(r'^(\d+)\.\s+(Are\s+you|Have\s+you|Do\s+you|Is\s+|Was\s+|Will\s+)(.+)', re.IGNORECASE), 'question'),
+            # Field in parentheses or brackets
+            (re.compile(r'^\((\d+)(?:\.([a-z]))?\)\s*(.+)', re.IGNORECASE), 'parentheses'),
+            # Number with dash: "1 - Field Label"
+            (re.compile(r'^(\d+)\s*[-–]\s*(.+)', re.IGNORECASE), 'dash')
+        ]
         
-        # Also check for checkbox patterns
-        checkbox_pattern = re.compile(r'(Yes|No)\s*$', re.IGNORECASE)
-        
-        for i, line in enumerate(lines):
-            line = line.strip()
+        # Process lines
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
             if not line:
+                i += 1
                 continue
             
-            # Check for item number pattern
-            match = item_pattern.match(line)
-            if match:
-                item_main = match.group(1)
-                item_sub = match.group(2) or ""
-                label_text = match.group(3).strip()
-                
-                # Build item number
-                item_number = item_main
-                if item_sub:
-                    item_number += f".{item_sub}"
-                
-                # Determine field type
-                field_type = "text"
-                
-                # Check if next line has Yes/No (checkbox)
-                if i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    if checkbox_pattern.search(next_line) or ("Yes" in next_line and "No" in next_line):
-                        field_type = "checkbox"
-                
-                # Check for date fields
-                if any(word in label_text.lower() for word in ['date', 'birth', 'expir']):
-                    field_type = "date"
-                
-                # Check for number fields
-                if any(word in label_text.lower() for word in ['number', 'ssn', 'ein', 'a-number']):
-                    field_type = "number"
-                
-                # Create field
-                field = ExtractedField(
-                    name=f"field_{item_number.replace('.', '_')}",
-                    label=label_text,
-                    type=field_type,
-                    page=page_num,
-                    part=part,
-                    part_number=part_number,
-                    part_title=part_title,
-                    item_number=item_number,
-                    raw_field_name=line
-                )
-                
-                # Auto-assign checkboxes to questionnaire
-                if field_type == "checkbox":
-                    field.is_questionnaire = True
-                
-                fields.append(field)
+            field_found = False
+            
+            # Try each pattern
+            for pattern, pattern_type in patterns:
+                match = pattern.match(line)
+                if match:
+                    # Extract components based on pattern type
+                    if pattern_type in ['standard', 'item_number', 'parentheses']:
+                        item_main = match.group(1)
+                        item_sub = match.group(2) if len(match.groups()) > 2 else ""
+                        label_text = match.group(3) if len(match.groups()) > 2 else match.group(2)
+                    elif pattern_type == 'question':
+                        item_main = match.group(1)
+                        item_sub = ""
+                        label_text = match.group(2) + match.group(3)
+                    elif pattern_type == 'dash':
+                        item_main = match.group(1)
+                        item_sub = ""
+                        label_text = match.group(2)
+                    else:
+                        continue
+                    
+                    # Clean label
+                    label_text = label_text.strip()
+                    
+                    # Build item number
+                    item_number = item_main
+                    if item_sub:
+                        item_number += f".{item_sub}"
+                    
+                    # Determine field type
+                    field_type = self._determine_field_type(label_text, lines, i)
+                    
+                    # Create field
+                    field = ExtractedField(
+                        name=f"field_{item_number.replace('.', '_')}",
+                        label=label_text,
+                        type=field_type,
+                        page=page_num,
+                        part=part,
+                        part_number=part_number,
+                        part_title=part_title,
+                        item_number=item_number,
+                        raw_field_name=line
+                    )
+                    
+                    # Auto-assign checkboxes to questionnaire
+                    if field_type in ["checkbox", "radio"]:
+                        field.is_questionnaire = True
+                    
+                    fields.append(field)
+                    field_found = True
+                    break
+            
+            i += 1
         
         # Also extract from PDF form fields
         widget_fields = self._extract_from_widgets(page, page_num, part, part_number, part_title)
@@ -523,6 +676,56 @@ class ResearchAgent(Agent):
         all_fields = self._merge_fields(fields, widget_fields)
         
         return all_fields
+    
+    def _determine_field_type(self, label: str, lines: List[str], current_index: int) -> str:
+        """Determine field type based on label and context"""
+        label_lower = label.lower()
+        
+        # Check for date indicators
+        date_keywords = ['date', 'birth', 'expir', 'issue', 'valid']
+        if any(keyword in label_lower for keyword in date_keywords):
+            return "date"
+        
+        # Check for number fields
+        number_keywords = ['number', 'ssn', 'ein', 'a-number', 'alien', 'receipt', 'case']
+        if any(keyword in label_lower for keyword in number_keywords):
+            return "number"
+        
+        # Check for signature
+        if 'signature' in label_lower:
+            return "signature"
+        
+        # Check if it's a yes/no question
+        question_starters = ['are you', 'have you', 'do you', 'is ', 'was ', 'will ', 'can you']
+        if any(label_lower.startswith(starter) for starter in question_starters):
+            return "checkbox"
+        
+        # Check next lines for checkbox indicators
+        if current_index + 1 < len(lines):
+            next_line = lines[current_index + 1].strip().lower()
+            if re.search(r'^\s*(yes|no)\s*$', next_line) or ('yes' in next_line and 'no' in next_line):
+                return "checkbox"
+        
+        # Default to text
+        return "text"
+    
+    def _match_fields_to_pages(self, form_structure: FormStructure, doc, page_texts: List[str]):
+        """Match AI-identified fields to actual pages in PDF"""
+        # For each page, try to find fields
+        for page_num, page_text in enumerate(page_texts):
+            for part_name, fields in form_structure.parts.items():
+                for field in fields:
+                    # Search for field's item number and label in page
+                    search_patterns = [
+                        f"{field.item_number}\\s*\\.?\\s*{re.escape(field.label[:20])}",
+                        f"{field.item_number}\\s*\\.?",
+                        re.escape(field.label[:30])
+                    ]
+                    
+                    for pattern in search_patterns:
+                        if re.search(pattern, page_text, re.IGNORECASE):
+                            field.page = page_num + 1
+                            break
     
     def _extract_from_widgets(self, page, page_num: int, part: str, 
                             part_number: int, part_title: str) -> List[ExtractedField]:
@@ -609,7 +812,11 @@ class ResearchAgent(Agent):
             'lname': 'Last Name',
             'mname': 'Middle Name',
             'dob': 'Date of Birth',
-            'ssn': 'Social Security Number'
+            'ssn': 'Social Security Number',
+            'addr': 'Address',
+            'tel': 'Telephone',
+            'apt': 'Apartment',
+            'ste': 'Suite'
         }
         
         for abbr, full in replacements.items():
@@ -655,45 +862,6 @@ class ResearchAgent(Agent):
             letter = match.group(2) or ''
             return (num, letter)
         return (999, item_num)
-    
-    def _ai_analyze_form_structure(self, text: str, form_number: str) -> Optional[Dict]:
-        """Use AI to analyze form structure"""
-        if not self.api_key:
-            return None
-        
-        try:
-            prompt = f"""
-            Analyze this {form_number} form and identify the exact structure.
-            
-            Text sample:
-            {text}
-            
-            Return JSON with:
-            {{
-                "parts": [
-                    {{
-                        "number": 1,
-                        "title": "Information About You",
-                        "expected_items": ["1.a", "1.b", "1.c", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
-                    }}
-                ]
-            }}
-            
-            Be precise about item numbers (1.a, 1.b, 5, etc.)
-            """
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000
-            )
-            
-            return json.loads(response.choices[0].message.content)
-            
-        except Exception as e:
-            self.log(f"AI analysis error: {str(e)}", "warning")
-            return None
 
 # Validation Agent
 class ValidationAgent(Agent):
@@ -789,15 +957,13 @@ class ValidationAgent(Agent):
 class AIMappingAgent(Agent):
     """Intelligent field mapping using AI and patterns"""
     
-    def __init__(self, api_key: str):
+    def __init__(self):
         super().__init__("AI Mapping Agent", "Intelligent Field Mapping")
-        self.api_key = api_key
-        if api_key:
-            openai.api_key = api_key
+        self.client = get_openai_client()
         
         # Enhanced mapping patterns
         self.mapping_patterns = {
-            # Item number based mappings
+            # Item number based mappings for I-539
             "1.a": "beneficiary.PersonalInfo.beneficiaryLastName",
             "1.b": "beneficiary.PersonalInfo.beneficiaryFirstName",
             "1.c": "beneficiary.PersonalInfo.beneficiaryMiddleName",
@@ -856,7 +1022,7 @@ class AIMappingAgent(Agent):
                                 break
                     
                     # Phase 2: AI mapping for remaining
-                    if self.api_key:
+                    if self.client:
                         unmapped = [f for f in text_fields if not f.db_path]
                         if unmapped:
                             ai_mapped = self._ai_batch_mapping(unmapped, form_structure, part_name)
@@ -880,7 +1046,7 @@ class AIMappingAgent(Agent):
     def _ai_batch_mapping(self, fields: List[ExtractedField], form_structure: FormStructure, 
                          part_name: str) -> int:
         """Use AI for intelligent mapping"""
-        if not self.api_key or not fields:
+        if not self.client or not fields:
             return 0
         
         try:
@@ -908,30 +1074,43 @@ class AIMappingAgent(Agent):
             prompt = f"""
             Map these fields from {form_structure.form_number} {part_name} to database paths.
             
-            Fields:
+            Fields to map:
             {json.dumps(field_info, indent=2)}
             
-            Available paths:
-            {json.dumps(db_paths[:50], indent=2)}  # Show first 50 paths
+            Available database paths (partial list):
+            {json.dumps(db_paths[:50], indent=2)}
             
-            Rules:
-            - Item 1.a, 1.b, 1.c are Family Name, Given Name, Middle Name
-            - Item 2 is A-Number
+            Important mapping rules:
+            - Item 1.a, 1.b, 1.c are ALWAYS Family Name, Given Name, Middle Name
+            - Item 2 is A-Number (alienNumber)
+            - Item 3 is USCIS Online Account Number
             - Item 9 is Date of Birth
-            - Form I-539 is for the beneficiary
+            - Item 10 is SSN
+            - Form I-539 fields map to "beneficiary" object
+            - Address fields: use MailingAddress for mailing, PhysicalAddress for physical
             
-            Return JSON mapping item numbers/labels to paths.
-            Example: {{"1.a": "beneficiary.PersonalInfo.beneficiaryLastName"}}
+            Return ONLY a JSON object mapping item numbers/labels to database paths.
+            Example: {{"1.a": "beneficiary.PersonalInfo.beneficiaryLastName", "2": "beneficiary.PersonalInfo.alienNumber"}}
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": "You are an expert at mapping USCIS form fields to database structures. Always follow the exact mapping rules provided."},
+                    {"role": "user", "content": prompt}
+                ],
                 temperature=0.1,
                 max_tokens=1000
             )
             
-            mappings = json.loads(response.choices[0].message.content)
+            # Parse response
+            response_text = response.choices[0].message.content
+            # Extract JSON from response
+            json_match = re.search(r'\{[^}]+\}', response_text)
+            if json_match:
+                mappings = json.loads(json_match.group())
+            else:
+                mappings = json.loads(response_text)
             
             mapped_count = 0
             for field in fields:
@@ -1295,7 +1474,7 @@ def generate_json(form_structure: FormStructure) -> str:
 
 # Main Application
 def main():
-    st.markdown('<div class="main-header"><h1>🤖 Smart USCIS Form Reader</h1><p>Multi-Agent System with Validation</p></div>', 
+    st.markdown('<div class="main-header"><h1>🤖 Smart USCIS Form Reader</h1><p>Multi-Agent System with AI-Enhanced Extraction</p></div>', 
                unsafe_allow_html=True)
     
     # Initialize session state
@@ -1306,20 +1485,23 @@ def main():
     if 'selected_part' not in st.session_state:
         st.session_state.selected_part = None
     
+    # Check for OpenAI API key
+    openai_available = get_openai_client() is not None
+    
     # Sidebar
     with st.sidebar:
         st.markdown("## ⚙️ Configuration")
         
-        api_key = st.text_input(
-            "OpenAI API Key",
-            type="password",
-            help="Required for AI features"
-        )
+        if openai_available:
+            st.success("✅ OpenAI API Key configured")
+        else:
+            st.warning("⚠️ OpenAI API Key not found in secrets")
+            st.info("Add OPENAI_API_KEY to your secrets for AI features")
         
         st.markdown("### 🤖 Agent Settings")
-        use_ai = st.checkbox("Use AI Enhancement", value=True)
+        use_ai = st.checkbox("Use AI Enhancement", value=openai_available, disabled=not openai_available)
         auto_validate = st.checkbox("Auto-Validate", value=True)
-        auto_map = st.checkbox("Auto-Map with AI", value=True)
+        auto_map = st.checkbox("Auto-Map with AI", value=openai_available, disabled=not openai_available)
         
         # Form info
         if st.session_state.form_structure:
@@ -1362,9 +1544,9 @@ def main():
                     
                     # Initialize agents
                     agents = {
-                        'research': ResearchAgent(api_key if use_ai else None),
+                        'research': ResearchAgent(),
                         'validation': ValidationAgent(),
-                        'mapping': AIMappingAgent(api_key) if api_key else None
+                        'mapping': AIMappingAgent() if openai_available else None
                     }
                     st.session_state.agents = agents
                     
@@ -1379,7 +1561,7 @@ def main():
                                 form_structure = agents['validation'].execute(form_structure)
                             
                             # Map
-                            if auto_map and api_key:
+                            if auto_map and openai_available:
                                 form_structure = agents['mapping'].execute(form_structure)
                             
                             # Update counts
