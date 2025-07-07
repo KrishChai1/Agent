@@ -11,3 +11,7 @@ pdfrw
 PyMuPDF
 pyyaml
 mammoth
+streamlit==1.31.0
+openai==0.28.1
+PyMuPDF==1.23.8
+pandas==2.1.4
