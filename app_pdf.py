@@ -145,6 +145,19 @@ st.markdown("""
         display: inline-block;
         margin-left: 0.5rem;
     }
+    .field-attributes {
+        background: #f8f9fa;
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin-top: 0.5rem;
+    }
+    .ai-analysis {
+        background: #e8f5e9;
+        border-left: 4px solid #4caf50;
+        padding: 1rem;
+        margin: 1rem 0;
+        border-radius: 4px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -243,6 +256,7 @@ class ExtractedField:
     ai_suggestion: Optional[str] = None
     ai_extracted_label: Optional[str] = None
     ai_context: Optional[str] = None
+    ai_part_context: Optional[str] = None  # Part-specific context for mapping
     
     # Questionnaire generation
     questionnaire_name: str = ""
@@ -290,6 +304,7 @@ class FormStructure:
     ai_extraction_used: bool = False
     extraction_confidence: float = 0.0
     extraction_logs: List[str] = field(default_factory=list)
+    ai_form_analysis: Optional[Dict] = None  # Store AI analysis of the form
     
     def __post_init__(self):
         if not self.upload_time:
@@ -375,50 +390,88 @@ class AIEnhancedPDFReader(Agent):
             pdf_bytes = pdf_file.read()
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            # Detect form type
-            form_info = self._detect_form_type(doc)
+            # Extract full text for AI analysis
+            full_text = ""
+            page_texts = []
+            for page in doc:
+                page_text = page.get_text()
+                full_text += page_text + "\n"
+                page_texts.append(page_text)
+            
+            # AI-powered form detection and analysis
+            form_info = None
+            form_analysis = None
+            if use_ai and self.api_key and full_text:
+                self.update_status("active", "AI analyzing form structure...")
+                form_analysis = self._ai_comprehensive_form_analysis(full_text[:10000])  # Use more text
+                if form_analysis:
+                    form_info = {
+                        'number': form_analysis.get('form_number', 'Unknown'),
+                        'title': form_analysis.get('form_title', 'Unknown Form')
+                    }
+            
+            # Fallback to pattern-based detection
+            if not form_info:
+                form_info = self._detect_form_type(doc)
+            
             form_structure = FormStructure(
                 form_number=form_info['number'],
                 form_title=form_info['title'],
                 total_pages=len(doc),
-                ai_extraction_used=use_ai and self.api_key is not None
+                ai_extraction_used=use_ai and self.api_key is not None,
+                ai_form_analysis=form_analysis
             )
             
             form_structure.add_log(f"Detected form: {form_info['number']} - {form_info['title']}")
             self.update_status("active", f"Processing {form_info['number']} - {form_info['title']}")
             
-            # Extract text for AI context
-            full_text = ""
-            if use_ai and self.api_key:
-                for page in doc:
-                    full_text += page.get_text() + "\n"
+            # Extract parts using AI if available
+            parts_structure = None
+            if form_analysis and 'parts' in form_analysis:
+                parts_structure = form_analysis['parts']
+                form_structure.add_log(f"AI detected {len(parts_structure)} parts")
             
             # Extract fields by parts
             current_part = "Part 1"
             current_part_number = 1
             current_part_title = "General Information"
+            current_part_context = ""
             seen_fields = set()
             field_count = 0
             
-            # Use AI to understand form structure
-            if use_ai and self.api_key and full_text:
-                parts_info = self._ai_extract_parts(full_text[:3000])  # First 3000 chars
-                self.update_status("active", "AI analyzing form structure...")
-            else:
-                parts_info = None
+            # If we have parts structure from AI, use it
+            if parts_structure:
+                for part_info in parts_structure:
+                    current_part = f"Part {part_info['number']}"
+                    current_part_number = part_info['number']
+                    current_part_title = part_info['title']
+                    current_part_context = part_info.get('context', '')
+                    
+                    if current_part not in form_structure.parts:
+                        form_structure.parts[current_part] = []
             
             # Process each page
             for page_num in range(len(doc)):
                 page = doc[page_num]
-                page_text = page.get_text()
+                page_text = page_texts[page_num]
                 
-                # Update part information
-                part_info = self._detect_current_part(page_text, current_part_number)
-                if part_info:
-                    current_part = part_info['part']
-                    current_part_number = part_info['number']
-                    current_part_title = part_info['title']
-                    form_structure.add_log(f"Found {current_part}: {current_part_title}")
+                # Update part information based on page content
+                if not parts_structure:
+                    part_info = self._detect_current_part(page_text, current_part_number)
+                    if part_info:
+                        current_part = part_info['part']
+                        current_part_number = part_info['number']
+                        current_part_title = part_info['title']
+                        form_structure.add_log(f"Found {current_part}: {current_part_title}")
+                else:
+                    # Find which part this page belongs to using AI analysis
+                    for part in parts_structure:
+                        if part.get('start_page', 1) <= page_num + 1 <= part.get('end_page', len(doc)):
+                            current_part = f"Part {part['number']}"
+                            current_part_number = part['number']
+                            current_part_title = part['title']
+                            current_part_context = part.get('context', '')
+                            break
                 
                 # Initialize part if needed
                 if current_part not in form_structure.parts:
@@ -428,7 +481,7 @@ class AIEnhancedPDFReader(Agent):
                 widgets = page.widgets()
                 
                 if widgets:
-                    self.update_status("active", f"Extracting fields from page {page_num + 1}...")
+                    self.update_status("active", f"Extracting fields from page {page_num + 1} ({current_part})...")
                     
                     # Process widgets with AI enhancement
                     for widget in widgets:
@@ -441,7 +494,8 @@ class AIEnhancedPDFReader(Agent):
                                     current_part_number,
                                     current_part_title,
                                     page_text if use_ai else None,
-                                    field_count
+                                    field_count,
+                                    current_part_context
                                 )
                                 
                                 if field and field.field_hash not in seen_fields:
@@ -458,6 +512,7 @@ class AIEnhancedPDFReader(Agent):
                                                                       current_part, current_part_number,
                                                                       current_part_title, field_count)
                     for field in form_fields:
+                        field.ai_part_context = current_part_context
                         if field.field_hash not in seen_fields:
                             seen_fields.add(field.field_hash)
                             form_structure.parts[current_part].append(field)
@@ -483,7 +538,7 @@ class AIEnhancedPDFReader(Agent):
                                    for f in fields if f.ai_confidence > 0)
                 form_structure.extraction_confidence = fields_with_ai / form_structure.total_fields
             
-            form_structure.add_log(f"Extraction complete: {form_structure.total_fields} fields found")
+            form_structure.add_log(f"Extraction complete: {form_structure.total_fields} fields found in {len(form_structure.parts)} parts")
             self.update_status("completed", 
                              f"Extracted {form_structure.total_fields} fields from {len(form_structure.parts)} parts")
             
@@ -493,6 +548,55 @@ class AIEnhancedPDFReader(Agent):
             self.update_status("error", f"Failed: {str(e)}")
             st.error(f"Error processing PDF: {str(e)}")
             st.error(f"Traceback: {traceback.format_exc()}")
+            return None
+    
+    def _ai_comprehensive_form_analysis(self, text: str) -> Optional[Dict]:
+        """Use AI to comprehensively analyze the form"""
+        if not self.api_key:
+            return None
+        
+        try:
+            prompt = f"""
+            You are an expert at analyzing USCIS forms. Analyze this form text and provide a comprehensive analysis.
+            
+            Text (first 10000 characters):
+            {text}
+            
+            Return a detailed JSON object with:
+            {{
+                "form_number": "The exact form number (e.g., I-539, G-28, I-129)",
+                "form_title": "The complete form title",
+                "form_edition": "Edition date if available",
+                "parts": [
+                    {{
+                        "number": 1,
+                        "title": "Part title from the form",
+                        "description": "What this part is about",
+                        "context": "Who fills this part and what kind of information it contains",
+                        "start_page": 1,
+                        "end_page": 2,
+                        "typical_fields": ["field types typically found in this part"]
+                    }}
+                ],
+                "form_purpose": "What this form is used for",
+                "primary_applicant": "Who is the primary person filling this form"
+            }}
+            
+            Be very accurate about the form number and parts structure. Look for patterns like "Part 1.", "Part 2.", etc.
+            """
+            
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo-16k",  # Use larger context model
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=2000
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            return result
+            
+        except Exception as e:
+            st.warning(f"AI form analysis failed: {str(e)}")
             return None
     
     def _detect_form_type(self, doc) -> dict:
@@ -517,14 +621,30 @@ class AIEnhancedPDFReader(Agent):
             'G-1145': 'E-Notification of Application/Petition Acceptance'
         }
         
-        # Check for form numbers
-        for form_num, title in forms.items():
-            if form_num in first_pages_text:
-                # Try to extract revision date
-                rev_match = re.search(r'Edition\s+(\d+/\d+/\d+)', first_pages_text)
-                if rev_match:
-                    title += f" (Rev. {rev_match.group(1)})"
-                return {'number': form_num, 'title': title}
+        # Look for form number patterns
+        form_patterns = [
+            r'FORM\s+(I-\d+[A-Z]?)',
+            r'Form\s+(I-\d+[A-Z]?)',
+            r'FORM\s+(N-\d+)',
+            r'Form\s+(N-\d+)',
+            r'FORM\s+(G-\d+)',
+            r'Form\s+(G-\d+)',
+            r'(I-\d+[A-Z]?)\s+APPLICATION',
+            r'(N-\d+)\s+APPLICATION',
+            r'(G-\d+)\s+NOTICE'
+        ]
+        
+        for pattern in form_patterns:
+            match = re.search(pattern, first_pages_text)
+            if match:
+                form_num = match.group(1)
+                if form_num in forms:
+                    # Try to extract revision date
+                    rev_match = re.search(r'Edition\s+(\d+/\d+/\d+)', first_pages_text)
+                    title = forms[form_num]
+                    if rev_match:
+                        title += f" (Rev. {rev_match.group(1)})"
+                    return {'number': form_num, 'title': title}
         
         # Check for supplement forms
         if 'H CLASSIFICATION SUPPLEMENT' in first_pages_text:
@@ -561,41 +681,9 @@ class AIEnhancedPDFReader(Agent):
         
         return None
     
-    def _ai_extract_parts(self, text: str) -> Optional[Dict]:
-        """Use AI to understand form structure"""
-        if not self.api_key:
-            return None
-        
-        try:
-            prompt = f"""
-            Analyze this USCIS form text and identify the parts/sections structure.
-            
-            Text:
-            {text}
-            
-            Return a JSON object with parts information:
-            {{
-                "parts": [
-                    {{"number": 1, "title": "Information About You", "description": "..."}},
-                    ...
-                ]
-            }}
-            """
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=500
-            )
-            
-            return json.loads(response.choices[0].message.content)
-            
-        except:
-            return None
-    
     def _extract_field_with_ai(self, widget, page: int, part: str, part_number: int, 
-                              part_title: str, page_text: Optional[str], field_count: int) -> Optional[ExtractedField]:
+                              part_title: str, page_text: Optional[str], field_count: int,
+                              part_context: str = "") -> Optional[ExtractedField]:
         """Extract field with AI enhancement"""
         try:
             # Get field name - handle different widget types
@@ -663,6 +751,7 @@ class AIEnhancedPDFReader(Agent):
                 questionnaire_name=quest_name,
                 control_type=control_type_map.get(field_type, 'text'),
                 ai_confidence=0.8 if page_text and self.api_key else 0.0,
+                ai_part_context=part_context,
                 debug_info={
                     'raw_name': raw_name,
                     'clean_name': clean_name,
@@ -912,13 +1001,21 @@ class UniversalMappingAgent(Agent):
         for part_name, fields in form_structure.parts.items():
             self.update_status("active", f"Mapping {part_name}...")
             
+            # Get part context
+            part_context = ""
+            if form_structure.ai_form_analysis and 'parts' in form_structure.ai_form_analysis:
+                for part_info in form_structure.ai_form_analysis['parts']:
+                    if f"Part {part_info['number']}" == part_name:
+                        part_context = part_info.get('context', '')
+                        break
+            
             # Group text fields for batch processing
             text_fields = [f for f in fields if f.type == "text" and not f.db_path]
             
             if text_fields:
                 # Try pattern matching first
                 for field in text_fields:
-                    suggestion = self._pattern_match(field, form_structure.form_number)
+                    suggestion = self._pattern_match(field, form_structure.form_number, part_context)
                     if suggestion:
                         field.db_path = suggestion
                         field.ai_confidence = 0.9
@@ -928,15 +1025,16 @@ class UniversalMappingAgent(Agent):
                 if self.api_key:
                     unmapped = [f for f in text_fields if not f.db_path]
                     if unmapped:
-                        mapped = self._batch_ai_mapping(unmapped, form_structure.form_number)
+                        mapped = self._batch_ai_mapping(unmapped, form_structure.form_number, 
+                                                      part_name, part_context)
                         total_mapped += mapped
         
         success_rate = (total_mapped/total_fields*100) if total_fields > 0 else 0
         self.update_status("completed", 
                           f"Mapped {total_mapped} fields ({success_rate:.1f}% success rate)")
     
-    def _pattern_match(self, field: ExtractedField, form_type: str) -> Optional[str]:
-        """Enhanced pattern matching for universal forms"""
+    def _pattern_match(self, field: ExtractedField, form_type: str, part_context: str) -> Optional[str]:
+        """Enhanced pattern matching for universal forms with part context"""
         label_lower = field.label.lower()
         name_lower = field.name.lower()
         combined = f"{label_lower} {name_lower}"
@@ -944,9 +1042,9 @@ class UniversalMappingAgent(Agent):
         # Get all custom fields
         custom_fields = st.session_state.get('custom_db_fields', {})
         
-        # Universal patterns
+        # Universal patterns with part context awareness
         patterns = {
-            # Names
+            # Names - check part context for who this refers to
             r'(?:petitioner|applicant|your).*(?:given|first).*name': 'petitioner.givenName',
             r'(?:petitioner|applicant|your).*(?:family|last).*name': 'petitioner.familyName',
             r'(?:beneficiary|spouse|their).*(?:given|first).*name': 'beneficiary.Beneficiary.beneficiaryFirstName',
@@ -992,10 +1090,16 @@ class UniversalMappingAgent(Agent):
         # Check patterns
         for pattern, db_path in patterns.items():
             if re.search(pattern, combined, re.IGNORECASE):
-                # Adjust path based on form context
-                if form_type == "G-28" and "beneficiary" in db_path:
-                    # G-28 uses customer instead of beneficiary
-                    db_path = db_path.replace("beneficiary.", "customer.")
+                # Adjust path based on form context and part context
+                if form_type == "G-28":
+                    # G-28 uses customer instead of beneficiary for client info
+                    if "beneficiary" in db_path and "client" in part_context.lower():
+                        db_path = db_path.replace("beneficiary.", "customer.")
+                elif form_type == "I-539":
+                    # I-539 context-specific adjustments
+                    if "applicant" in part_context.lower() and "beneficiary" in db_path:
+                        # In I-539, the applicant is the beneficiary
+                        pass  # Keep as beneficiary
                 
                 return db_path
         
@@ -1007,8 +1111,9 @@ class UniversalMappingAgent(Agent):
         
         return None
     
-    def _batch_ai_mapping(self, fields: List[ExtractedField], form_type: str) -> int:
-        """Batch process fields with AI"""
+    def _batch_ai_mapping(self, fields: List[ExtractedField], form_type: str, 
+                         part_name: str, part_context: str) -> int:
+        """Batch process fields with AI including part context"""
         if not self.api_key or not fields:
             return 0
         
@@ -1039,11 +1144,19 @@ class UniversalMappingAgent(Agent):
             prompt = f"""
             You are mapping fields from USCIS form {form_type} to database paths.
             
+            Part: {part_name}
+            Part Context: {part_context}
+            
             Fields to map:
             {json.dumps(field_info, indent=2)}
             
             Available database paths:
             {json.dumps(db_paths, indent=2)}
+            
+            Consider the context of this part when mapping. For example:
+            - If this part is about the applicant, map name fields to petitioner or beneficiary based on form type
+            - If this part is about an attorney, map to attorney fields
+            - If this part is about the client in G-28, map to customer fields
             
             Return a JSON object mapping field labels to database paths.
             Only include fields that have clear matches.
@@ -1056,7 +1169,7 @@ class UniversalMappingAgent(Agent):
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=1000
             )
             
             mappings = json.loads(response.choices[0].message.content)
@@ -1405,6 +1518,19 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
     # Add custom database field option
     show_add_database_field_dialog()
     
+    # Show AI analysis if available
+    if form_structure.ai_form_analysis:
+        with st.expander("🤖 AI Form Analysis", expanded=False):
+            st.markdown('<div class="ai-analysis">', unsafe_allow_html=True)
+            st.markdown("### Form Understanding")
+            st.write(f"**Form Purpose**: {form_structure.ai_form_analysis.get('form_purpose', 'N/A')}")
+            st.write(f"**Primary Applicant**: {form_structure.ai_form_analysis.get('primary_applicant', 'N/A')}")
+            if 'parts' in form_structure.ai_form_analysis:
+                st.markdown("### Parts Structure")
+                for part in form_structure.ai_form_analysis['parts']:
+                    st.write(f"**Part {part['number']}**: {part['title']} - {part.get('description', '')}")
+            st.markdown('</div>', unsafe_allow_html=True)
+    
     # Debug info
     if st.checkbox("🐛 Show Debug Info", value=False, key="show_debug"):
         st.markdown('<div class="extraction-progress">', unsafe_allow_html=True)
@@ -1548,6 +1674,7 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                 # Field card
                 st.markdown(f'<div class="field-card {status_class}">', unsafe_allow_html=True)
                 
+                # Main field info row
                 col1, col2, col3 = st.columns([3, 4, 2])
                 
                 with col1:
@@ -1571,11 +1698,6 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     
                     st.markdown(f'<div class="field-info">{" • ".join(meta_items)}</div>', 
                               unsafe_allow_html=True)
-                    
-                    # Debug info
-                    if st.session_state.get('show_debug', False) and field.debug_info:
-                        st.markdown(f'<div class="debug-info">Debug: {json.dumps(field.debug_info, indent=2)}</div>', 
-                                  unsafe_allow_html=True)
                 
                 with col2:
                     if field.type == "text":
@@ -1630,6 +1752,65 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     st.markdown(f"**{status_text}**")
                     if field.ai_suggestion:
                         st.caption(f"💡 {field.ai_suggestion}")
+                
+                # Field attributes editing section
+                with st.expander("📝 Edit Field Attributes", expanded=False):
+                    st.markdown('<div class="field-attributes">', unsafe_allow_html=True)
+                    
+                    # Edit field attributes
+                    fcol1, fcol2, fcol3 = st.columns(3)
+                    
+                    with fcol1:
+                        # Edit name
+                        new_name = st.text_input(
+                            "Field Name",
+                            value=field.name,
+                            key=f"name_{field.widget_id}_{idx}"
+                        )
+                        if new_name != field.name:
+                            field.name = new_name
+                            st.rerun()
+                    
+                    with fcol2:
+                        # Edit label
+                        new_label = st.text_input(
+                            "Label",
+                            value=field.label,
+                            key=f"label_{field.widget_id}_{idx}"
+                        )
+                        if new_label != field.label:
+                            field.label = new_label
+                            st.rerun()
+                    
+                    with fcol3:
+                        # Edit type
+                        type_options = ["text", "checkbox", "radio", "dropdown", "date", "signature"]
+                        new_type = st.selectbox(
+                            "Type",
+                            type_options,
+                            index=type_options.index(field.type) if field.type in type_options else 0,
+                            key=f"type_{field.widget_id}_{idx}"
+                        )
+                        if new_type != field.type:
+                            field.type = new_type
+                            # Update control type
+                            control_type_map = {
+                                'checkbox': 'colorSwitch',
+                                'radio': 'radio',
+                                'text': 'text',
+                                'dropdown': 'select',
+                                'date': 'date',
+                                'signature': 'signature'
+                            }
+                            field.control_type = control_type_map.get(new_type, 'text')
+                            st.rerun()
+                    
+                    # Debug info
+                    if st.session_state.get('show_debug', False) and field.debug_info:
+                        st.markdown(f'<div class="debug-info">Debug: {json.dumps(field.debug_info, indent=2)}</div>', 
+                                  unsafe_allow_html=True)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -1773,7 +1954,6 @@ def main():
                                 )
                             
                             st.success(f"✅ Successfully processed {form_structure.form_number}")
-                            # Removed st.balloons() as requested
                             
                             # Show summary
                             with st.expander("📊 Extraction Summary", expanded=True):
@@ -1861,13 +2041,14 @@ def main():
         ## 📚 How to Use
         
         ### 1️⃣ Upload PDF
-        - Upload any USCIS form (I-129, I-130, G-28, N-400, etc.)
-        - The system automatically detects the form type
-        - AI extracts all fields with their labels and types
+        - Upload any USCIS form (I-129, I-130, I-539, G-28, N-400, etc.)
+        - The AI system automatically detects the exact form type
+        - AI analyzes the form structure and extracts all fields with their parts
         
         ### 2️⃣ Map Fields
         - Review extracted fields part by part
-        - Fields are automatically mapped to database objects using AI
+        - AI automatically maps fields to database objects using part context
+        - Edit field attributes (name, label, type) using the dropdown
         - Manually adjust mappings as needed
         - Add custom database fields if required
         - Move unmapped fields to questionnaire
@@ -1878,21 +2059,25 @@ def main():
         - Both formats match your exact requirements
         
         ### 🤖 AI Features
-        - **Smart Extraction**: AI understands form context and improves label extraction
-        - **Intelligent Mapping**: Automatically maps fields to correct database paths
+        - **Smart Form Detection**: AI accurately identifies form type (I-539, G-28, etc.)
+        - **Intelligent Part Extraction**: AI understands form parts and their context
+        - **Context-Aware Mapping**: Uses part descriptions to map fields correctly
+        - **Field Enhancement**: AI improves field labels and descriptions
         - **Universal Support**: Works with any USCIS form
         - **Confidence Scoring**: Shows AI confidence for each mapping
         
         ### 💡 Tips
         - Enable AI features for best results
-        - Review AI suggestions before exporting
+        - Review AI form analysis to understand the structure
+        - Edit field attributes using the dropdown under each field
         - Use "Move to Questionnaire" for dynamic fields
         - Check conditional logic for radio buttons and checkboxes
         - Add custom database fields for form-specific requirements
         
         ### 🐛 Troubleshooting
-        - If no fields are extracted, ensure the PDF has fillable form fields
-        - Enable debug mode to see extraction details
+        - If form type is detected incorrectly, check the AI analysis
+        - If parts are not extracted properly, enable debug mode
+        - Edit field attributes directly if labels are incorrect
         - Check extraction logs in the debug panel
         - Some PDFs may require OCR for text extraction
         """)
