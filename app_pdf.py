@@ -112,20 +112,6 @@ st.markdown("""
         display: inline-block;
         margin-left: 0.5rem;
     }
-    .debug-info {
-        background: #f5f5f5;
-        padding: 0.5rem;
-        border-radius: 4px;
-        font-size: 0.8rem;
-        margin-top: 0.5rem;
-        font-family: monospace;
-    }
-    .extraction-progress {
-        background: #e3f2fd;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
     .questionnaire-key {
         background: #fff3cd;
         color: #856404;
@@ -136,32 +122,54 @@ st.markdown("""
         display: inline-block;
         margin-left: 0.5rem;
     }
-    .field-type-badge {
-        background: #e3f2fd;
-        color: #1976d2;
-        padding: 0.2rem 0.5rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        display: inline-block;
-        margin-left: 0.5rem;
+    .custom-field-dialog {
+        background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin-bottom: 1.5rem;
+        border: 2px dashed #667eea;
     }
-    .field-attributes {
-        background: #f8f9fa;
-        padding: 0.75rem;
-        border-radius: 6px;
-        margin-top: 0.5rem;
+    .action-button-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
     }
-    .ai-analysis {
+    .dropdown-header {
+        background: #f5f5f5;
+        font-weight: bold;
+        color: #666;
+        font-size: 0.85rem;
+        padding: 0.5rem;
+        text-transform: uppercase;
+    }
+    .dropdown-item {
+        padding-left: 1.5rem;
+        font-size: 0.9rem;
+    }
+    .ai-analysis-box {
         background: #e8f5e9;
         border-left: 4px solid #4caf50;
         padding: 1rem;
         margin: 1rem 0;
         border-radius: 4px;
     }
+    .progress-bar {
+        width: 100%;
+        height: 20px;
+        background: #e0e0e0;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-top: 10px;
+    }
+    .progress-fill {
+        height: 100%;
+        background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+        transition: width 0.3s ease;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Enhanced Database structure for universal forms
+# Enhanced Database structure
 UNIVERSAL_DB_STRUCTURE = {
     "beneficiary": {
         "Beneficiary": ["beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName", 
@@ -325,13 +333,6 @@ class FormStructure:
     def add_log(self, message: str):
         """Add extraction log"""
         self.extraction_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {message}")
-    
-    def clear(self):
-        """Clear all data"""
-        self.parts.clear()
-        self.total_fields = 0
-        self.total_pages = 0
-        self.extraction_logs.clear()
 
 # Base Agent Class
 class Agent(ABC):
@@ -403,7 +404,7 @@ class AIEnhancedPDFReader(Agent):
             form_analysis = None
             if use_ai and self.api_key and full_text:
                 self.update_status("active", "AI analyzing form structure...")
-                form_analysis = self._ai_comprehensive_form_analysis(full_text[:10000])  # Use more text
+                form_analysis = self._ai_comprehensive_form_analysis(full_text[:10000])
                 if form_analysis:
                     form_info = {
                         'number': form_analysis.get('form_number', 'Unknown'),
@@ -438,17 +439,6 @@ class AIEnhancedPDFReader(Agent):
             current_part_context = ""
             seen_fields = set()
             field_count = 0
-            
-            # If we have parts structure from AI, use it
-            if parts_structure:
-                for part_info in parts_structure:
-                    current_part = f"Part {part_info['number']}"
-                    current_part_number = part_info['number']
-                    current_part_title = part_info['title']
-                    current_part_context = part_info.get('context', '')
-                    
-                    if current_part not in form_structure.parts:
-                        form_structure.parts[current_part] = []
             
             # Process each page
             for page_num in range(len(doc)):
@@ -547,7 +537,6 @@ class AIEnhancedPDFReader(Agent):
         except Exception as e:
             self.update_status("error", f"Failed: {str(e)}")
             st.error(f"Error processing PDF: {str(e)}")
-            st.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     def _ai_comprehensive_form_analysis(self, text: str) -> Optional[Dict]:
@@ -586,7 +575,7 @@ class AIEnhancedPDFReader(Agent):
             """
             
             response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-16k",  # Use larger context model
+                model="gpt-3.5-turbo-16k",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=2000
@@ -629,9 +618,6 @@ class AIEnhancedPDFReader(Agent):
             r'Form\s+(N-\d+)',
             r'FORM\s+(G-\d+)',
             r'Form\s+(G-\d+)',
-            r'(I-\d+[A-Z]?)\s+APPLICATION',
-            r'(N-\d+)\s+APPLICATION',
-            r'(G-\d+)\s+NOTICE'
         ]
         
         for pattern in form_patterns:
@@ -639,18 +625,7 @@ class AIEnhancedPDFReader(Agent):
             if match:
                 form_num = match.group(1)
                 if form_num in forms:
-                    # Try to extract revision date
-                    rev_match = re.search(r'Edition\s+(\d+/\d+/\d+)', first_pages_text)
-                    title = forms[form_num]
-                    if rev_match:
-                        title += f" (Rev. {rev_match.group(1)})"
-                    return {'number': form_num, 'title': title}
-        
-        # Check for supplement forms
-        if 'H CLASSIFICATION SUPPLEMENT' in first_pages_text:
-            return {'number': 'I-129H', 'title': 'H Classification Supplement to Form I-129'}
-        elif 'L CLASSIFICATION SUPPLEMENT' in first_pages_text:
-            return {'number': 'I-129L', 'title': 'L Classification Supplement to Form I-129'}
+                    return {'number': form_num, 'title': forms[form_num]}
         
         return {'number': 'Unknown', 'title': 'Unknown USCIS Form'}
     
@@ -659,7 +634,6 @@ class AIEnhancedPDFReader(Agent):
         patterns = [
             r'Part\s+(\d+)\.?\s*[–-]?\s*([^\n]{0,100})',
             r'PART\s+(\d+)\.?\s*[–-]?\s*([^\n]{0,100})',
-            r'Section\s+(\d+)\.?\s*[–-]?\s*([^\n]{0,100})',
         ]
         
         for pattern in patterns:
@@ -669,7 +643,6 @@ class AIEnhancedPDFReader(Agent):
                 part_num = int(match.group(1))
                 if part_num != current_number:
                     title = match.group(2).strip()
-                    # Clean title
                     title = re.sub(r'[.\s]+$', '', title)
                     title = re.sub(r'\s+', ' ', title)
                     
@@ -686,7 +659,7 @@ class AIEnhancedPDFReader(Agent):
                               part_context: str = "") -> Optional[ExtractedField]:
         """Extract field with AI enhancement"""
         try:
-            # Get field name - handle different widget types
+            # Get field name
             field_name = ""
             if hasattr(widget, 'field_name') and widget.field_name:
                 field_name = widget.field_name
@@ -718,10 +691,8 @@ class AIEnhancedPDFReader(Agent):
             
             # Generate questionnaire names
             if item_number:
-                # For fields with item numbers, use the number
                 quest_name = item_number.replace('.', '_')
             else:
-                # For fields without item numbers, use a clean version of the name
                 quest_name = re.sub(r'[^a-zA-Z0-9_]', '', clean_name)[:20]
                 if not quest_name:
                     quest_name = f"field_{field_count}"
@@ -1442,26 +1413,30 @@ class UniversalExportAgent(Agent):
             "className": "pt-15"
         }
 
-# Helper function to get available database paths
-def get_all_db_paths() -> Dict[str, List[str]]:
-    """Get all database paths including custom fields"""
-    all_paths = {}
+# Helper function to get all database paths grouped properly
+def get_all_db_paths_grouped() -> List[tuple]:
+    """Get all database paths properly grouped for dropdown"""
+    grouped_paths = []
     
-    # Standard paths
-    for obj, cats in UNIVERSAL_DB_STRUCTURE.items():
-        obj_paths = []
-        for cat, fields_list in cats.items():
+    # Add all standard paths grouped by object
+    for obj, categories in UNIVERSAL_DB_STRUCTURE.items():
+        # Add group header
+        grouped_paths.append(("group", f"═══ {obj.upper()} ═══", ""))
+        
+        # Add paths for this object
+        for cat, fields_list in categories.items():
             for field in fields_list:
                 path = f"{obj}.{cat}.{field}" if cat else f"{obj}.{field}"
-                obj_paths.append(path)
-        all_paths[obj] = obj_paths
+                grouped_paths.append(("option", path, path))
     
-    # Custom paths
+    # Add custom fields if any
     custom_fields = st.session_state.get('custom_db_fields', {})
     if custom_fields:
-        all_paths['custom'] = list(custom_fields.keys())
+        grouped_paths.append(("group", "═══ CUSTOM ═══", ""))
+        for path in custom_fields.keys():
+            grouped_paths.append(("option", path, path))
     
-    return all_paths
+    return grouped_paths
 
 # Main UI Functions
 def clear_session_state():
@@ -1473,43 +1448,51 @@ def clear_session_state():
 
 def show_add_database_field_dialog():
     """Show dialog to add custom database field"""
-    with st.expander("➕ Add Custom Database Field", expanded=False):
-        col1, col2, col3 = st.columns([2, 2, 1])
-        
-        with col1:
-            obj_name = st.selectbox(
-                "Object",
-                ["beneficiary", "petitioner", "customer", "attorney", "case", "employment", "custom"],
-                key="new_obj"
-            )
-        
-        with col2:
-            category = st.text_input("Category (optional)", key="new_cat")
-            field_name = st.text_input("Field Name", key="new_field")
-        
-        with col3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Add Field", type="primary", use_container_width=True):
-                if field_name:
-                    # Generate path
-                    if category:
-                        path = f"{obj_name}.{category}.{field_name}"
-                    else:
-                        path = f"{obj_name}.{field_name}"
-                    
-                    # Add to custom fields
-                    if 'custom_db_fields' not in st.session_state:
-                        st.session_state.custom_db_fields = {}
-                    
-                    st.session_state.custom_db_fields[path] = {
-                        'object': obj_name,
-                        'category': category,
-                        'field': field_name,
-                        'created': datetime.now().isoformat()
-                    }
-                    
-                    st.success(f"Added custom field: {path}")
-                    st.rerun()
+    st.markdown('<div class="custom-field-dialog">', unsafe_allow_html=True)
+    st.markdown("### ➕ Add Custom Database Field")
+    
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    
+    with col1:
+        obj_name = st.selectbox(
+            "Object",
+            ["beneficiary", "petitioner", "customer", "attorney", "case", "employment", "custom"],
+            key="new_obj"
+        )
+    
+    with col2:
+        category = st.text_input("Category (optional)", key="new_cat")
+    
+    with col3:
+        field_name = st.text_input("Field Name *", key="new_field")
+    
+    with col4:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("Add Field", type="primary", use_container_width=True):
+            if field_name:
+                # Generate path
+                if category:
+                    path = f"{obj_name}.{category}.{field_name}"
+                else:
+                    path = f"{obj_name}.{field_name}"
+                
+                # Add to custom fields
+                if 'custom_db_fields' not in st.session_state:
+                    st.session_state.custom_db_fields = {}
+                
+                st.session_state.custom_db_fields[path] = {
+                    'object': obj_name,
+                    'category': category,
+                    'field': field_name,
+                    'created': datetime.now().isoformat()
+                }
+                
+                st.success(f"✅ Added custom field: {path}")
+                st.rerun()
+            else:
+                st.error("Please enter a field name")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 def render_field_mapping(form_structure: FormStructure, selected_part: str):
     """Render field mapping interface"""
@@ -1521,7 +1504,7 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
     # Show AI analysis if available
     if form_structure.ai_form_analysis:
         with st.expander("🤖 AI Form Analysis", expanded=False):
-            st.markdown('<div class="ai-analysis">', unsafe_allow_html=True)
+            st.markdown('<div class="ai-analysis-box">', unsafe_allow_html=True)
             st.markdown("### Form Understanding")
             st.write(f"**Form Purpose**: {form_structure.ai_form_analysis.get('form_purpose', 'N/A')}")
             st.write(f"**Primary Applicant**: {form_structure.ai_form_analysis.get('primary_applicant', 'N/A')}")
@@ -1530,14 +1513,6 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                 for part in form_structure.ai_form_analysis['parts']:
                     st.write(f"**Part {part['number']}**: {part['title']} - {part.get('description', '')}")
             st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Debug info
-    if st.checkbox("🐛 Show Debug Info", value=False, key="show_debug"):
-        st.markdown('<div class="extraction-progress">', unsafe_allow_html=True)
-        st.markdown("### Extraction Logs")
-        for log in form_structure.extraction_logs:
-            st.caption(log)
-        st.markdown('</div>', unsafe_allow_html=True)
     
     # Part selector
     st.markdown('<div class="part-selector">', unsafe_allow_html=True)
@@ -1596,30 +1571,34 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Quick actions
+    st.markdown('<div class="action-button-row">', unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        if st.button("🤖 AI Auto-Map", use_container_width=True, 
-                    help="Use AI to map all unmapped fields"):
+        if st.button("🤖 AI Auto-Map All Fields", use_container_width=True, type="primary",
+                    help="Use AI to map all unmapped fields across all parts"):
             if 'agents' in st.session_state and 'mapper' in st.session_state.agents:
-                mapper = st.session_state.agents['mapper']
-                mapper.execute(form_structure, auto_map=True)
-                st.rerun()
+                with st.spinner("AI mapping fields..."):
+                    mapper = st.session_state.agents['mapper']
+                    mapper.execute(form_structure, auto_map=True)
+                    st.success("✅ AI mapping completed!")
+                    st.rerun()
     
     with col2:
-        if st.button("📋 Checkboxes → Quest", use_container_width=True,
+        if st.button("📋 All Checkboxes → Quest", use_container_width=True,
                     help="Move all checkboxes/radios to questionnaire"):
             count = 0
             for fields in form_structure.parts.values():
                 for field in fields:
                     if field.type in ["checkbox", "radio"] and not field.is_questionnaire:
                         field.is_questionnaire = True
+                        field.db_path = None
                         count += 1
-            st.success(f"Moved {count} fields")
+            st.success(f"✅ Moved {count} fields to questionnaire")
             st.rerun()
     
     with col3:
-        if st.button("📝 Unmapped → Quest", use_container_width=True,
+        if st.button("📝 All Unmapped → Quest", use_container_width=True,
                     help="Move all unmapped text fields to questionnaire"):
             count = 0
             for fields in form_structure.parts.values():
@@ -1627,17 +1606,20 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     if not field.db_path and not field.is_questionnaire:
                         field.is_questionnaire = True
                         count += 1
-            st.success(f"Moved {count} fields")
+            st.success(f"✅ Moved {count} fields to questionnaire")
             st.rerun()
     
     with col4:
-        if st.button("🔄 Reset Part", use_container_width=True,
-                    help="Reset mappings for current part"):
+        if st.button("🔄 Reset Current Part", use_container_width=True,
+                    help="Reset all mappings for current part"):
             if selected_part in form_structure.parts:
                 for field in form_structure.parts[selected_part]:
                     field.db_path = None
                     field.is_questionnaire = field.type in ["checkbox", "radio"]
+                st.success(f"✅ Reset {selected_part}")
                 st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
     
     # Display fields for selected part
     if selected_part and selected_part in form_structure.parts:
@@ -1685,7 +1667,7 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     else:
                         st.markdown(f'**{field.label}**')
                     
-                    # Field metadata - show part instead of page
+                    # Field metadata
                     meta_items = [
                         f"Type: {field.type}",
                         f"{field.part}"
@@ -1701,37 +1683,59 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                 
                 with col2:
                     if field.type == "text":
-                        # Database mapping
-                        db_options = ["-- Select Database Field --", "📋 Move to Questionnaire", "---"]
+                        # Build options for selectbox
+                        options = ["-- Select Database Field --", "📋 Move to Questionnaire"]
+                        values = ["", "questionnaire"]
                         
-                        # Get all paths
-                        all_paths = get_all_db_paths()
+                        # Get grouped paths
+                        grouped_paths = get_all_db_paths_grouped()
                         
-                        # Group by object
-                        for obj, paths in all_paths.items():
-                            if paths:
-                                db_options.append(f"=== {obj.upper()} ===")
-                                db_options.extend(sorted(paths))
+                        # Build options from grouped paths
+                        for path_type, display, value in grouped_paths:
+                            if path_type == "group":
+                                # Can't use disabled in streamlit selectbox, so use it as a visual separator
+                                options.append(display)
+                                values.append("")
+                            else:
+                                options.append(f"    {display}")  # Indent options
+                                values.append(value)
                         
-                        current = field.db_path if field.db_path else "-- Select Database Field --"
+                        # Determine current selection
                         if field.is_questionnaire:
-                            current = "📋 Move to Questionnaire"
+                            current_value = "questionnaire"
+                        elif field.db_path:
+                            current_value = field.db_path
+                        else:
+                            current_value = ""
                         
-                        selected = st.selectbox(
+                        # Find current index
+                        try:
+                            current_index = values.index(current_value)
+                        except ValueError:
+                            current_index = 0
+                        
+                        # Create unique key for this selectbox
+                        select_key = f"map_{field.widget_id}_{idx}_{selected_part}"
+                        
+                        selected_index = st.selectbox(
                             "Map to",
-                            db_options,
-                            index=db_options.index(current) if current in db_options else 0,
-                            key=f"map_{field.widget_id}_{idx}",
+                            range(len(options)),
+                            format_func=lambda x: options[x],
+                            index=current_index,
+                            key=select_key,
                             label_visibility="collapsed"
                         )
                         
-                        if selected != current and not selected.startswith("===") and selected != "---":
-                            if selected == "📋 Move to Questionnaire":
+                        selected_value = values[selected_index]
+                        
+                        # Handle selection change
+                        if selected_value != current_value and selected_value != "":
+                            if selected_value == "questionnaire":
                                 field.is_questionnaire = True
                                 field.db_path = None
                                 field.questionnaire_type = ":SingleBox"
-                            elif selected != "-- Select Database Field --":
-                                field.db_path = selected
+                            elif not options[selected_index].startswith("═══"):  # Not a group header
+                                field.db_path = selected_value
                                 field.is_questionnaire = False
                             st.rerun()
                     else:
@@ -1739,10 +1743,12 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                         include = st.checkbox(
                             "Include in Questionnaire",
                             value=field.is_questionnaire,
-                            key=f"quest_{field.widget_id}_{idx}"
+                            key=f"quest_{field.widget_id}_{idx}_{selected_part}"
                         )
                         if include != field.is_questionnaire:
                             field.is_questionnaire = include
+                            if include:
+                                field.db_path = None
                             st.rerun()
                         
                         if field.is_conditional:
@@ -1752,65 +1758,6 @@ def render_field_mapping(form_structure: FormStructure, selected_part: str):
                     st.markdown(f"**{status_text}**")
                     if field.ai_suggestion:
                         st.caption(f"💡 {field.ai_suggestion}")
-                
-                # Field attributes editing section
-                with st.expander("📝 Edit Field Attributes", expanded=False):
-                    st.markdown('<div class="field-attributes">', unsafe_allow_html=True)
-                    
-                    # Edit field attributes
-                    fcol1, fcol2, fcol3 = st.columns(3)
-                    
-                    with fcol1:
-                        # Edit name
-                        new_name = st.text_input(
-                            "Field Name",
-                            value=field.name,
-                            key=f"name_{field.widget_id}_{idx}"
-                        )
-                        if new_name != field.name:
-                            field.name = new_name
-                            st.rerun()
-                    
-                    with fcol2:
-                        # Edit label
-                        new_label = st.text_input(
-                            "Label",
-                            value=field.label,
-                            key=f"label_{field.widget_id}_{idx}"
-                        )
-                        if new_label != field.label:
-                            field.label = new_label
-                            st.rerun()
-                    
-                    with fcol3:
-                        # Edit type
-                        type_options = ["text", "checkbox", "radio", "dropdown", "date", "signature"]
-                        new_type = st.selectbox(
-                            "Type",
-                            type_options,
-                            index=type_options.index(field.type) if field.type in type_options else 0,
-                            key=f"type_{field.widget_id}_{idx}"
-                        )
-                        if new_type != field.type:
-                            field.type = new_type
-                            # Update control type
-                            control_type_map = {
-                                'checkbox': 'colorSwitch',
-                                'radio': 'radio',
-                                'text': 'text',
-                                'dropdown': 'select',
-                                'date': 'date',
-                                'signature': 'signature'
-                            }
-                            field.control_type = control_type_map.get(new_type, 'text')
-                            st.rerun()
-                    
-                    # Debug info
-                    if st.session_state.get('show_debug', False) and field.debug_info:
-                        st.markdown(f'<div class="debug-info">Debug: {json.dumps(field.debug_info, indent=2)}</div>', 
-                                  unsafe_allow_html=True)
-                    
-                    st.markdown('</div>', unsafe_allow_html=True)
                 
                 st.markdown('</div>', unsafe_allow_html=True)
     else:
@@ -1865,15 +1812,6 @@ def main():
                         del st.session_state.custom_db_fields[path]
                         st.rerun()
         
-        # Agent Status
-        if st.session_state.get('agents'):
-            st.markdown("### 📊 Agent Status")
-            for name, agent in st.session_state.agents.items():
-                st.markdown(f"**{name}**")
-                st.caption(f"Status: {agent.status}")
-                if agent.last_action:
-                    st.caption(f"Last: {agent.last_action}")
-        
         # Form Info
         form_structure = st.session_state.get('form_structure')
         if form_structure:
@@ -1892,6 +1830,14 @@ def main():
             quest = sum(1 for fields in form_structure.parts.values() for f in fields if f.is_questionnaire)
             col1.metric("Mapped", mapped)
             col2.metric("Quest", quest)
+            
+            # Progress bar
+            progress = (mapped + quest) / form_structure.total_fields if form_structure.total_fields > 0 else 0
+            st.markdown(f'''
+            <div class="progress-bar">
+                <div class="progress-fill" style="width: {progress*100}%"></div>
+            </div>
+            ''', unsafe_allow_html=True)
     
     # Main tabs
     tabs = st.tabs(["📤 Upload & Extract", "🎯 Map Fields", "📥 Export", "📚 Help"])
@@ -1948,10 +1894,11 @@ def main():
                             
                             # Auto-map if enabled
                             if use_ai_mapping and api_key:
-                                st.session_state.agents['mapper'].execute(
-                                    form_structure, 
-                                    auto_map=True
-                                )
+                                with st.spinner("AI mapping fields..."):
+                                    st.session_state.agents['mapper'].execute(
+                                        form_structure, 
+                                        auto_map=True
+                                    )
                             
                             st.success(f"✅ Successfully processed {form_structure.form_number}")
                             
@@ -2047,10 +1994,10 @@ def main():
         
         ### 2️⃣ Map Fields
         - Review extracted fields part by part
-        - AI automatically maps fields to database objects using part context
-        - Edit field attributes (name, label, type) using the dropdown
-        - Manually adjust mappings as needed
-        - Add custom database fields if required
+        - **Click "🤖 AI Auto-Map All Fields" to automatically map all fields using AI**
+        - Database objects are properly grouped in the dropdown (BENEFICIARY, PETITIONER, etc.)
+        - Manually adjust mappings as needed using the dropdowns
+        - Add custom database fields using the form at the top
         - Move unmapped fields to questionnaire
         
         ### 3️⃣ Export
@@ -2062,21 +2009,22 @@ def main():
         - **Smart Form Detection**: AI accurately identifies form type (I-539, G-28, etc.)
         - **Intelligent Part Extraction**: AI understands form parts and their context
         - **Context-Aware Mapping**: Uses part descriptions to map fields correctly
+        - **One-Click Auto-Mapping**: AI maps all fields across all parts automatically
         - **Field Enhancement**: AI improves field labels and descriptions
         - **Universal Support**: Works with any USCIS form
         - **Confidence Scoring**: Shows AI confidence for each mapping
         
         ### 💡 Tips
         - Enable AI features for best results
+        - Use "AI Auto-Map All Fields" button for quick complete mapping
+        - Database fields are grouped by object in dropdowns for easy navigation
         - Review AI form analysis to understand the structure
-        - Edit field attributes using the dropdown under each field
-        - Use "Move to Questionnaire" for dynamic fields
         - Check conditional logic for radio buttons and checkboxes
         - Add custom database fields for form-specific requirements
         
         ### 🐛 Troubleshooting
         - If form type is detected incorrectly, check the AI analysis
-        - If parts are not extracted properly, enable debug mode
+        - If dropdown shows empty, ensure fields are extracted properly
         - Edit field attributes directly if labels are incorrect
         - Check extraction logs in the debug panel
         - Some PDFs may require OCR for text extraction
