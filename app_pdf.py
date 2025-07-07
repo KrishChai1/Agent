@@ -1372,7 +1372,7 @@ def main():
         api_key = st.text_input(
             "OpenAI API Key",
             type="password",
-            value=st.secrets.get("OPENAI_API_KEY", ""),
+            value=st.secrets.get("OPENAI_API_KEY", "") if "OPENAI_API_KEY" in st.secrets else "",
             help="Required for AI-enhanced extraction and mapping"
         )
         
@@ -1384,7 +1384,7 @@ def main():
                                    help="Auto-map fields using AI")
         
         # Agent Status
-        if st.session_state.agents:
+        if st.session_state.get('agents'):
             st.markdown("### 📊 Agent Status")
             for name, agent in st.session_state.agents.items():
                 st.markdown(f"**{name}**")
@@ -1393,21 +1393,21 @@ def main():
                     st.caption(f"Last: {agent.last_action}")
         
         # Form Info
-        if st.session_state.form_structure:
+        form_structure = st.session_state.get('form_structure')
+        if form_structure:
             st.markdown("### 📄 Current Form")
-            form = st.session_state.form_structure
-            st.info(f"{form.form_number}: {form.form_title}")
-            st.caption(f"Form ID: {form.form_hash}")
+            st.info(f"{form_structure.form_number}: {form_structure.form_title}")
+            st.caption(f"Form ID: {form_structure.form_hash}")
             
             # Statistics
             st.markdown("### 📊 Statistics")
             col1, col2 = st.columns(2)
-            col1.metric("Parts", len(form.parts))
-            col2.metric("Fields", form.total_fields)
+            col1.metric("Parts", len(form_structure.parts))
+            col2.metric("Fields", form_structure.total_fields)
             
             col1, col2 = st.columns(2)
-            mapped = sum(1 for fields in form.parts.values() for f in fields if f.db_path)
-            quest = sum(1 for fields in form.parts.values() for f in fields if f.is_questionnaire)
+            mapped = sum(1 for fields in form_structure.parts.values() for f in fields if f.db_path)
+            quest = sum(1 for fields in form_structure.parts.values() for f in fields if f.is_questionnaire)
             col1.metric("Mapped", mapped)
             col2.metric("Quest", quest)
     
@@ -1428,7 +1428,7 @@ def main():
         if uploaded_file:
             # Check if this is a new upload
             file_hash = hashlib.md5(uploaded_file.name.encode()).hexdigest()
-            if st.session_state.last_upload_hash != file_hash:
+            if st.session_state.get('last_upload_hash') != file_hash:
                 # Clear previous data
                 clear_session_state()
                 st.session_state.last_upload_hash = file_hash
@@ -1484,16 +1484,18 @@ def main():
                                             st.caption(f"{t}: {count}")
     
     with tabs[1]:
-        if st.session_state.form_structure:
+        form_structure = st.session_state.get('form_structure')
+        if form_structure:
             st.session_state.selected_part = render_field_mapping(
-                st.session_state.form_structure,
-                st.session_state.selected_part
+                form_structure,
+                st.session_state.get('selected_part', 'Part 1')
             )
         else:
             st.info("👆 Please upload and process a PDF form first")
     
     with tabs[2]:
-        if st.session_state.form_structure:
+        form_structure = st.session_state.get('form_structure')
+        if form_structure:
             st.markdown("## 📥 Export Options")
             st.info("Generate TypeScript and JSON files in the exact format required for your application.")
             
@@ -1505,13 +1507,13 @@ def main():
                 
                 if st.button("🔨 Generate TypeScript", use_container_width=True, type="primary"):
                     exporter = st.session_state.agents['exporter']
-                    ts_code = exporter.execute(st.session_state.form_structure, "typescript")
+                    ts_code = exporter.execute(form_structure, "typescript")
                     
                     if ts_code:
                         st.download_button(
                             "⬇️ Download TypeScript File",
                             ts_code,
-                            f"{st.session_state.form_structure.form_number}.ts",
+                            f"{form_structure.form_number}.ts",
                             mime="text/typescript",
                             use_container_width=True
                         )
@@ -1525,13 +1527,13 @@ def main():
                 
                 if st.button("🔨 Generate JSON", use_container_width=True, type="primary"):
                     exporter = st.session_state.agents['exporter']
-                    json_code = exporter.execute(st.session_state.form_structure, "json")
+                    json_code = exporter.execute(form_structure, "json")
                     
                     if json_code:
                         st.download_button(
                             "⬇️ Download JSON File",
                             json_code,
-                            f"{st.session_state.form_structure.form_number}-questionnaire.json",
+                            f"{form_structure.form_number}-questionnaire.json",
                             mime="application/json",
                             use_container_width=True
                         )
