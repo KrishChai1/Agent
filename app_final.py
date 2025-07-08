@@ -4,13 +4,12 @@ import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="USCIS Form Smart Mapper", layout="wide")
-st.title("🗂️ USCIS Form Part-by-Part Smart Mapper — FINAL FULL DB VERSION ✅")
+st.set_page_config(page_title="USCIS Smart Mapper — Agent Enhanced", layout="wide")
+st.title("🤖 USCIS Form Smart Mapper — Final Agent-Enhanced Version ✅")
 
 def build_db_attributes():
     attributes = []
 
-    # Attorney
     attributes += [
         "Attorney: attorneyInfo.firstName",
         "Attorney: attorneyInfo.lastName",
@@ -26,7 +25,6 @@ def build_db_attributes():
         "Attorney: address.addressCountry",
     ]
 
-    # Beneficiary
     attributes += [
         "Beneficiary: Beneficiary.beneficiaryFirstName",
         "Beneficiary: Beneficiary.beneficiaryLastName",
@@ -43,7 +41,6 @@ def build_db_attributes():
         "Beneficiary: HomeAddress.addressZip",
     ]
 
-    # Case
     attributes += [
         "Case: caseId",
         "Case: caseType",
@@ -55,7 +52,6 @@ def build_db_attributes():
         "Case: h1BPetitionType",
     ]
 
-    # Customer
     attributes += [
         "Customer: customer_name",
         "Customer: customer_tax_id",
@@ -69,7 +65,6 @@ def build_db_attributes():
         "Customer: customer_address_id",
     ]
 
-    # Lawfirm
     attributes += [
         "Lawfirm: lawFirmDetails.lawFirmName",
         "Lawfirm: lawFirmDetails.companyPhone",
@@ -80,7 +75,6 @@ def build_db_attributes():
         "Lawfirm: address.addressZip",
     ]
 
-    # LCA
     attributes += [
         "LCA: Lca.positionJobTitle",
         "LCA: Lca.grossSalary",
@@ -94,7 +88,6 @@ def build_db_attributes():
         "LCA: Addresses.addressZip",
     ]
 
-    # Petitioner
     attributes += [
         "Petitioner: Beneficiary.beneficiaryFirstName",
         "Petitioner: Beneficiary.beneficiaryLastName",
@@ -114,26 +107,28 @@ def build_db_attributes():
 db_fields = build_db_attributes()
 
 def extract_parts(text):
-    text = re.sub(r"(Part\s+\d+\..*?)\s*\(continued\)", r"\1", text, flags=re.IGNORECASE)
-    part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
-    matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"(Part\s+\d+.*?)(?=Part\s+\d+|$)", lambda m: m.group(1).replace("\n", " ⏎ "), text, flags=re.DOTALL | re.IGNORECASE)
+    pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
+    matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+
     parts = {}
     for match in matches:
-        lines = match.strip().split("\n", 1)
+        clean = match.replace(" ⏎ ", "\n")
+        lines = clean.strip().split("\n", 1)
         part_title = lines[0].strip()
         part_content = lines[1].strip() if len(lines) > 1 else ""
         parts[part_title] = part_content
     return parts
 
-def extract_fields(part_content):
-    part_content_clean = re.sub(r'\n', ' ', part_content)
-    part_content_clean = re.sub(r'\s+', ' ', part_content_clean)
-    field_pattern = r"(\d+\.(?:[a-z]\.)?\s+[^0-9]+?)(?=\d+\.(?:[a-z]\.)?\s|$)"
-    matches = re.findall(field_pattern, part_content_clean, flags=re.IGNORECASE)
+def extract_fields_recursive(part_content):
+    content_clean = re.sub(r'\n', ' ', part_content)
+    content_clean = re.sub(r'\s+', ' ', content_clean)
+    pattern = r"(\d+\.(?:[a-z]\.)?\s+.*?)(?=\d+\.(?:[a-z]\.)?\s|$)"
+    matches = re.findall(pattern, content_clean, flags=re.IGNORECASE)
     fields = [m.strip() for m in matches]
     return fields
 
-uploaded_file = st.file_uploader("📄 Upload a USCIS PDF", type=["pdf"])
+uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
 
 if uploaded_file:
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
@@ -143,13 +138,24 @@ if uploaded_file:
 
     parts = extract_parts(text)
 
+    if st.button("🤖 Validate Agent - Preview Parts & Fields"):
+        agent_report = {}
+        for part_name, part_content in parts.items():
+            fields = extract_fields_recursive(part_content)
+            agent_report[part_name] = fields
+
+        st.json(agent_report)
+        json_agent = json.dumps(agent_report, indent=2)
+        st.download_button("💾 Download Agent Verification JSON", data=json_agent, file_name="agent_verified_parts.json", mime="application/json")
+        st.stop()
+
     final_mappings = {}
 
-    st.header("🗂️ Review & Edit Parts (Sequential Full View)")
+    st.header("🗂️ Review & Map Parts Sequentially")
 
     for part_name, part_content in parts.items():
         st.subheader(part_name)
-        fields = extract_fields(part_content)
+        fields = extract_fields_recursive(part_content)
 
         if not fields:
             st.warning(f"⚠️ No numbered fields found in {part_name}.")
@@ -175,7 +181,7 @@ if uploaded_file:
     json_data = {"parts": final_mappings, "generated_at": datetime.now().isoformat()}
     json_str = json.dumps(json_data, indent=2)
 
-    st.header("⬇️ Download Files")
+    st.header("⬇️ Download Mappings")
     st.download_button("📥 Download JSON Mapping", data=json_str, file_name="uscis_mapping.json", mime="application/json")
 
     ts_stub = "export interface FormFields {\n"
@@ -186,7 +192,7 @@ if uploaded_file:
     ts_stub += "}\n"
     st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
 
-    st.success("✅ All parts parsed, fields mapped, and downloads ready!")
+    st.success("✅ All parts parsed, validated, mapped, and ready!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
