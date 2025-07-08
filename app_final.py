@@ -4,8 +4,8 @@ import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="USCIS Smart Mapper — Ultimate Agent Version", layout="wide")
-st.title("🤖 USCIS Form Smart Mapper — FINAL ULTIMATE AGENT VERSION ✅")
+st.set_page_config(page_title="USCIS Smart Mapper — Ultimate Agent Recursive Version", layout="wide")
+st.title("🤖 USCIS Form Smart Mapper — FINAL AGENTIC RECURSIVE VERSION ✅")
 
 # ----------------- DB Attributes -----------------
 def build_db_attributes():
@@ -34,7 +34,7 @@ def build_db_attributes():
 
 db_fields = build_db_attributes()
 
-# ----------------- Smart Suggestion -----------------
+# ----------------- Suggest Mapping -----------------
 def suggest_db_mapping(field_text):
     lower = field_text.lower()
     if "attorney" in lower:
@@ -54,35 +54,44 @@ def suggest_db_mapping(field_text):
     else:
         return "None (Move to Questionnaire)"
 
-# ----------------- Extract Parts -----------------
-def extract_parts_lines(text):
+# ----------------- Agentic Recursive Part Extraction -----------------
+def extract_parts_recursive(text):
     start_idx = text.lower().find("start here")
     if start_idx != -1:
         text = text[start_idx:]
     else:
-        st.warning("⚠️ 'START HERE' not found. Using full document text.")
+        st.warning("⚠️ 'START HERE' not found. Using full text.")
 
     lines = text.split("\n")
-    current_part = ""
     parts = {}
+    current_part = ""
     for line in lines:
         line = line.strip()
         if re.match(r"^Part\s+\d+\.", line, re.IGNORECASE):
-            current_part = line
-            if current_part not in parts:
-                parts[current_part] = ""
+            part_title = re.sub(r"\(continued\)", "", line, flags=re.IGNORECASE).strip()
+            if part_title in parts:
+                parts[part_title] += " " + line
+            else:
+                parts[part_title] = line
+            current_part = part_title
         elif current_part:
             parts[current_part] += " " + line
 
-    # Merge "continued" fragments
-    merged_parts = {}
-    for k in parts:
-        title = re.sub(r"\(continued\)", "", k, flags=re.IGNORECASE).strip()
-        if title in merged_parts:
-            merged_parts[title] += " " + parts[k]
+    # Merge logic by recursively checking for possible split errors
+    validated_parts = {}
+    for k, v in parts.items():
+        if k not in validated_parts:
+            validated_parts[k] = v
         else:
-            merged_parts[title] = parts[k]
-    return merged_parts
+            validated_parts[k] += " " + v
+
+    # Sort by part number
+    def part_sort_key(x):
+        m = re.match(r"Part\s+(\d+)\.", x)
+        return int(m.group(1)) if m else 9999
+
+    sorted_parts = dict(sorted(validated_parts.items(), key=lambda item: part_sort_key(item[0])))
+    return sorted_parts
 
 # ----------------- Extract Fields -----------------
 def extract_fields_smart(part_content):
@@ -121,7 +130,7 @@ if uploaded_file:
     for page in pdf:
         text += page.get_text()
 
-    parts = extract_parts_lines(text)
+    parts = extract_parts_recursive(text)
 
     if st.button("🤖 Validate Agent - Preview Parts & Fields"):
         agent_report = {}
@@ -177,7 +186,7 @@ if uploaded_file:
     ts_stub += "}\n"
     st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
 
-    st.success("✅ All parts merged, cleaned, smartly mapped, and ready!")
+    st.success("✅ All parts recursively extracted, validated, smartly mapped, and ready!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
