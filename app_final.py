@@ -4,10 +4,10 @@ import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="USCIS Smart Mapper — Agentic Version", layout="wide")
-st.title("🤖 USCIS Form Smart Mapper — FINAL AGENTIC VERSION ✅")
+st.set_page_config(page_title="USCIS Smart Mapper — Ultimate Agent Version", layout="wide")
+st.title("🤖 USCIS Form Smart Mapper — FINAL ULTIMATE AGENT VERSION ✅")
 
-# ------------------- Build DB Attributes -------------------
+# ----------------- DB Attributes -----------------
 def build_db_attributes():
     attributes = [
         "Attorney: attorneyInfo.firstName", "Attorney: attorneyInfo.lastName", "Attorney: attorneyInfo.workPhone",
@@ -34,7 +34,7 @@ def build_db_attributes():
 
 db_fields = build_db_attributes()
 
-# ------------------- Smart Pre-mapper -------------------
+# ----------------- Smart Suggestion -----------------
 def suggest_db_mapping(field_text):
     lower = field_text.lower()
     if "attorney" in lower:
@@ -54,7 +54,7 @@ def suggest_db_mapping(field_text):
     else:
         return "None (Move to Questionnaire)"
 
-# ------------------- Extract Parts -------------------
+# ----------------- Extract Parts -----------------
 def extract_parts(text):
     start_idx = text.lower().find("start here")
     if start_idx != -1:
@@ -62,25 +62,27 @@ def extract_parts(text):
     else:
         st.warning("⚠️ 'START HERE' not found. Using full document text.")
 
-    text = re.sub(r"(Part\s+\d+.*?)(?=Part\s+\d+|$)", lambda m: m.group(1).replace("\n", " ⏎ "), text, flags=re.DOTALL | re.IGNORECASE)
-    pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
-    matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+    text = text.replace("\n", " ")
+    part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
+    matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
 
-    parts = {}
+    merged_parts = {}
     for match in matches:
-        clean = match.replace(" ⏎ ", "\n")
-        lines = clean.strip().split("\n", 1)
-        part_title = lines[0].strip()
-        part_content = lines[1].strip() if len(lines) > 1 else ""
-        parts[part_title] = part_content
-    return parts
+        title_match = re.match(r"(Part\s+\d+\.[^A-Za-z]*)", match.strip())
+        if title_match:
+            part_title = title_match.group(1).strip()
+        else:
+            part_title = "Part Unknown"
+        if part_title in merged_parts:
+            merged_parts[part_title] += " " + match.strip()
+        else:
+            merged_parts[part_title] = match.strip()
+    return merged_parts
 
-# ------------------- Recursive Field Extraction -------------------
+# ----------------- Extract Fields -----------------
 def extract_fields_smart(part_content):
-    content_clean = re.sub(r'\n', ' ', part_content)
-    content_clean = re.sub(r'\s+', ' ', content_clean)
     pattern = r"(\d+\.(?:[a-z]\.)?\s+.*?)(?=\d+\.(?:[a-z]\.)?\s|$)"
-    matches = re.findall(pattern, content_clean, flags=re.IGNORECASE)
+    matches = re.findall(pattern, part_content, flags=re.IGNORECASE)
 
     keywords = ["Family Name", "Given Name", "Middle Name", "Street", "City", "State", "ZIP", "Phone", "Email", "Date", "A-Number"]
     final_fields = []
@@ -105,7 +107,7 @@ def extract_fields_smart(part_content):
     final_fields.sort(key=sort_key)
     return final_fields
 
-# ------------------- UI -------------------
+# ----------------- UI -----------------
 uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
 
 if uploaded_file:
@@ -135,7 +137,7 @@ if uploaded_file:
         fields = extract_fields_smart(part_content)
 
         if not fields:
-            st.warning(f"⚠️ No numbered fields found in {part_name}.")
+            st.warning(f"⚠️ No numbered fields found in {part_name}. Showing as manual text.")
             continue
 
         part_fields = []
@@ -170,7 +172,7 @@ if uploaded_file:
     ts_stub += "}\n"
     st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
 
-    st.success("✅ All parts parsed, smart mapped, validated, and ready!")
+    st.success("✅ All parts merged, cleaned, smartly mapped, and ready!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
