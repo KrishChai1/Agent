@@ -55,28 +55,33 @@ def suggest_db_mapping(field_text):
         return "None (Move to Questionnaire)"
 
 # ----------------- Extract Parts -----------------
-def extract_parts(text):
+def extract_parts_lines(text):
     start_idx = text.lower().find("start here")
     if start_idx != -1:
         text = text[start_idx:]
     else:
         st.warning("⚠️ 'START HERE' not found. Using full document text.")
 
-    text = text.replace("\n", " ")
-    part_pattern = r"(Part\s+\d+\..*?)(?=Part\s+\d+\.|$)"
-    matches = re.findall(part_pattern, text, re.DOTALL | re.IGNORECASE)
+    lines = text.split("\n")
+    current_part = ""
+    parts = {}
+    for line in lines:
+        line = line.strip()
+        if re.match(r"^Part\s+\d+\.", line, re.IGNORECASE):
+            current_part = line
+            if current_part not in parts:
+                parts[current_part] = ""
+        elif current_part:
+            parts[current_part] += " " + line
 
+    # Merge "continued" fragments
     merged_parts = {}
-    for match in matches:
-        title_match = re.match(r"(Part\s+\d+\.[^A-Za-z]*)", match.strip())
-        if title_match:
-            part_title = title_match.group(1).strip()
+    for k in parts:
+        title = re.sub(r"\(continued\)", "", k, flags=re.IGNORECASE).strip()
+        if title in merged_parts:
+            merged_parts[title] += " " + parts[k]
         else:
-            part_title = "Part Unknown"
-        if part_title in merged_parts:
-            merged_parts[part_title] += " " + match.strip()
-        else:
-            merged_parts[part_title] = match.strip()
+            merged_parts[title] = parts[k]
     return merged_parts
 
 # ----------------- Extract Fields -----------------
@@ -116,7 +121,7 @@ if uploaded_file:
     for page in pdf:
         text += page.get_text()
 
-    parts = extract_parts(text)
+    parts = extract_parts_lines(text)
 
     if st.button("🤖 Validate Agent - Preview Parts & Fields"):
         agent_report = {}
