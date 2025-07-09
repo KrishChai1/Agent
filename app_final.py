@@ -4,8 +4,8 @@ import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="USCIS Smart Mapper — Page-Based Ultimate Version", layout="wide")
-st.title("🤖 USCIS Form Smart Mapper — FINAL PAGE-BASED AGENTIC VERSION ✅")
+st.set_page_config(page_title="USCIS Smart Mapper — Final Agentic Version", layout="wide")
+st.title("🤖 USCIS Form Smart Mapper — FINAL AGENTIC PART-BY-PART VERSION ✅")
 
 # ----------------- DB Attributes -----------------
 def build_db_attributes():
@@ -54,68 +54,49 @@ def suggest_db_mapping(field_text):
     else:
         return "None (Move to Questionnaire)"
 
-# ----------------- Page-based Part Extraction -----------------
-def extract_parts_by_page(pdf):
+# ----------------- Extract Parts -----------------
+def extract_parts(pdf):
     parts = {}
     for page_num in range(len(pdf)):
         page = pdf[page_num]
         text = page.get_text()
         lines = text.split("\n")
+        current_part = "Unassigned"
 
-        part_name = "Unassigned"
-        # Check first few lines for "Part X."
-        for line in lines[:10]:
+        for line in lines:
             line = line.strip()
-            m = re.search(r"Part\s+\d+\.", line, re.IGNORECASE)
-            if m:
-                part_name = line
-                break
+            if re.match(r"^Part\s+\d+\.", line, re.IGNORECASE):
+                current_part = line
+                if current_part not in parts:
+                    parts[current_part] = []
+            elif current_part:
+                if line and not line.lower().startswith("form "):
+                    parts.setdefault(current_part, []).append(line)
 
-        if part_name in parts:
-            parts[part_name] += "\n" + text
-        else:
-            parts[part_name] = text
+    # Sort by part number
+    def part_sort_key(x):
+        m = re.match(r"Part\s+(\d+)\.", x)
+        return int(m.group(1)) if m else 9999
 
-    return parts
-
-# ----------------- Line-based Field Extraction -----------------
-def extract_lines_as_fields(part_content):
-    lines = part_content.split("\n")
-    fields = []
-    for line in lines:
-        clean_line = line.strip()
-        if clean_line and not clean_line.lower().startswith("part "):
-            fields.append(clean_line)
-    return fields
+    sorted_parts = dict(sorted(parts.items(), key=lambda item: part_sort_key(item[0])))
+    return sorted_parts
 
 # ----------------- UI -----------------
 uploaded_file = st.file_uploader("📄 Upload USCIS PDF", type=["pdf"])
 
 if uploaded_file:
     pdf = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-
-    parts = extract_parts_by_page(pdf)
-
-    if st.button("🤖 Validate Agent - Preview Parts & Fields"):
-        agent_report = {}
-        for part_name, part_content in parts.items():
-            fields = extract_lines_as_fields(part_content)
-            agent_report[part_name] = fields
-        st.json(agent_report)
-        json_agent = json.dumps(agent_report, indent=2)
-        st.download_button("💾 Download Agent Verification JSON", data=json_agent, file_name="agent_verified_parts.json", mime="application/json")
-        st.stop()
+    parts = extract_parts(pdf)
 
     final_mappings = {}
 
-    st.header("🗂️ Review & Map Parts Page-by-Page")
+    st.header("🗂️ Review & Map Parts")
 
-    for part_name, part_content in parts.items():
+    for part_name, fields in parts.items():
         st.subheader(part_name)
-        fields = extract_lines_as_fields(part_content)
 
         if not fields:
-            st.warning(f"⚠️ No fields found in {part_name}. Skipping.")
+            st.warning(f"⚠️ No fields found in {part_name}.")
             continue
 
         part_fields = []
@@ -150,7 +131,7 @@ if uploaded_file:
     ts_stub += "}\n"
     st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
 
-    st.success("✅ All pages and parts extracted by header, mapped, and ready!")
+    st.success("✅ All parts split separately, fields shown in sequence, mapping done interactively!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
