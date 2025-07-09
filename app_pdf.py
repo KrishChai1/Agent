@@ -501,6 +501,8 @@ class ResearchAgent(Agent):
         # First iteration - full extraction
         if pdf_file is not None:
             self.pdf_bytes = pdf_file.read() if hasattr(pdf_file, 'read') else pdf_file
+            if self.doc:  # Close any existing document
+                self.doc.close()
             self.doc = fitz.open(stream=self.pdf_bytes, filetype="pdf")
             self.page_texts = [page.get_text() for page in self.doc]
             
@@ -520,6 +522,21 @@ class ResearchAgent(Agent):
         
         # Handle feedback-driven re-extraction
         if feedback and form_structure:
+            # Reopen document if needed
+            if not self.doc or not hasattr(self, 'pdf_bytes'):
+                self.log("Document not available for feedback processing", "error")
+                return form_structure
+            
+            # Ensure document is open
+            try:
+                # Test if document is still open
+                _ = self.doc.page_count
+            except ValueError:
+                # Document is closed, reopen it
+                self.doc = fitz.open(stream=self.pdf_bytes, filetype="pdf")
+                self.page_texts = [page.get_text() for page in self.doc]
+                self.log("Reopened document for feedback processing", "info")
+            
             self.log(f"Received feedback - attempting targeted extraction", "feedback")
             return self._handle_extraction_feedback(form_structure, feedback, use_ai)
         
@@ -529,14 +546,22 @@ class ResearchAgent(Agent):
         # Execute comprehensive extraction
         self._comprehensive_extraction_with_subitems(form_structure, use_ai)
         
-        if self.doc:
-            self.doc.close()
+        # Don't close document here - let it be closed by cleanup method
         
         form_structure.add_agent_log(self.name, f"Iteration {self.iteration}: Extracted {form_structure.total_fields} fields")
         self.log(f"Extraction complete: {form_structure.total_fields} fields found", "success")
         
         self.status = "completed"
         return form_structure
+    
+    def cleanup(self):
+        """Clean up resources"""
+        if hasattr(self, 'doc') and self.doc:
+            try:
+                self.doc.close()
+                self.log("Document closed", "info")
+            except:
+                pass
     
     def _comprehensive_extraction_with_subitems(self, form_structure: FormStructure, use_ai: bool):
         """Enhanced extraction that properly handles sub-items"""
@@ -556,10 +581,19 @@ class ResearchAgent(Agent):
     
     def _extract_with_sub_items(self, form_structure: FormStructure):
         """Extract fields with proper sub-item handling"""
+        # Check if document is available
+        if not self.doc or not self.page_texts:
+            self.log("Document not available for extraction", "error")
+            return
+            
         current_part = 1
         current_main_item = None
         
         for page_num, page in enumerate(self.doc):
+            if page_num >= len(self.page_texts):
+                self.log(f"Page text not available for page {page_num}", "warning")
+                continue
+                
             page_text = self.page_texts[page_num]
             lines = page_text.split('\n')
             
@@ -787,8 +821,15 @@ class ResearchAgent(Agent):
         if not self.client:
             return
         
+        # Check if page texts are available
+        if not self.page_texts:
+            self.log("Page texts not available for AI extraction", "warning")
+            return
+        
         try:
-            full_text = "\n".join(self.page_texts[:5])
+            # Limit text to first 5 pages or available pages
+            max_pages = min(5, len(self.page_texts))
+            full_text = "\n".join(self.page_texts[:max_pages])
             
             prompt = f"""
             Analyze this USCIS {form_structure.form_number} form and extract ALL parts/sections with their fields.
@@ -1079,28 +1120,38 @@ class ResearchAgent(Agent):
     
     def _extract_from_all_widgets(self, form_structure: FormStructure):
         """Extract from all PDF widgets"""
+        # Check if document is available
+        if not self.doc or not self.page_texts:
+            self.log("Document not available for widget extraction", "warning")
+            return
+            
         current_part = 1
         
         for page_num, page in enumerate(self.doc):
-            # Determine current part from page
-            page_text = self.page_texts[page_num]
-            part_match = re.search(r'Part\s+(\d+)', page_text, re.IGNORECASE)
-            if part_match:
-                current_part = int(part_match.group(1))
-            
-            part_name = f"Part {current_part}"
-            if part_name not in form_structure.parts:
-                form_structure.parts[part_name] = []
-            
-            widget_fields = self._extract_from_widgets(
-                page, page_num + 1, part_name, current_part, ""
-            )
-            
-            for field in widget_fields:
-                if not any(f.raw_field_name == field.raw_field_name 
-                         for f in form_structure.parts[part_name]):
-                    form_structure.parts[part_name].append(field)
-                    form_structure.total_fields += 1
+            try:
+                # Determine current part from page
+                if page_num < len(self.page_texts):
+                    page_text = self.page_texts[page_num]
+                    part_match = re.search(r'Part\s+(\d+)', page_text, re.IGNORECASE)
+                    if part_match:
+                        current_part = int(part_match.group(1))
+                
+                part_name = f"Part {current_part}"
+                if part_name not in form_structure.parts:
+                    form_structure.parts[part_name] = []
+                
+                widget_fields = self._extract_from_widgets(
+                    page, page_num + 1, part_name, current_part, ""
+                )
+                
+                for field in widget_fields:
+                    if not any(f.raw_field_name == field.raw_field_name 
+                             for f in form_structure.parts[part_name]):
+                        form_structure.parts[part_name].append(field)
+                        form_structure.total_fields += 1
+                        
+            except Exception as e:
+                self.log(f"Error extracting widgets from page {page_num}: {str(e)}", "warning")
     
     def _handle_extraction_feedback(self, form_structure: FormStructure, 
                                   feedback: ValidationFeedback, use_ai: bool) -> FormStructure:
@@ -1135,6 +1186,11 @@ class ResearchAgent(Agent):
         
         self.log(f"Targeted search for {part_name}", "info")
         
+        # Check if document is available
+        if not self.doc or not self.page_texts:
+            self.log("Document not available for part search", "warning")
+            return
+        
         # Search all pages for this part
         found_fields = []
         for page_num, page_text in enumerate(self.page_texts):
@@ -1150,59 +1206,67 @@ class ResearchAgent(Agent):
                 if pattern and re.search(pattern, page_text, re.IGNORECASE):
                     self.log(f"Found {part_name} on page {page_num + 1}", "success")
                     
-                    # Extract fields from this section with sub-items
-                    page = self.doc[page_num]
-                    lines = page_text.split('\n')
+                    # Ensure page number is valid
+                    if page_num >= len(self.doc):
+                        self.log(f"Page {page_num} out of range", "warning")
+                        continue
                     
-                    # Find the part header and extract subsequent fields
-                    part_start = None
-                    for i, line in enumerate(lines):
-                        if re.search(pattern, line, re.IGNORECASE):
-                            part_start = i
-                            break
-                    
-                    if part_start is not None:
-                        # Extract fields from this part
-                        i = part_start + 1
-                        while i < len(lines):
-                            line = lines[i].strip()
-                            
-                            # Stop at next part
-                            if re.match(r'Part\s+\d+', line, re.IGNORECASE) and not re.search(pattern, line, re.IGNORECASE):
+                    try:
+                        # Extract fields from this section with sub-items
+                        page = self.doc[page_num]
+                        lines = page_text.split('\n')
+                        
+                        # Find the part header and extract subsequent fields
+                        part_start = None
+                        for i, line in enumerate(lines):
+                            if re.search(pattern, line, re.IGNORECASE):
+                                part_start = i
                                 break
-                            
-                            # Extract fields with sub-items
-                            if re.match(r'^(\d+)\.\s+', line):
-                                main_match = self.sub_item_patterns['main_with_subs'].match(line)
-                                if main_match:
-                                    item_num = main_match.group(1)
-                                    label = main_match.group(2)
-                                    
-                                    field = ExtractedField(
-                                        name=f"field_{item_num}",
-                                        label=label,
-                                        type=self._determine_field_type(label, lines, i),
-                                        page=page_num + 1,
-                                        part=part_name,
-                                        part_number=part_num,
-                                        item_number=item_num,
-                                        extraction_method="feedback",
-                                        extraction_iteration=self.iteration
-                                    )
-                                    found_fields.append(field)
-                                    
-                                    # Check for sub-items
-                                    if self._is_compound_field(label, lines, i):
-                                        sub_items = self._extract_sub_items(lines, i + 1, item_num)
-                                        for sub_item in sub_items:
-                                            sub_item.page = page_num + 1
-                                            sub_item.part = part_name
-                                            sub_item.part_number = part_num
-                                            sub_item.extraction_method = "feedback"
-                                            sub_item.extraction_iteration = self.iteration
-                                            found_fields.append(sub_item)
-                            
-                            i += 1
+                        
+                        if part_start is not None:
+                            # Extract fields from this part
+                            i = part_start + 1
+                            while i < len(lines):
+                                line = lines[i].strip()
+                                
+                                # Stop at next part
+                                if re.match(r'Part\s+\d+', line, re.IGNORECASE) and not re.search(pattern, line, re.IGNORECASE):
+                                    break
+                                
+                                # Extract fields with sub-items
+                                if re.match(r'^(\d+)\.\s+', line):
+                                    main_match = self.sub_item_patterns['main_with_subs'].match(line)
+                                    if main_match:
+                                        item_num = main_match.group(1)
+                                        label = main_match.group(2)
+                                        
+                                        field = ExtractedField(
+                                            name=f"field_{item_num}",
+                                            label=label,
+                                            type=self._determine_field_type(label, lines, i),
+                                            page=page_num + 1,
+                                            part=part_name,
+                                            part_number=part_num,
+                                            item_number=item_num,
+                                            extraction_method="feedback",
+                                            extraction_iteration=self.iteration
+                                        )
+                                        found_fields.append(field)
+                                        
+                                        # Check for sub-items
+                                        if self._is_compound_field(label, lines, i):
+                                            sub_items = self._extract_sub_items(lines, i + 1, item_num)
+                                            for sub_item in sub_items:
+                                                sub_item.page = page_num + 1
+                                                sub_item.part = part_name
+                                                sub_item.part_number = part_num
+                                                sub_item.extraction_method = "feedback"
+                                                sub_item.extraction_iteration = self.iteration
+                                                found_fields.append(sub_item)
+                                
+                                i += 1
+                    except Exception as e:
+                        self.log(f"Error extracting from page {page_num}: {str(e)}", "warning")
                     
                     break
         
@@ -1231,31 +1295,44 @@ class ResearchAgent(Agent):
         
         self.log(f"Enhancing {part_name} (has {current_fields}, expects ~{expected_fields})", "info")
         
+        # Check if document is available
+        if not self.doc or not self.page_texts:
+            self.log("Document not available for enhancement", "warning")
+            return
+        
         # Re-extract with more aggressive patterns
         part_num = int(re.search(r'\d+', part_name).group()) if re.search(r'\d+', part_name) else 1
         
         # Find pages containing this part
         for page_num, page_text in enumerate(self.page_texts):
             if re.search(rf'Part\s+{part_num}\b', page_text, re.IGNORECASE):
+                # Ensure page number is valid
+                if page_num >= len(self.doc):
+                    self.log(f"Page {page_num} out of range", "warning")
+                    continue
+                    
                 # Use more aggressive extraction
-                page = self.doc[page_num]
-                
-                # Try widget extraction again
-                widget_fields = self._extract_from_widgets(
-                    page, page_num + 1, part_name, part_num, ""
-                )
-                
-                # Add new unique fields
-                existing_names = {f.name for f in form_structure.parts[part_name]}
-                added = 0
-                for field in widget_fields:
-                    if field.name not in existing_names:
-                        form_structure.parts[part_name].append(field)
-                        form_structure.total_fields += 1
-                        added += 1
-                
-                if added > 0:
-                    self.log(f"Enhanced {part_name} with {added} additional widget fields", "success")
+                try:
+                    page = self.doc[page_num]
+                    
+                    # Try widget extraction again
+                    widget_fields = self._extract_from_widgets(
+                        page, page_num + 1, part_name, part_num, ""
+                    )
+                    
+                    # Add new unique fields
+                    existing_names = {f.name for f in form_structure.parts[part_name]}
+                    added = 0
+                    for field in widget_fields:
+                        if field.name not in existing_names:
+                            form_structure.parts[part_name].append(field)
+                            form_structure.total_fields += 1
+                            added += 1
+                    
+                    if added > 0:
+                        self.log(f"Enhanced {part_name} with {added} additional widget fields", "success")
+                except Exception as e:
+                    self.log(f"Error enhancing page {page_num}: {str(e)}", "warning")
     
     def _apply_ai_suggestions(self, form_structure: FormStructure, suggestions: List[str]):
         """Apply AI suggestions for improvement"""
@@ -1852,73 +1929,79 @@ class CoordinatorAgent(Agent):
         form_structure = None
         iteration = 0
         
-        # Initial extraction
-        self.log("📊 Phase 1: Initial Extraction", "info")
-        form_structure = research_agent.execute(pdf_file, use_ai)
-        
-        if not form_structure:
-            self.log("Initial extraction failed", "error")
-            return None
-        
-        # Validation and feedback loop
-        while iteration < self.max_iterations and auto_validate:
-            iteration += 1
-            self.log(f"📊 Phase 2: Validation & Feedback Loop (Iteration {iteration})", "info")
+        try:
+            # Initial extraction
+            self.log("📊 Phase 1: Initial Extraction", "info")
+            form_structure = research_agent.execute(pdf_file, use_ai)
             
-            # Validate
-            form_structure, feedback = validation_agent.execute(form_structure, generate_feedback=True)
+            if not form_structure:
+                self.log("Initial extraction failed", "error")
+                return None
             
-            # Check if retry needed
-            if feedback and feedback.needs_retry and iteration < self.max_iterations:
-                self.log(f"Validation feedback requires re-extraction", "feedback")
+            # Validation and feedback loop
+            while iteration < self.max_iterations and auto_validate:
+                iteration += 1
+                self.log(f"📊 Phase 2: Validation & Feedback Loop (Iteration {iteration})", "info")
                 
-                # Display feedback
-                with st.expander(f"🔄 Iteration {iteration} Feedback", expanded=True):
-                    col1, col2 = st.columns(2)
+                # Validate
+                form_structure, feedback = validation_agent.execute(form_structure, generate_feedback=True)
+                
+                # Check if retry needed
+                if feedback and feedback.needs_retry and iteration < self.max_iterations:
+                    self.log(f"Validation feedback requires re-extraction", "feedback")
                     
-                    with col1:
-                        if feedback.missing_parts:
-                            st.warning(f"Missing {len(feedback.missing_parts)} parts")
-                            for part in feedback.missing_parts[:3]:
-                                st.caption(f"- {part['name']}")
+                    # Display feedback
+                    with st.expander(f"🔄 Iteration {iteration} Feedback", expanded=True):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if feedback.missing_parts:
+                                st.warning(f"Missing {len(feedback.missing_parts)} parts")
+                                for part in feedback.missing_parts[:3]:
+                                    st.caption(f"- {part['name']}")
+                        
+                        with col2:
+                            if feedback.incomplete_parts:
+                                st.info(f"Incomplete {len(feedback.incomplete_parts)} parts")
+                                for part in feedback.incomplete_parts[:3]:
+                                    st.caption(f"- {part['name']}: {part['current_fields']}/{part['expected_fields']} fields")
                     
-                    with col2:
-                        if feedback.incomplete_parts:
-                            st.info(f"Incomplete {len(feedback.incomplete_parts)} parts")
-                            for part in feedback.incomplete_parts[:3]:
-                                st.caption(f"- {part['name']}: {part['current_fields']}/{part['expected_fields']} fields")
-                
-                # Re-extract with feedback
-                form_structure = research_agent.execute(
-                    None,  # No file needed, already loaded
-                    use_ai,
-                    form_structure,
-                    feedback
-                )
-                
-                # Let research agent adjust strategy
-                research_agent.handle_feedback(feedback)
-            else:
-                # No retry needed
-                break
-        
-        # Mapping phase
-        if auto_map and mapping_agent and form_structure:
-            self.log("📊 Phase 3: JSON Structure Mapping", "info")
-            form_structure = mapping_agent.execute(form_structure)
-        
-        # Final statistics
-        if form_structure:
-            self.log("=== Final Results ===", "success")
-            self.log(f"Total iterations: {iteration}", "info")
-            self.log(f"Parts found: {len(form_structure.parts)}", "info") 
-            self.log(f"Fields extracted: {form_structure.total_fields}", "info")
-            self.log(f"Fields validated: {form_structure.validated_fields}", "info")
-            self.log(f"Fields mapped: {form_structure.mapped_fields}", "info")
-            self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
-        
-        self.status = "completed"
-        return form_structure
+                    # Re-extract with feedback
+                    form_structure = research_agent.execute(
+                        None,  # No file needed, already loaded
+                        use_ai,
+                        form_structure,
+                        feedback
+                    )
+                    
+                    # Let research agent adjust strategy
+                    research_agent.handle_feedback(feedback)
+                else:
+                    # No retry needed
+                    break
+            
+            # Mapping phase
+            if auto_map and mapping_agent and form_structure:
+                self.log("📊 Phase 3: JSON Structure Mapping", "info")
+                form_structure = mapping_agent.execute(form_structure)
+            
+            # Final statistics
+            if form_structure:
+                self.log("=== Final Results ===", "success")
+                self.log(f"Total iterations: {iteration}", "info")
+                self.log(f"Parts found: {len(form_structure.parts)}", "info") 
+                self.log(f"Fields extracted: {form_structure.total_fields}", "info")
+                self.log(f"Fields validated: {form_structure.validated_fields}", "info")
+                self.log(f"Fields mapped: {form_structure.mapped_fields}", "info")
+                self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
+            
+            self.status = "completed"
+            return form_structure
+            
+        finally:
+            # Cleanup resources
+            if hasattr(research_agent, 'cleanup'):
+                research_agent.cleanup()
 
 # Enhanced field rendering with edit capabilities
 def render_field_card_enhanced(field: ExtractedField, idx: int, part_name: str, form_structure: FormStructure):
