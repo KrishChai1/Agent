@@ -4,8 +4,8 @@ import json
 import fitz  # PyMuPDF
 from datetime import datetime
 
-st.set_page_config(page_title="USCIS Smart Mapper — Ultimate Agent Recursive Version", layout="wide")
-st.title("🤖 USCIS Form Smart Mapper — FINAL AGENTIC RECURSIVE VERSION ✅")
+st.set_page_config(page_title="USCIS Smart Mapper — Ultimate Agentic Fallback Version", layout="wide")
+st.title("🤖 USCIS Form Smart Mapper — FINAL AGENTIC FALLBACK VERSION ✅")
 
 # ----------------- DB Attributes -----------------
 def build_db_attributes():
@@ -54,13 +54,13 @@ def suggest_db_mapping(field_text):
     else:
         return "None (Move to Questionnaire)"
 
-# ----------------- Agentic Recursive Part Extraction -----------------
-def extract_parts_recursive(text):
+# ----------------- Agentic Part Extraction -----------------
+def extract_parts_lines(text):
     start_idx = text.lower().find("start here")
     if start_idx != -1:
         text = text[start_idx:]
     else:
-        st.warning("⚠️ 'START HERE' not found. Using full text.")
+        st.warning("⚠️ 'START HERE' not found. Using full document text.")
 
     lines = text.split("\n")
     parts = {}
@@ -77,48 +77,39 @@ def extract_parts_recursive(text):
         elif current_part:
             parts[current_part] += " " + line
 
-    # Merge logic by recursively checking for possible split errors
-    validated_parts = {}
+    merged_parts = {}
     for k, v in parts.items():
-        if k not in validated_parts:
-            validated_parts[k] = v
+        title = re.sub(r"\(continued\)", "", k, flags=re.IGNORECASE).strip()
+        if title in merged_parts:
+            merged_parts[title] += " " + v
         else:
-            validated_parts[k] += " " + v
+            merged_parts[title] = v
 
-    # Sort by part number
     def part_sort_key(x):
         m = re.match(r"Part\s+(\d+)\.", x)
         return int(m.group(1)) if m else 9999
 
-    sorted_parts = dict(sorted(validated_parts.items(), key=lambda item: part_sort_key(item[0])))
+    sorted_parts = dict(sorted(merged_parts.items(), key=lambda item: part_sort_key(item[0])))
     return sorted_parts
 
-# ----------------- Extract Fields -----------------
+# ----------------- Agentic Field Extraction with Fallback -----------------
 def extract_fields_smart(part_content):
     pattern = r"(\d+\.(?:[a-z]\.)?\s+.*?)(?=\d+\.(?:[a-z]\.)?\s|$)"
     matches = re.findall(pattern, part_content, flags=re.IGNORECASE)
 
-    keywords = ["Family Name", "Given Name", "Middle Name", "Street", "City", "State", "ZIP", "Phone", "Email", "Date", "A-Number"]
+    keywords = ["Name", "Address", "Date", "Phone", "City", "State", "ZIP", "A-Number", "Email"]
     final_fields = []
 
-    for m in matches:
-        found_split = False
-        for kw in keywords:
-            if kw in m and " " in m.strip():
-                parts = m.split(kw)
-                for p in parts:
-                    if p.strip():
-                        final_fields.append((kw + " " + p).strip() if p.strip()[0].islower() else p.strip())
-                found_split = True
-                break
-        if not found_split:
+    if matches:
+        for m in matches:
             final_fields.append(m.strip())
+    else:
+        st.info("⚠️ No numeric fields detected — using fallback keyword extraction.")
+        lines = part_content.split("  ")
+        for line in lines:
+            if any(kw.lower() in line.lower() for kw in keywords):
+                final_fields.append(line.strip())
 
-    def sort_key(x):
-        num_match = re.match(r"(\d+)", x)
-        return int(num_match.group(1)) if num_match else 9999
-
-    final_fields.sort(key=sort_key)
     return final_fields
 
 # ----------------- UI -----------------
@@ -130,7 +121,7 @@ if uploaded_file:
     for page in pdf:
         text += page.get_text()
 
-    parts = extract_parts_recursive(text)
+    parts = extract_parts_lines(text)
 
     if st.button("🤖 Validate Agent - Preview Parts & Fields"):
         agent_report = {}
@@ -151,7 +142,7 @@ if uploaded_file:
         fields = extract_fields_smart(part_content)
 
         if not fields:
-            st.warning(f"⚠️ No numbered fields found in {part_name}. Showing as manual text.")
+            st.warning(f"⚠️ No fields found in {part_name}. Skipping.")
             continue
 
         part_fields = []
@@ -186,7 +177,7 @@ if uploaded_file:
     ts_stub += "}\n"
     st.download_button("📥 Download TypeScript Interface", data=ts_stub, file_name="uscis_form_interface.ts", mime="text/plain")
 
-    st.success("✅ All parts recursively extracted, validated, smartly mapped, and ready!")
+    st.success("✅ All parts extracted with fallback, validated, smartly mapped, and ready!")
 
 else:
     st.info("📥 Please upload a USCIS PDF to start.")
