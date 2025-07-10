@@ -425,6 +425,18 @@ class FormStructure:
             self.agent_logs[agent_name] = []
         timestamp = datetime.now().strftime('%H:%M:%S')
         self.agent_logs[agent_name].append(f"{timestamp} - {message}")
+    
+    def reorder_parts(self):
+        """Reorder parts in natural order (Part 1, Part 2, ..., Part 10, etc.)"""
+        def natural_sort_key(part_name):
+            match = re.search(r'Part\s+(\d+)', part_name, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+            return 999  # Put non-standard parts at end
+        
+        # Create new OrderedDict with natural ordering
+        sorted_parts = sorted(self.parts.items(), key=lambda x: natural_sort_key(x[0]))
+        self.parts = OrderedDict(sorted_parts)
 
 # Base Agent Class
 class Agent(ABC):
@@ -443,7 +455,12 @@ class Agent(ABC):
     
     def handle_feedback(self, feedback: ValidationFeedback) -> Any:
         """Handle feedback from other agents"""
-        pass
+        if feedback and feedback.suggestions:
+            # Check for part ordering feedback
+            for suggestion in feedback.suggestions:
+                if "part numbering" in suggestion.lower() or "sequential order" in suggestion.lower():
+                    self.log("Received feedback about part ordering - will ensure proper sequencing", "feedback")
+                    # This will be handled by reorder_parts() after extraction
     
     def log(self, message: str, level: str = "info"):
         self.logs.append({
@@ -545,6 +562,9 @@ class ResearchAgent(Agent):
         
         # Execute comprehensive extraction
         self._comprehensive_extraction_with_subitems(form_structure, use_ai)
+        
+        # Ensure parts are properly ordered
+        form_structure.reorder_parts()
         
         # Don't close document here - let it be closed by cleanup method
         
@@ -1177,6 +1197,9 @@ class ResearchAgent(Agent):
         # Recalculate totals
         form_structure.total_fields = sum(len(fields) for fields in form_structure.parts.values())
         
+        # Ensure proper ordering after feedback processing
+        form_structure.reorder_parts()
+        
         return form_structure
     
     def _search_for_specific_part(self, form_structure: FormStructure, missing_part: Dict):
@@ -1660,6 +1683,53 @@ class ValidationAgent(Agent):
             }
         }
     
+    def _check_part_ordering(self, form_structure: FormStructure, feedback: Optional[ValidationFeedback]) -> int:
+        """Check if parts are properly ordered and numbered"""
+        issues = 0
+        
+        # Extract part numbers
+        part_numbers = []
+        for part_name in form_structure.parts.keys():
+            match = re.search(r'Part\s+(\d+)', part_name, re.IGNORECASE)
+            if match:
+                part_numbers.append((int(match.group(1)), part_name))
+        
+        part_numbers.sort(key=lambda x: x[0])
+        
+        # Check for gaps or misnumbering
+        if part_numbers:
+            expected_num = 1
+            for actual_num, part_name in part_numbers:
+                if actual_num != expected_num:
+                    issues += 1
+                    
+                    if actual_num > expected_num:
+                        # Missing parts
+                        for missing in range(expected_num, actual_num):
+                            self.log(f"⚠️ Part ordering issue: Part {missing} is missing", "warning")
+                            if feedback:
+                                feedback.missing_parts.append({
+                                    "number": missing,
+                                    "name": f"Part {missing}",
+                                    "expected_fields": 10
+                                })
+                    else:
+                        # Duplicate or misnumbered
+                        self.log(f"⚠️ Part ordering issue: Unexpected {part_name} (expected Part {expected_num})", "warning")
+                        if feedback:
+                            feedback.field_issues.append({
+                                "part": part_name,
+                                "issue": f"Should be Part {expected_num}"
+                            })
+                
+                expected_num = actual_num + 1
+        
+        # Ensure parts are stored in correct order
+        if issues > 0 and feedback:
+            feedback.suggestions.append("Fix part numbering to ensure sequential order (Part 1, Part 2, etc.)")
+            
+        return issues
+    
     def execute(self, form_structure: FormStructure, generate_feedback: bool = True) -> Tuple[FormStructure, Optional[ValidationFeedback]]:
         """Validate and generate feedback"""
         self.status = "active"
@@ -1672,21 +1742,24 @@ class ValidationAgent(Agent):
             # Get expected structure
             expected = self.expected_structures.get(form_structure.form_number, {})
             
-            # 1. Check for missing parts
+            # 1. Check part ordering first
+            ordering_issues = self._check_part_ordering(form_structure, feedback)
+            
+            # 2. Check for missing parts
             if expected and "required_parts" in expected:
                 missing_parts = self._check_missing_parts(form_structure, expected, feedback)
             
-            # 2. Check part completeness
+            # 3. Check part completeness
             if expected and "min_fields_per_part" in expected:
                 incomplete_parts = self._check_incomplete_parts(form_structure, expected, feedback)
             
-            # 3. Validate sub-item structure
+            # 4. Validate sub-item structure
             sub_item_issues = self._validate_sub_items(form_structure, feedback)
             
-            # 4. Validate JSON mappings
+            # 5. Validate JSON mappings
             mapping_issues = self._validate_json_mappings(form_structure, feedback)
             
-            # 5. Check overall completeness
+            # 6. Check overall completeness
             total_issues = self._check_overall_completeness(form_structure, expected, feedback)
             
             # Calculate validation score
@@ -1704,6 +1777,7 @@ class ValidationAgent(Agent):
                 penalty += min(0.1, len(incomplete_parts) * 0.01) if 'incomplete_parts' in locals() else 0
                 penalty += min(0.1, sub_item_issues * 0.01)
                 penalty += min(0.1, mapping_issues * 0.005)
+                penalty += min(0.05, ordering_issues * 0.01)
                 
                 form_structure.validation_score = max(0, base_score - penalty)
             else:
@@ -1711,9 +1785,9 @@ class ValidationAgent(Agent):
             
             # Determine if retry needed
             if feedback:
-                if missing_parts or (incomplete_parts and form_structure.extraction_iterations < 3):
+                if missing_parts or (incomplete_parts and form_structure.extraction_iterations < 3) or ordering_issues > 2:
                     feedback.needs_retry = True
-                    feedback.severity = "error" if missing_parts else "warning"
+                    feedback.severity = "error" if (missing_parts or ordering_issues > 3) else "warning"
                     
                     # Add suggestions
                     if missing_parts:
@@ -1722,12 +1796,16 @@ class ValidationAgent(Agent):
                         feedback.suggestions.append("Use more aggressive extraction patterns for incomplete parts")
                     if sub_item_issues > 5:
                         feedback.suggestions.append("Improve sub-item extraction for compound fields")
+                    if ordering_issues > 0:
+                        feedback.suggestions.append("Fix part numbering to ensure sequential order (Part 1, Part 2, etc.)")
                     
                     self.log(f"Validation found issues requiring retry", "warning")
             
             # Summary
             self.log("=== Validation Summary ===", "info")
             self.log(f"Parts found: {len(form_structure.parts)}/{expected.get('parts', '?')}", "info")
+            if ordering_issues > 0:
+                self.log(f"Part ordering issues: {ordering_issues}", "warning")
             self.log(f"Total fields: {form_structure.total_fields}/{expected.get('min_fields', '?')}", "info")
             self.log(f"Fields mapped to JSON: {form_structure.mapped_fields}", "info")
             self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
@@ -1990,6 +2068,18 @@ class CoordinatorAgent(Agent):
                 self.log("=== Final Results ===", "success")
                 self.log(f"Total iterations: {iteration}", "info")
                 self.log(f"Parts found: {len(form_structure.parts)}", "info") 
+                
+                # Check part ordering
+                part_numbers = []
+                for part_name in form_structure.parts.keys():
+                    match = re.search(r'Part\s+(\d+)', part_name)
+                    if match:
+                        part_numbers.append(int(match.group(1)))
+                
+                if part_numbers:
+                    part_numbers.sort()
+                    self.log(f"Part sequence: {', '.join([f'Part {n}' for n in part_numbers])}", "info")
+                
                 self.log(f"Fields extracted: {form_structure.total_fields}", "info")
                 self.log(f"Fields validated: {form_structure.validated_fields}", "info")
                 self.log(f"Fields mapped: {form_structure.mapped_fields}", "info")
@@ -2203,8 +2293,17 @@ def generate_typescript_enhanced(form_structure: FormStructure) -> str:
         ('pdfName', form_structure.form_number)
     ])
     
+    # Natural sort function for parts
+    def natural_sort_key(part_name):
+        match = re.search(r'Part\s+(\d+)', part_name[0])
+        if match:
+            return int(match.group(1))
+        return 999
+    
+    sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
+    
     # Map fields using JSON paths
-    for part_name, fields in form_structure.parts.items():
+    for part_name, fields in sorted_parts:
         for field in fields:
             if field.json_path:
                 # Determine section from path
@@ -2264,7 +2363,16 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
     """Generate enhanced JSON with sub-items"""
     controls = []
     
-    for part_name, fields in form_structure.parts.items():
+    # Natural sort function for parts
+    def natural_sort_key(part_name):
+        match = re.search(r'Part\s+(\d+)', part_name[0])
+        if match:
+            return int(match.group(1))
+        return 999
+    
+    sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
+    
+    for part_name, fields in sorted_parts:
         quest_fields = [f for f in fields if f.is_questionnaire]
         
         if quest_fields:
@@ -2447,7 +2555,17 @@ def main():
                                 
                                 # Part breakdown
                                 st.markdown("### Parts Extracted:")
-                                for part_name, fields in form_structure.parts.items():
+                                
+                                # Natural sort function
+                                def natural_sort_key(part_name):
+                                    match = re.search(r'Part\s+(\d+)', part_name[0])
+                                    if match:
+                                        return int(match.group(1))
+                                    return 999
+                                
+                                sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
+                                
+                                for part_name, fields in sorted_parts:
                                     # Count sub-items
                                     main_items = sum(1 for f in fields if not f.parent_item)
                                     sub_items = sum(1 for f in fields if f.parent_item)
@@ -2455,7 +2573,7 @@ def main():
                                     
                                 # Sample sub-items
                                 st.markdown("### Sample Sub-Item Structure:")
-                                for part_name, fields in form_structure.parts.items():
+                                for part_name, fields in sorted_parts:
                                     # Find a good example
                                     for field in fields:
                                         if field.item_number == "1" and field.label.lower().find("name") >= 0:
@@ -2475,9 +2593,19 @@ def main():
         if form_structure and form_structure.parts:
             st.markdown("## 🎯 Field Mapping to JSON Structure")
             
+            # Natural sort for parts
+            def natural_sort_key(part_name):
+                """Extract number for natural sorting"""
+                match = re.search(r'Part\s+(\d+)', part_name)
+                if match:
+                    return int(match.group(1))
+                return 999  # Put non-standard parts at end
+            
+            sorted_parts = sorted(form_structure.parts.keys(), key=natural_sort_key)
+            
             selected_part = st.selectbox(
                 "Select Part",
-                options=list(form_structure.parts.keys()),
+                options=sorted_parts,
                 index=0
             )
             
@@ -2594,7 +2722,16 @@ def main():
             mapping_counts = defaultdict(int)
             unmapped_count = 0
             
-            for part_name, fields in form_structure.parts.items():
+            # Natural sort function
+            def natural_sort_key(part_name):
+                match = re.search(r'Part\s+(\d+)', part_name[0])
+                if match:
+                    return int(match.group(1))
+                return 999
+            
+            sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
+            
+            for part_name, fields in sorted_parts:
                 for field in fields:
                     if field.json_path:
                         obj_type = field.json_path.split('.')[0]
