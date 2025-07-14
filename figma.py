@@ -2,929 +2,1079 @@ import streamlit as st
 import requests
 import json
 import os
-from typing import Dict, List, Optional, Any
+import subprocess
+import time
+import shutil
+import tempfile
+from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 import openai
 from datetime import datetime
-import re
-import base64
+from pathlib import Path
+import socket
+import webbrowser
+import threading
+import signal
+import sys
 
 # Load environment variables
 load_dotenv()
 
-# Configure OpenAI
+# Configure page
+st.set_page_config(
+    page_title="Figma to Angular - AI Orchestrator",
+    page_icon="🎨",
+    layout="wide"
+)
+
+# Initialize OpenAI
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-class FigmaAPI:
-    """Enhanced Figma API client with design analysis capabilities"""
+class FigmaAgent:
+    """Agent responsible for Figma API interactions"""
     
     def __init__(self, access_token: str):
         self.access_token = access_token
         self.base_url = "https://api.figma.com/v1"
-        self.headers = {
-            "X-Figma-Token": self.access_token
-        }
+        self.headers = {"X-Figma-Token": self.access_token}
+    
+    def test_connection(self) -> bool:
+        """Test if Figma token is valid"""
+        try:
+            response = requests.get(f"{self.base_url}/me", headers=self.headers)
+            return response.status_code == 200
+        except:
+            return False
     
     def get_file(self, file_key: str) -> Dict:
-        """Get Figma file details"""
+        """Fetch Figma file data"""
         url = f"{self.base_url}/files/{file_key}"
         response = requests.get(url, headers=self.headers)
         response.raise_for_status()
         return response.json()
     
-    def get_file_nodes(self, file_key: str, node_ids: List[str]) -> Dict:
-        """Get specific nodes from a Figma file"""
-        node_ids_str = ",".join(node_ids)
-        url = f"{self.base_url}/files/{file_key}/nodes?ids={node_ids_str}"
-        response = requests.get(url, headers=self.headers)
-        response.raise_for_status()
-        return response.json()
-    
-    def get_file_images(self, file_key: str, node_ids: List[str], format: str = "png", scale: float = 2) -> Dict:
-        """Export images from Figma file"""
-        node_ids_str = ",".join(node_ids)
-        url = f"{self.base_url}/images/{file_key}?ids={node_ids_str}&format={format}&scale={scale}"
-        response = requests.get(url, headers=self.headers)
-        response.raise_for_status()
-        return response.json()
-    
-    def analyze_design_system(self, file_data: Dict) -> Dict:
-        """Analyze Figma file for design system elements"""
-        analysis = {
-            "colors": {},
-            "typography": {},
-            "spacing": {},
-            "components": {},
-            "layout_patterns": []
-        }
+    def extract_components(self, file_data: Dict) -> List[Dict]:
+        """Extract component information from Figma file"""
+        components = []
         
-        # Extract colors
-        if 'styles' in file_data:
-            for style_id, style in file_data['styles'].items():
-                if style.get('styleType') == 'FILL':
-                    analysis['colors'][style['name']] = style
-                elif style.get('styleType') == 'TEXT':
-                    analysis['typography'][style['name']] = style
-        
-        # Extract components
-        if 'components' in file_data:
-            for comp_id, comp in file_data['components'].items():
-                analysis['components'][comp['name']] = {
-                    'id': comp_id,
-                    'description': comp.get('description', ''),
-                    'type': comp.get('type', 'COMPONENT')
-                }
-        
-        # Analyze layout patterns
-        def analyze_node(node: Dict, depth: int = 0):
-            if depth > 10:  # Prevent deep recursion
-                return
-            
+        def traverse_node(node: Dict, path: str = ""):
             node_type = node.get('type', '')
-            if node_type in ['FRAME', 'GROUP', 'COMPONENT']:
-                layout_info = {
-                    'type': node_type,
-                    'name': node.get('name', ''),
-                    'layout': node.get('layoutMode', 'NONE'),
-                    'padding': node.get('paddingLeft', 0),
-                    'spacing': node.get('itemSpacing', 0)
-                }
-                if layout_info['layout'] != 'NONE':
-                    analysis['layout_patterns'].append(layout_info)
+            node_name = node.get('name', 'Unnamed')
             
+            # Identify components and important frames
+            if node_type in ['COMPONENT', 'FRAME', 'GROUP']:
+                component_info = {
+                    'id': node.get('id', ''),
+                    'name': node_name,
+                    'type': self._classify_component(node),
+                    'path': path,
+                    'properties': self._extract_properties(node)
+                }
+                components.append(component_info)
+            
+            # Traverse children
             if 'children' in node:
                 for child in node['children']:
-                    analyze_node(child, depth + 1)
+                    traverse_node(child, f"{path}/{node_name}")
         
         if 'document' in file_data:
-            analyze_node(file_data['document'])
+            traverse_node(file_data['document'])
         
-        return analysis
-
-class AngularCodeGenerator:
-    """AI-powered Angular code generator from Figma designs"""
+        return components
     
-    def __init__(self):
-        self.component_templates = {
-            "button": self._generate_button_template,
-            "card": self._generate_card_template,
-            "form": self._generate_form_template,
-            "navigation": self._generate_nav_template,
-            "hero": self._generate_hero_template
-        }
-    
-    def analyze_component_type(self, node: Dict) -> str:
-        """Determine component type from Figma node"""
+    def _classify_component(self, node: Dict) -> str:
+        """Classify component type based on name and structure"""
         name = node.get('name', '').lower()
         
-        # Pattern matching for component types
-        if any(keyword in name for keyword in ['button', 'btn', 'cta']):
-            return 'button'
-        elif any(keyword in name for keyword in ['card', 'tile', 'item']):
-            return 'card'
-        elif any(keyword in name for keyword in ['form', 'input', 'field']):
-            return 'form'
-        elif any(keyword in name for keyword in ['nav', 'menu', 'header']):
-            return 'navigation'
-        elif any(keyword in name for keyword in ['hero', 'banner', 'splash']):
-            return 'hero'
-        else:
-            return 'generic'
-    
-    def generate_angular_component(self, figma_node: Dict, design_analysis: Dict) -> Dict:
-        """Generate Angular component from Figma node"""
-        component_type = self.analyze_component_type(figma_node)
-        component_name = self._sanitize_component_name(figma_node.get('name', 'Component'))
-        
-        # Generate component files
-        component_code = {
-            'name': component_name,
-            'type': component_type,
-            'typescript': self._generate_typescript(component_name, figma_node),
-            'template': self._generate_template(component_type, figma_node, design_analysis),
-            'styles': self._generate_styles(figma_node, design_analysis),
-            'spec': self._generate_spec(component_name)
+        # Check for common UI patterns
+        patterns = {
+            'button': ['button', 'btn', 'cta', 'click'],
+            'input': ['input', 'field', 'textfield', 'search'],
+            'card': ['card', 'tile', 'panel'],
+            'navbar': ['nav', 'navigation', 'header', 'menu'],
+            'form': ['form', 'login', 'signup', 'register'],
+            'list': ['list', 'items', 'grid'],
+            'hero': ['hero', 'banner', 'jumbotron'],
+            'footer': ['footer', 'bottom'],
+            'modal': ['modal', 'dialog', 'popup']
         }
         
-        return component_code
+        for comp_type, keywords in patterns.items():
+            if any(keyword in name for keyword in keywords):
+                return comp_type
+        
+        return 'component'
     
-    def _sanitize_component_name(self, name: str) -> str:
-        """Convert Figma name to valid Angular component name"""
-        # Remove special characters and convert to PascalCase
-        name = re.sub(r'[^a-zA-Z0-9\s]', '', name)
-        words = name.split()
-        return ''.join(word.capitalize() for word in words)
+    def _extract_properties(self, node: Dict) -> Dict:
+        """Extract visual properties from node"""
+        props = {}
+        
+        # Dimensions
+        if 'absoluteBoundingBox' in node:
+            bbox = node['absoluteBoundingBox']
+            props['width'] = bbox.get('width', 0)
+            props['height'] = bbox.get('height', 0)
+        
+        # Colors
+        if 'fills' in node and node['fills']:
+            fill = node['fills'][0]
+            if fill.get('type') == 'SOLID' and 'color' in fill:
+                color = fill['color']
+                props['backgroundColor'] = {
+                    'r': int(color.get('r', 0) * 255),
+                    'g': int(color.get('g', 0) * 255),
+                    'b': int(color.get('b', 0) * 255),
+                    'a': color.get('a', 1)
+                }
+        
+        # Border radius
+        if 'cornerRadius' in node:
+            props['borderRadius'] = node['cornerRadius']
+        
+        # Text properties
+        if node.get('type') == 'TEXT':
+            props['text'] = node.get('characters', '')
+            if 'style' in node:
+                props['fontSize'] = node['style'].get('fontSize', 16)
+                props['fontFamily'] = node['style'].get('fontFamily', 'Roboto')
+        
+        return props
+
+class CodeGeneratorAgent:
+    """Agent that uses OpenAI to generate Angular code"""
     
-    def _generate_typescript(self, component_name: str, node: Dict) -> str:
-        """Generate TypeScript component file"""
-        return f"""import {{ Component, OnInit, Input, Output, EventEmitter }} from '@angular/core';
+    def __init__(self):
+        self.openai_client = openai
+    
+    def generate_angular_component(self, component: Dict) -> Dict:
+        """Generate Angular component code using OpenAI"""
+        
+        prompt = self._create_component_prompt(component)
+        
+        try:
+            response = self.openai_client.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert Angular developer. Generate clean, production-ready Angular components with TypeScript, HTML templates, and CSS. Use Angular Material when appropriate."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=2000
+            )
+            
+            # Parse the response
+            generated_code = response.choices[0].message.content
+            return self._parse_generated_code(generated_code, component)
+            
+        except Exception as e:
+            st.error(f"OpenAI API error: {str(e)}")
+            # Fallback to template-based generation
+            return self._generate_fallback_component(component)
+    
+    def _create_component_prompt(self, component: Dict) -> str:
+        """Create prompt for OpenAI"""
+        props = component.get('properties', {})
+        
+        prompt = f"""Generate an Angular component for a {component['type']} with these specifications:
+
+Component Name: {component['name']}
+Type: {component['type']}
+Properties:
+- Width: {props.get('width', 'auto')}px
+- Height: {props.get('height', 'auto')}px
+- Background Color: {props.get('backgroundColor', 'default')}
+- Border Radius: {props.get('borderRadius', 0)}px
+
+Generate:
+1. TypeScript component class (.ts file)
+2. HTML template (.html file)
+3. CSS styles (.css file)
+
+Requirements:
+- Use Angular best practices
+- Include proper types
+- Make it responsive
+- Use Angular Material if appropriate
+- Add basic interactions (click handlers, etc.)
+
+Format the response with clear separators:
+--- TYPESCRIPT ---
+[typescript code]
+--- HTML ---
+[html code]
+--- CSS ---
+[css code]
+"""
+        return prompt
+    
+    def _parse_generated_code(self, response: str, component: Dict) -> Dict:
+        """Parse OpenAI response into component files"""
+        # Initialize with defaults
+        result = {
+            'name': self._sanitize_name(component['name']),
+            'typescript': '',
+            'html': '',
+            'css': ''
+        }
+        
+        # Try to parse sections
+        if '--- TYPESCRIPT ---' in response and '--- HTML ---' in response:
+            parts = response.split('---')
+            for i, part in enumerate(parts):
+                if 'TYPESCRIPT' in part and i + 1 < len(parts):
+                    result['typescript'] = parts[i + 1].strip()
+                elif 'HTML' in part and i + 1 < len(parts):
+                    result['html'] = parts[i + 1].strip()
+                elif 'CSS' in part and i + 1 < len(parts):
+                    result['css'] = parts[i + 1].strip()
+        else:
+            # If parsing fails, use the whole response as TypeScript
+            result['typescript'] = response
+            result['html'] = self._generate_fallback_html(component)
+            result['css'] = self._generate_fallback_css(component)
+        
+        return result
+    
+    def _generate_fallback_component(self, component: Dict) -> Dict:
+        """Generate component without OpenAI"""
+        name = self._sanitize_name(component['name'])
+        comp_type = component.get('type', 'component')
+        
+        # TypeScript
+        typescript = f"""import {{ Component, OnInit, Input, Output, EventEmitter }} from '@angular/core';
 
 @Component({{
-  selector: 'app-{component_name.lower()}',
-  templateUrl: './{component_name.lower()}.component.html',
-  styleUrls: ['./{component_name.lower()}.component.scss']
+  selector: 'app-{name.lower()}',
+  templateUrl: './{name.lower()}.component.html',
+  styleUrls: ['./{name.lower()}.component.css']
 }})
-export class {component_name}Component implements OnInit {{
-  @Input() data: any;
+export class {name}Component implements OnInit {{
+  @Input() data: any = {{}};
   @Output() action = new EventEmitter<any>();
   
   constructor() {{ }}
   
   ngOnInit(): void {{
-    // Initialize component
+    console.log('{name} component initialized');
   }}
   
-  onAction(event: any): void {{
-    this.action.emit(event);
+  handleClick(event: any): void {{
+    this.action.emit({{ type: 'click', component: '{name}', event }});
   }}
 }}"""
+        
+        # HTML
+        html = self._generate_fallback_html(component)
+        
+        # CSS
+        css = self._generate_fallback_css(component)
+        
+        return {
+            'name': name,
+            'typescript': typescript,
+            'html': html,
+            'css': css
+        }
     
-    def _generate_template(self, component_type: str, node: Dict, design_analysis: Dict) -> str:
-        """Generate HTML template based on component type"""
-        if component_type in self.component_templates:
-            return self.component_templates[component_type](node, design_analysis)
-        else:
-            return self._generate_generic_template(node)
-    
-    def _generate_button_template(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate button template"""
-        text = node.get('name', 'Button')
-        return f"""<button 
-  class="custom-button" 
-  (click)="onAction($event)"
-  [attr.aria-label]="data?.ariaLabel || '{text}'">
-  <span class="button-text">{{{{ data?.text || '{text}' }}}}</span>
-  <mat-icon *ngIf="data?.icon">{{{{ data?.icon }}}}</mat-icon>
-</button>"""
-    
-    def _generate_card_template(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate card template"""
-        return """<mat-card class="custom-card">
-  <mat-card-header *ngIf="data?.title || data?.subtitle">
-    <mat-card-title>{{ data?.title }}</mat-card-title>
-    <mat-card-subtitle>{{ data?.subtitle }}</mat-card-subtitle>
+    def _generate_fallback_html(self, component: Dict) -> str:
+        """Generate HTML based on component type"""
+        comp_type = component.get('type', 'component')
+        
+        templates = {
+            'button': '''<button mat-raised-button color="primary" (click)="handleClick($event)" class="custom-button">
+  {{ data.label || 'Click Me' }}
+</button>''',
+            
+            'input': '''<mat-form-field appearance="outline" class="full-width">
+  <mat-label>{{ data.label || 'Input Field' }}</mat-label>
+  <input matInput [(ngModel)]="data.value" [placeholder]="data.placeholder">
+</mat-form-field>''',
+            
+            'card': '''<mat-card class="custom-card">
+  <mat-card-header>
+    <mat-card-title>{{ data.title || 'Card Title' }}</mat-card-title>
+    <mat-card-subtitle>{{ data.subtitle || 'Card subtitle' }}</mat-card-subtitle>
   </mat-card-header>
-  
-  <img mat-card-image *ngIf="data?.image" [src]="data?.image" [alt]="data?.imageAlt">
-  
   <mat-card-content>
-    <p>{{ data?.content }}</p>
+    <p>{{ data.content || 'Card content goes here' }}</p>
   </mat-card-content>
-  
-  <mat-card-actions *ngIf="data?.actions">
-    <button mat-button *ngFor="let action of data?.actions" 
-            (click)="onAction(action)">
-      {{ action.label }}
-    </button>
+  <mat-card-actions>
+    <button mat-button (click)="handleClick('action1')">ACTION 1</button>
+    <button mat-button (click)="handleClick('action2')">ACTION 2</button>
   </mat-card-actions>
-</mat-card>"""
-    
-    def _generate_form_template(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate form template"""
-        return """<form class="custom-form" (ngSubmit)="onAction(formData)">
-  <mat-form-field *ngFor="let field of data?.fields" appearance="outline">
-    <mat-label>{{ field.label }}</mat-label>
-    <input matInput 
-           [type]="field.type || 'text'" 
-           [placeholder]="field.placeholder"
-           [(ngModel)]="formData[field.name]"
-           [name]="field.name"
-           [required]="field.required">
-    <mat-error *ngIf="field.error">{{ field.error }}</mat-error>
+</mat-card>''',
+            
+            'navbar': '''<mat-toolbar color="primary" class="navbar">
+  <span>{{ data.title || 'App Title' }}</span>
+  <span class="spacer"></span>
+  <button mat-icon-button *ngFor="let item of data.items || []" (click)="handleClick(item)">
+    <mat-icon>{{ item.icon || 'menu' }}</mat-icon>
+  </button>
+</mat-toolbar>''',
+            
+            'form': '''<form class="custom-form" (ngSubmit)="handleClick('submit')">
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Email</mat-label>
+    <input matInput type="email" [(ngModel)]="data.email" name="email">
   </mat-form-field>
   
-  <div class="form-actions">
-    <button mat-raised-button color="primary" type="submit">
-      {{ data?.submitLabel || 'Submit' }}
-    </button>
-    <button mat-button type="button" (click)="onAction({type: 'cancel'})">
-      {{ data?.cancelLabel || 'Cancel' }}
-    </button>
-  </div>
-</form>"""
-    
-    def _generate_nav_template(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate navigation template"""
-        return """<nav class="custom-navigation">
-  <div class="nav-brand">
-    <img *ngIf="data?.logo" [src]="data?.logo" alt="Logo">
-    <span class="brand-text">{{ data?.brand }}</span>
-  </div>
+  <mat-form-field appearance="outline" class="full-width">
+    <mat-label>Password</mat-label>
+    <input matInput type="password" [(ngModel)]="data.password" name="password">
+  </mat-form-field>
   
-  <ul class="nav-links">
-    <li *ngFor="let link of data?.links">
-      <a [routerLink]="link.route" 
-         routerLinkActive="active"
-         (click)="onAction({type: 'navigate', link: link})">
-        <mat-icon *ngIf="link.icon">{{ link.icon }}</mat-icon>
-        <span>{{ link.label }}</span>
-      </a>
-    </li>
-  </ul>
-  
-  <div class="nav-actions">
-    <button mat-icon-button *ngFor="let action of data?.actions"
-            (click)="onAction(action)"
-            [matTooltip]="action.tooltip">
-      <mat-icon>{{ action.icon }}</mat-icon>
-    </button>
-  </div>
-</nav>"""
+  <button mat-raised-button color="primary" type="submit" class="full-width">
+    {{ data.submitLabel || 'Submit' }}
+  </button>
+</form>''',
+            
+            'list': '''<mat-list class="custom-list">
+  <mat-list-item *ngFor="let item of data.items || []" (click)="handleClick(item)">
+    <mat-icon matListIcon>{{ item.icon || 'folder' }}</mat-icon>
+    <h3 matLine>{{ item.title || 'Item' }}</h3>
+    <p matLine>{{ item.description || 'Description' }}</p>
+  </mat-list-item>
+</mat-list>'''
+        }
+        
+        return templates.get(comp_type, '<div class="custom-component">{{ data | json }}</div>')
     
-    def _generate_hero_template(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate hero section template"""
-        return """<section class="hero-section">
-  <div class="hero-content">
-    <h1 class="hero-title">{{ data?.title }}</h1>
-    <p class="hero-subtitle">{{ data?.subtitle }}</p>
-    <div class="hero-actions">
-      <button mat-raised-button color="primary" 
-              *ngIf="data?.primaryAction"
-              (click)="onAction(data?.primaryAction)">
-        {{ data?.primaryAction?.label }}
-      </button>
-      <button mat-button 
-              *ngIf="data?.secondaryAction"
-              (click)="onAction(data?.secondaryAction)">
-        {{ data?.secondaryAction?.label }}
-      </button>
-    </div>
-  </div>
-  <div class="hero-image" *ngIf="data?.image">
-    <img [src]="data?.image" [alt]="data?.imageAlt">
-  </div>
-</section>"""
-    
-    def _generate_generic_template(self, node: Dict) -> str:
-        """Generate generic template for unknown component types"""
-        return """<div class="custom-component">
-  <ng-content></ng-content>
-</div>"""
-    
-    def _generate_styles(self, node: Dict, design_analysis: Dict) -> str:
-        """Generate SCSS styles from Figma node properties"""
-        styles = []
+    def _generate_fallback_css(self, component: Dict) -> str:
+        """Generate CSS based on component properties"""
+        props = component.get('properties', {})
+        css_rules = []
         
-        # Extract styling properties
-        if 'absoluteBoundingBox' in node:
-            bounds = node['absoluteBoundingBox']
-            styles.append(f"width: {bounds.get('width', 'auto')}px;")
-            styles.append(f"height: {bounds.get('height', 'auto')}px;")
+        # Width and height
+        if props.get('width'):
+            css_rules.append(f"width: {props['width']}px;")
+        if props.get('height'):
+            css_rules.append(f"height: {props['height']}px;")
         
-        if 'fills' in node and node['fills']:
-            fill = node['fills'][0]
-            if fill['type'] == 'SOLID':
-                color = fill['color']
-                rgba = f"rgba({int(color['r']*255)}, {int(color['g']*255)}, {int(color['b']*255)}, {color.get('a', 1)})"
-                styles.append(f"background-color: {rgba};")
+        # Background color
+        if props.get('backgroundColor'):
+            color = props['backgroundColor']
+            css_rules.append(f"background-color: rgba({color['r']}, {color['g']}, {color['b']}, {color['a']});")
         
-        if 'cornerRadius' in node:
-            styles.append(f"border-radius: {node['cornerRadius']}px;")
+        # Border radius
+        if props.get('borderRadius'):
+            css_rules.append(f"border-radius: {props['borderRadius']}px;")
         
-        if 'paddingLeft' in node:
-            styles.append(f"padding: {node.get('paddingTop', 0)}px {node.get('paddingRight', 0)}px {node.get('paddingBottom', 0)}px {node.get('paddingLeft', 0)}px;")
-        
-        # Generate SCSS
-        scss = f""".custom-component {{
-  {' '.join(styles)}
-  
-  // Responsive styles
-  @media (max-width: 768px) {{
-    width: 100%;
-    padding: 1rem;
+        base_css = f""".custom-button, .custom-card, .navbar, .custom-form, .custom-list, .custom-component {{
+  {' '.join(css_rules)}
+}}
+
+.full-width {{
+  width: 100%;
+}}
+
+.spacer {{
+  flex: 1 1 auto;
+}}
+
+.custom-form {{
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+}}
+
+.custom-card {{
+  margin: 16px;
+}}
+
+@media (max-width: 768px) {{
+  .custom-button, .custom-card, .navbar, .custom-form, .custom-list {{
+    width: 100% !important;
   }}
 }}"""
         
-        return scss
+        return base_css
     
-    def _generate_spec(self, component_name: str) -> str:
-        """Generate test spec file"""
-        return f"""import {{ ComponentFixture, TestBed }} from '@angular/core/testing';
-import {{ {component_name}Component }} from './{component_name.lower()}.component';
+    def _sanitize_name(self, name: str) -> str:
+        """Convert name to valid Angular component name"""
+        import re
+        # Remove special characters and convert to PascalCase
+        name = re.sub(r'[^a-zA-Z0-9\s]', '', name)
+        words = name.split()
+        return ''.join(word.capitalize() for word in words) if words else 'Component'
 
-describe('{component_name}Component', () => {{
-  let component: {component_name}Component;
-  let fixture: ComponentFixture<{component_name}Component>;
-
-  beforeEach(async () => {{
-    await TestBed.configureTestingModule({{
-      declarations: [ {component_name}Component ]
-    }})
-    .compileComponents();
-  }});
-
-  beforeEach(() => {{
-    fixture = TestBed.createComponent({component_name}Component);
-    component = fixture.componentInstance;
-    fixture.detectChanges();
-  }});
-
-  it('should create', () => {{
-    expect(component).toBeTruthy();
-  }});
-  
-  it('should emit action on button click', () => {{
-    spyOn(component.action, 'emit');
-    const testEvent = {{ type: 'test' }};
-    component.onAction(testEvent);
-    expect(component.action.emit).toHaveBeenCalledWith(testEvent);
-  }});
-}});"""
-    
-    def generate_ai_enhanced_code(self, figma_data: Dict, component_description: str) -> str:
-        """Use AI to generate more sophisticated Angular code"""
-        try:
-            prompt = f"""
-            Generate production-ready Angular component code based on this Figma design data:
-            Component Description: {component_description}
-            Figma Data Summary: {json.dumps(figma_data, indent=2)[:1000]}
-            
-            Requirements:
-            1. Use Angular Material components
-            2. Implement responsive design
-            3. Include proper TypeScript typing
-            4. Add accessibility features
-            5. Include error handling
-            6. Follow Angular best practices
-            
-            Generate complete component code including TypeScript, HTML template, and SCSS styles.
-            """
-            
-            response = openai.ChatCompletion.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert Angular developer who converts Figma designs to production-ready Angular code."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=2000,
-                temperature=0.7
-            )
-            
-            return response.choices[0].message.content
-        except Exception as e:
-            st.error(f"AI generation failed: {str(e)}")
-            return None
-
-class FigmaToAngularApp:
-    """Main Streamlit application"""
+class DeploymentAgent:
+    """Agent responsible for building and deploying Angular app"""
     
     def __init__(self):
-        self.setup_page_config()
-        self.init_session_state()
-        self.code_generator = AngularCodeGenerator()
+        self.project_path = None
+        self.server_process = None
+        self.port = None
     
-    def setup_page_config(self):
-        """Configure Streamlit page settings"""
-        st.set_page_config(
-            page_title="Figma to Angular Code Generator",
-            page_icon="🎨",
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
+    def create_angular_project(self, project_name: str, components: List[Dict]) -> str:
+        """Create complete Angular project structure"""
+        # Create temp directory
+        temp_dir = tempfile.mkdtemp()
+        self.project_path = os.path.join(temp_dir, project_name)
+        os.makedirs(self.project_path, exist_ok=True)
+        
+        # Create package.json
+        self._create_package_json()
+        
+        # Create Angular configuration files
+        self._create_angular_config()
+        
+        # Create src directory structure
+        self._create_src_structure()
+        
+        # Generate components
+        for component in components:
+            self._write_component_files(component)
+        
+        # Create app module
+        self._create_app_module(components)
+        
+        # Create main app component
+        self._create_app_component(components)
+        
+        return self.project_path
     
-    def init_session_state(self):
-        """Initialize session state variables"""
-        if 'figma_client' not in st.session_state:
-            st.session_state.figma_client = None
-        if 'current_file' not in st.session_state:
-            st.session_state.current_file = None
-        if 'file_data' not in st.session_state:
-            st.session_state.file_data = None
-        if 'generated_code' not in st.session_state:
-            st.session_state.generated_code = []
-        if 'selected_nodes' not in st.session_state:
-            st.session_state.selected_nodes = []
+    def _create_package_json(self):
+        """Create package.json file"""
+        package_json = {
+            "name": "figma-generated-app",
+            "version": "1.0.0",
+            "scripts": {
+                "ng": "ng",
+                "start": "ng serve",
+                "build": "ng build",
+                "serve": "ng serve --host 0.0.0.0 --port 4200"
+            },
+            "private": True,
+            "dependencies": {
+                "@angular/animations": "^15.0.0",
+                "@angular/common": "^15.0.0",
+                "@angular/compiler": "^15.0.0",
+                "@angular/core": "^15.0.0",
+                "@angular/forms": "^15.0.0",
+                "@angular/platform-browser": "^15.0.0",
+                "@angular/platform-browser-dynamic": "^15.0.0",
+                "@angular/router": "^15.0.0",
+                "@angular/material": "^15.0.0",
+                "@angular/cdk": "^15.0.0",
+                "rxjs": "~7.5.0",
+                "tslib": "^2.3.0",
+                "zone.js": "~0.11.4"
+            },
+            "devDependencies": {
+                "@angular-devkit/build-angular": "^15.0.0",
+                "@angular/cli": "~15.0.0",
+                "@angular/compiler-cli": "^15.0.0",
+                "typescript": "~4.8.0"
+            }
+        }
+        
+        with open(os.path.join(self.project_path, 'package.json'), 'w') as f:
+            json.dump(package_json, f, indent=2)
     
-    def sidebar_content(self):
-        """Sidebar with authentication and settings"""
-        with st.sidebar:
-            st.header("🔐 Authentication")
-            
-            # Figma Token
-            figma_token = st.text_input(
-                "Figma Access Token",
-                value=os.getenv("FIGMA_ACCESS_TOKEN", ""),
-                type="password",
-                help="Get from Figma Account Settings"
-            )
-            
-            # OpenAI API Key
-            openai_key = st.text_input(
-                "OpenAI API Key",
-                value=os.getenv("OPENAI_API_KEY", ""),
-                type="password",
-                help="For AI-enhanced code generation"
-            )
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("Connect", type="primary"):
-                    if figma_token:
-                        try:
-                            st.session_state.figma_client = FigmaAPI(figma_token)
-                            if openai_key:
-                                openai.api_key = openai_key
-                            st.success("✅ Connected!")
-                        except Exception as e:
-                            st.error(f"Connection failed: {str(e)}")
-                    else:
-                        st.error("Please provide Figma token")
-            
-            with col2:
-                if st.button("Disconnect"):
-                    st.session_state.figma_client = None
-                    st.session_state.current_file = None
-                    st.session_state.file_data = None
-                    st.info("Disconnected")
-            
-            st.divider()
-            
-            # Settings
-            st.header("⚙️ Settings")
-            
-            st.checkbox("Use AI Enhancement", value=True, key="use_ai")
-            st.selectbox(
-                "Code Style",
-                ["Angular Material", "Bootstrap", "Custom CSS"],
-                key="code_style"
-            )
-            st.selectbox(
-                "Component Naming",
-                ["PascalCase", "kebab-case", "camelCase"],
-                key="naming_convention"
-            )
-            
-            st.divider()
-            
-            # Export Options
-            st.header("📦 Export")
-            if st.button("Download All Code", disabled=not st.session_state.generated_code):
-                self.download_generated_code()
+    def _create_angular_config(self):
+        """Create Angular configuration files"""
+        # angular.json
+        angular_json = {
+            "version": 1,
+            "newProjectRoot": "projects",
+            "projects": {
+                "app": {
+                    "projectType": "application",
+                    "schematics": {},
+                    "root": "",
+                    "sourceRoot": "src",
+                    "prefix": "app",
+                    "architect": {
+                        "build": {
+                            "builder": "@angular-devkit/build-angular:browser",
+                            "options": {
+                                "outputPath": "dist/app",
+                                "index": "src/index.html",
+                                "main": "src/main.ts",
+                                "polyfills": ["zone.js"],
+                                "tsConfig": "tsconfig.app.json",
+                                "assets": ["src/favicon.ico", "src/assets"],
+                                "styles": [
+                                    "@angular/material/prebuilt-themes/indigo-pink.css",
+                                    "src/styles.css"
+                                ],
+                                "scripts": []
+                            }
+                        },
+                        "serve": {
+                            "builder": "@angular-devkit/build-angular:dev-server",
+                            "options": {
+                                "browserTarget": "app:build"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        with open(os.path.join(self.project_path, 'angular.json'), 'w') as f:
+            json.dump(angular_json, f, indent=2)
+        
+        # tsconfig.json
+        tsconfig = {
+            "compileOnSave": False,
+            "compilerOptions": {
+                "baseUrl": "./",
+                "outDir": "./dist/out-tsc",
+                "forceConsistentCasingInFileNames": True,
+                "strict": True,
+                "noImplicitOverride": True,
+                "noPropertyAccessFromIndexSignature": True,
+                "noImplicitReturns": True,
+                "noFallthroughCasesInSwitch": True,
+                "sourceMap": True,
+                "declaration": False,
+                "downlevelIteration": True,
+                "experimentalDecorators": True,
+                "moduleResolution": "node",
+                "importHelpers": True,
+                "target": "ES2022",
+                "module": "ES2022",
+                "useDefineForClassFields": False,
+                "lib": ["ES2022", "dom"]
+            }
+        }
+        
+        with open(os.path.join(self.project_path, 'tsconfig.json'), 'w') as f:
+            json.dump(tsconfig, f, indent=2)
+        
+        # tsconfig.app.json
+        tsconfig_app = {
+            "extends": "./tsconfig.json",
+            "compilerOptions": {
+                "outDir": "./out-tsc/app",
+                "types": []
+            },
+            "files": ["src/main.ts"],
+            "include": ["src/**/*.d.ts"]
+        }
+        
+        with open(os.path.join(self.project_path, 'tsconfig.app.json'), 'w') as f:
+            json.dump(tsconfig_app, f, indent=2)
     
-    def main_content(self):
-        """Main application content"""
-        st.title("🎨 Figma to Angular Code Generator")
-        st.markdown("Convert your Figma designs into production-ready Angular components with AI assistance")
+    def _create_src_structure(self):
+        """Create src directory structure"""
+        src_path = os.path.join(self.project_path, 'src')
+        app_path = os.path.join(src_path, 'app')
         
-        if not st.session_state.figma_client:
-            self.show_welcome_screen()
-            return
+        os.makedirs(app_path, exist_ok=True)
+        os.makedirs(os.path.join(src_path, 'assets'), exist_ok=True)
         
-        # File Input Section
-        st.header("📁 Select Figma File")
-        col1, col2, col3 = st.columns([2, 1, 1])
+        # index.html
+        index_html = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Figma Generated App</title>
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body class="mat-typography">
+  <app-root></app-root>
+</body>
+</html>"""
         
-        with col1:
-            file_url = st.text_input(
-                "Figma File URL",
-                placeholder="https://www.figma.com/file/...",
-                help="Paste your Figma file URL here"
-            )
+        with open(os.path.join(src_path, 'index.html'), 'w') as f:
+            f.write(index_html)
         
-        with col2:
-            file_key = self.extract_file_key(file_url) if file_url else ""
-            st.text_input("File Key", value=file_key, disabled=True)
+        # main.ts
+        main_ts = """import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
+import { AppModule } from './app/app.module';
+
+platformBrowserDynamic().bootstrapModule(AppModule)
+  .catch(err => console.error(err));
+"""
         
-        with col3:
-            if st.button("Load File", type="primary", disabled=not file_key):
-                self.load_figma_file(file_key)
+        with open(os.path.join(src_path, 'main.ts'), 'w') as f:
+            f.write(main_ts)
         
-        # Display loaded file info
-        if st.session_state.file_data:
-            self.display_file_info()
-            
-            # Component Selection
-            st.header("🎯 Select Components")
-            self.display_component_selector()
-            
-            # Code Generation
-            st.header("⚡ Generate Angular Code")
-            self.display_code_generator()
-            
-            # Generated Code Display
-            if st.session_state.generated_code:
-                st.header("📝 Generated Code")
-                self.display_generated_code()
+        # styles.css
+        styles_css = """@import "~@angular/material/prebuilt-themes/indigo-pink.css";
+
+html, body { height: 100%; }
+body { margin: 0; font-family: Roboto, "Helvetica Neue", sans-serif; }
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.component-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin-top: 20px;
+}"""
+        
+        with open(os.path.join(src_path, 'styles.css'), 'w') as f:
+            f.write(styles_css)
+        
+        # Create empty favicon.ico
+        with open(os.path.join(src_path, 'favicon.ico'), 'wb') as f:
+            f.write(b'')
     
-    def show_welcome_screen(self):
-        """Display welcome screen for unauthenticated users"""
-        col1, col2 = st.columns([1, 1])
+    def _write_component_files(self, component: Dict):
+        """Write component files to disk"""
+        component_name = component['name'].lower()
+        component_path = os.path.join(self.project_path, 'src', 'app', component_name)
+        os.makedirs(component_path, exist_ok=True)
         
-        with col1:
-            st.markdown("""
-            ### 🚀 Get Started
-            
-            1. **Get Figma Access Token**
-               - Go to Figma → Account Settings
-               - Create Personal Access Token
-               - Copy and paste in sidebar
-            
-            2. **Optional: Add OpenAI Key**
-               - For AI-enhanced code generation
-               - Get from OpenAI platform
-            
-            3. **Load Your Design**
-               - Paste Figma file URL
-               - Select components
-               - Generate Angular code!
-            """)
+        # Write TypeScript file
+        ts_file = os.path.join(component_path, f'{component_name}.component.ts')
+        with open(ts_file, 'w') as f:
+            f.write(component['typescript'])
         
-        with col2:
-            st.markdown("""
-            ### ✨ Features
-            
-            - **🎨 Design Analysis** - Extracts colors, typography, spacing
-            - **🤖 AI-Powered** - Generates semantic, accessible code
-            - **📦 Complete Components** - TypeScript, HTML, SCSS, Tests
-            - **🎯 Angular Material** - Uses best practices
-            - **♿ Accessible** - ARIA labels and semantic HTML
-            - **📱 Responsive** - Mobile-first approach
-            """)
+        # Write HTML file
+        html_file = os.path.join(component_path, f'{component_name}.component.html')
+        with open(html_file, 'w') as f:
+            f.write(component['html'])
+        
+        # Write CSS file
+        css_file = os.path.join(component_path, f'{component_name}.component.css')
+        with open(css_file, 'w') as f:
+            f.write(component['css'])
     
-    def extract_file_key(self, url: str) -> str:
-        """Extract file key from Figma URL"""
-        import re
-        match = re.search(r'/file/([a-zA-Z0-9]+)', url)
-        return match.group(1) if match else ""
-    
-    def load_figma_file(self, file_key: str):
-        """Load Figma file data"""
-        with st.spinner("Loading Figma file..."):
-            try:
-                file_data = st.session_state.figma_client.get_file(file_key)
-                st.session_state.file_data = file_data
-                st.session_state.current_file = file_key
-                st.success(f"✅ Loaded: {file_data.get('name', 'Untitled')}")
-                
-                # Analyze design system
-                analysis = st.session_state.figma_client.analyze_design_system(file_data)
-                st.session_state.design_analysis = analysis
-                
-            except Exception as e:
-                st.error(f"Failed to load file: {str(e)}")
-    
-    def display_file_info(self):
-        """Display loaded file information"""
-        file_data = st.session_state.file_data
-        
-        with st.expander("📊 File Information", expanded=True):
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("File Name", file_data.get('name', 'Unknown'))
-            with col2:
-                st.metric("Last Modified", file_data.get('lastModified', 'Unknown')[:10])
-            with col3:
-                st.metric("Components", len(file_data.get('components', {})))
-            with col4:
-                st.metric("Styles", len(file_data.get('styles', {})))
-            
-            # Design System Summary
-            if hasattr(st.session_state, 'design_analysis'):
-                analysis = st.session_state.design_analysis
-                st.markdown("### 🎨 Design System")
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown(f"**Colors:** {len(analysis['colors'])}")
-                    st.markdown(f"**Typography:** {len(analysis['typography'])}")
-                with col2:
-                    st.markdown(f"**Components:** {len(analysis['components'])}")
-                    st.markdown(f"**Layout Patterns:** {len(analysis['layout_patterns'])}")
-    
-    def display_component_selector(self):
-        """Display component selection interface"""
-        components = st.session_state.file_data.get('components', {})
-        
-        if not components:
-            st.warning("No components found in this file")
-            return
-        
-        # Create selectable list
-        component_options = []
-        for comp_id, comp_data in components.items():
-            option = f"{comp_data.get('name', 'Unnamed')} ({comp_data.get('description', 'No description')})"
-            component_options.append((comp_id, option))
-        
-        selected = st.multiselect(
-            "Select components to generate",
-            options=[opt[1] for opt in component_options],
-            default=[],
-            help="Select one or more components to convert to Angular"
-        )
-        
-        # Update selected nodes
-        st.session_state.selected_nodes = [
-            comp_id for comp_id, opt in component_options if opt in selected
+    def _create_app_module(self, components: List[Dict]):
+        """Create app.module.ts"""
+        imports = [
+            "import { NgModule } from '@angular/core';",
+            "import { BrowserModule } from '@angular/platform-browser';",
+            "import { BrowserAnimationsModule } from '@angular/platform-browser/animations';",
+            "import { FormsModule } from '@angular/forms';",
+            "",
+            "// Angular Material imports",
+            "import { MatButtonModule } from '@angular/material/button';",
+            "import { MatCardModule } from '@angular/material/card';",
+            "import { MatFormFieldModule } from '@angular/material/form-field';",
+            "import { MatInputModule } from '@angular/material/input';",
+            "import { MatToolbarModule } from '@angular/material/toolbar';",
+            "import { MatIconModule } from '@angular/material/icon';",
+            "import { MatListModule } from '@angular/material/list';",
+            "",
+            "// Components",
+            "import { AppComponent } from './app.component';"
         ]
         
-        if st.session_state.selected_nodes:
-            st.info(f"Selected {len(st.session_state.selected_nodes)} component(s)")
-    
-    def display_code_generator(self):
-        """Display code generation controls"""
-        col1, col2 = st.columns([3, 1])
+        declarations = ["AppComponent"]
         
-        with col1:
-            component_description = st.text_area(
-                "Additional Context (Optional)",
-                placeholder="Describe the component's purpose, interactions, or specific requirements...",
-                height=100
-            )
-        
-        with col2:
-            st.markdown("### Options")
-            include_tests = st.checkbox("Include Tests", value=True)
-            include_stories = st.checkbox("Include Storybook", value=False)
-            include_module = st.checkbox("Generate Module", value=True)
-        
-        if st.button("🚀 Generate Angular Code", type="primary", disabled=not st.session_state.selected_nodes):
-            self.generate_code(component_description, include_tests, include_stories, include_module)
-    
-    def generate_code(self, description: str, include_tests: bool, include_stories: bool, include_module: bool):
-        """Generate Angular code for selected components"""
-        generated_components = []
-        
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        total_components = len(st.session_state.selected_nodes)
-        
-        for idx, node_id in enumerate(st.session_state.selected_nodes):
-            status_text.text(f"Generating component {idx + 1} of {total_components}...")
-            
-            # Get component data
-            component_data = st.session_state.file_data['components'].get(node_id, {})
-            
-            # Get node details
-            node_details = st.session_state.figma_client.get_file_nodes(
-                st.session_state.current_file,
-                [node_id]
-            )
-            
-            # Generate base code
-            generated_code = self.code_generator.generate_angular_component(
-                component_data,
-                st.session_state.design_analysis
-            )
-            
-            # AI Enhancement if enabled
-            if st.session_state.use_ai and openai.api_key:
-                ai_code = self.code_generator.generate_ai_enhanced_code(
-                    component_data,
-                    description
-                )
-                if ai_code:
-                    generated_code['ai_enhanced'] = ai_code
-            
-            generated_components.append(generated_code)
-            progress_bar.progress((idx + 1) / total_components)
-        
-        st.session_state.generated_code = generated_components
-        status_text.text("✅ Code generation complete!")
-        st.success(f"Generated {len(generated_components)} component(s)")
-    
-    def display_generated_code(self):
-        """Display generated code with syntax highlighting"""
-        for idx, component in enumerate(st.session_state.generated_code):
-            with st.expander(f"📦 {component['name']} Component", expanded=idx == 0):
-                tabs = st.tabs(["TypeScript", "Template", "Styles", "Tests", "AI Enhanced"])
-                
-                with tabs[0]:
-                    st.code(component['typescript'], language='typescript')
-                
-                with tabs[1]:
-                    st.code(component['template'], language='html')
-                
-                with tabs[2]:
-                    st.code(component['styles'], language='scss')
-                
-                with tabs[3]:
-                    st.code(component['spec'], language='typescript')
-                
-                with tabs[4]:
-                    if 'ai_enhanced' in component:
-                        st.code(component['ai_enhanced'], language='typescript')
-                    else:
-                        st.info("AI enhancement not available")
-                
-                # Download button for this component
-                if st.button(f"Download {component['name']}", key=f"download_{idx}"):
-                    self.download_component(component)
-    
-    def download_component(self, component: Dict):
-        """Download individual component files"""
-        import zipfile
-        import io
-        
-        # Create zip file in memory
-        zip_buffer = io.BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            base_name = component['name'].lower()
-            
-            # Add files to zip
-            zip_file.writestr(f"{base_name}/{base_name}.component.ts", component['typescript'])
-            zip_file.writestr(f"{base_name}/{base_name}.component.html", component['template'])
-            zip_file.writestr(f"{base_name}/{base_name}.component.scss", component['styles'])
-            zip_file.writestr(f"{base_name}/{base_name}.component.spec.ts", component['spec'])
-            
-            if 'ai_enhanced' in component:
-                zip_file.writestr(f"{base_name}/{base_name}.ai-enhanced.ts", component['ai_enhanced'])
-        
-        # Create download button
-        st.download_button(
-            label=f"Download {component['name']}.zip",
-            data=zip_buffer.getvalue(),
-            file_name=f"{base_name}.zip",
-            mime="application/zip"
-        )
-    
-    def download_generated_code(self):
-        """Download all generated code as a zip file"""
-        if not st.session_state.generated_code:
-            return
-        
-        import zipfile
-        import io
-        
-        zip_buffer = io.BytesIO()
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Add each component
-            for component in st.session_state.generated_code:
-                base_name = component['name'].lower()
-                
-                zip_file.writestr(f"components/{base_name}/{base_name}.component.ts", component['typescript'])
-                zip_file.writestr(f"components/{base_name}/{base_name}.component.html", component['template'])
-                zip_file.writestr(f"components/{base_name}/{base_name}.component.scss", component['styles'])
-                zip_file.writestr(f"components/{base_name}/{base_name}.component.spec.ts", component['spec'])
-            
-            # Add module file
-            module_content = self.generate_module_file()
-            zip_file.writestr("components/components.module.ts", module_content)
-            
-            # Add README
-            readme_content = self.generate_readme()
-            zip_file.writestr("README.md", readme_content)
-        
-        st.sidebar.download_button(
-            label="📦 Download All Components",
-            data=zip_buffer.getvalue(),
-            file_name="figma-angular-components.zip",
-            mime="application/zip"
-        )
-    
-    def generate_module_file(self) -> str:
-        """Generate Angular module file for all components"""
-        imports = []
-        declarations = []
-        
-        for component in st.session_state.generated_code:
+        for component in components:
             name = component['name']
             imports.append(f"import {{ {name}Component }} from './{name.lower()}/{name.lower()}.component';")
             declarations.append(f"{name}Component")
         
-        return f"""import {{ NgModule }} from '@angular/core';
-import {{ CommonModule }} from '@angular/common';
-import {{ MaterialModule }} from '../shared/material.module';
-
-{chr(10).join(imports)}
+        module_content = f"""{chr(10).join(imports)}
 
 @NgModule({{
   declarations: [
     {',\n    '.join(declarations)}
   ],
   imports: [
-    CommonModule,
-    MaterialModule
+    BrowserModule,
+    BrowserAnimationsModule,
+    FormsModule,
+    MatButtonModule,
+    MatCardModule,
+    MatFormFieldModule,
+    MatInputModule,
+    MatToolbarModule,
+    MatIconModule,
+    MatListModule
   ],
-  exports: [
-    {',\n    '.join(declarations)}
-  ]
+  providers: [],
+  bootstrap: [AppComponent]
 }})
-export class ComponentsModule {{ }}"""
+export class AppModule {{ }}"""
+        
+        module_path = os.path.join(self.project_path, 'src', 'app', 'app.module.ts')
+        with open(module_path, 'w') as f:
+            f.write(module_content)
     
-    def generate_readme(self) -> str:
-        """Generate README file for the exported components"""
-        return f"""# Figma to Angular Components
+    def _create_app_component(self, components: List[Dict]):
+        """Create main app component"""
+        app_path = os.path.join(self.project_path, 'src', 'app')
+        
+        # app.component.ts
+        app_ts = """import { Component } from '@angular/core';
 
-Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+@Component({
+  selector: 'app-root',
+  templateUrl: './app.component.html',
+  styleUrls: ['./app.component.css']
+})
+export class AppComponent {
+  title = 'Figma Generated Angular App';
+  generatedAt = new Date();
+}"""
+        
+        with open(os.path.join(app_path, 'app.component.ts'), 'w') as f:
+            f.write(app_ts)
+        
+        # app.component.html
+        component_tags = []
+        for component in components:
+            name = component['name']
+            component_tags.append(f'    <app-{name.lower()} [data]="{{}}"></app-{name.lower()}>')
+        
+        app_html = f"""<mat-toolbar color="primary">
+  <span>{{{{ title }}}}</span>
+  <span class="spacer"></span>
+  <span class="timestamp">Generated: {{{{ generatedAt | date:'short' }}}}</span>
+</mat-toolbar>
 
-## Components
+<div class="container">
+  <h1>Generated Components from Figma</h1>
+  <p>These components were automatically generated from your Figma design using AI.</p>
+  
+  <div class="component-grid">
+{chr(10).join(component_tags)}
+  </div>
+</div>"""
+        
+        with open(os.path.join(app_path, 'app.component.html'), 'w') as f:
+            f.write(app_html)
+        
+        # app.component.css
+        app_css = """.spacer {
+  flex: 1 1 auto;
+}
 
-{chr(10).join([f"- {comp['name']} ({comp['type']})" for comp in st.session_state.generated_code])}
+.timestamp {
+  font-size: 14px;
+  opacity: 0.8;
+}
 
-## Installation
+h1 {
+  text-align: center;
+  color: #3f51b5;
+  margin: 30px 0 10px;
+}
 
-1. Copy the components folder to your Angular project
-2. Import ComponentsModule in your app.module.ts
-3. Install Angular Material if not already installed:
-   ```bash
-   ng add @angular/material
-   ```
-
-## Usage
-
-```typescript
-import {{ ComponentsModule }} from './components/components.module';
-
-@NgModule({{
-  imports: [ComponentsModule]
-}})
-export class AppModule {{ }}
-```
-
-## Customization
-
-Each component accepts a `data` input for dynamic content and emits `action` events for interactions.
-
-Generated with Figma to Angular Code Generator
-"""
+p {
+  text-align: center;
+  color: #666;
+  margin-bottom: 30px;
+}"""
+        
+        with open(os.path.join(app_path, 'app.component.css'), 'w') as f:
+            f.write(app_css)
     
-    def run(self):
-        """Main application entry point"""
-        self.sidebar_content()
-        self.main_content()
+    def install_dependencies(self) -> bool:
+        """Install npm dependencies"""
+        try:
+            # Check if npm exists
+            npm_check = subprocess.run(['npm', '--version'], capture_output=True)
+            if npm_check.returncode != 0:
+                st.error("npm is not installed. Please install Node.js first.")
+                return False
+            
+            # Run npm install
+            process = subprocess.run(
+                ['npm', 'install'],
+                cwd=self.project_path,
+                capture_output=True,
+                text=True
+            )
+            
+            return process.returncode == 0
+        except Exception as e:
+            st.error(f"Error installing dependencies: {str(e)}")
+            return False
+    
+    def start_dev_server(self) -> Tuple[bool, int]:
+        """Start Angular development server"""
+        try:
+            # Find available port
+            self.port = self._find_available_port()
+            
+            # Start ng serve
+            self.server_process = subprocess.Popen(
+                ['npm', 'run', 'serve', '--', '--port', str(self.port)],
+                cwd=self.project_path,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Wait for server to start
+            time.sleep(15)  # Angular takes time to compile
+            
+            return True, self.port
+        except Exception as e:
+            st.error(f"Error starting server: {str(e)}")
+            return False, 0
+    
+    def _find_available_port(self, start_port: int = 4200) -> int:
+        """Find an available port"""
+        port = start_port
+        while port < 65535:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(('', port))
+                    return port
+            except:
+                port += 1
+        return 4200
+    
+    def stop_server(self):
+        """Stop the development server"""
+        if self.server_process:
+            self.server_process.terminate()
+            self.server_process = None
 
-# Deployment configuration
-def create_requirements_txt():
-    """Generate requirements.txt for deployment"""
-    requirements = """streamlit==1.28.1
-requests==2.31.0
-python-dotenv==1.0.0
-openai==0.28.1
-Pillow==10.1.0
-"""
-    return requirements
+# Main Streamlit App
+def main():
+    st.title("🎨 Figma to Angular - AI Code Generator")
+    st.markdown("Transform your Figma designs into Angular applications using AI")
+    
+    # Initialize session state
+    if 'project_path' not in st.session_state:
+        st.session_state.project_path = None
+    if 'local_url' not in st.session_state:
+        st.session_state.local_url = None
+    if 'deployment_agent' not in st.session_state:
+        st.session_state.deployment_agent = None
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # API Keys
+        openai_key = st.text_input(
+            "OpenAI API Key",
+            type="password",
+            value=os.getenv("OPENAI_API_KEY", ""),
+            help="Required for AI-powered code generation"
+        )
+        
+        if openai_key:
+            openai.api_key = openai_key
+        
+        # Figma Token
+        figma_token = st.text_input(
+            "Figma Access Token",
+            type="password",
+            help="Get from Figma > Account Settings > Personal Access Tokens"
+        )
+        
+        # Test connection button
+        if figma_token and st.button("Test Figma Connection"):
+            agent = FigmaAgent(figma_token)
+            if agent.test_connection():
+                st.success("✅ Connected to Figma!")
+            else:
+                st.error("❌ Invalid Figma token")
+        
+        st.divider()
+        
+        # Cleanup
+        if st.button("🧹 Clean Up", help="Stop server and clean temp files"):
+            if st.session_state.deployment_agent:
+                st.session_state.deployment_agent.stop_server()
+            st.session_state.clear()
+            st.success("Cleaned up!")
+    
+    # Main content
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.header("📋 Step 1: Connect to Figma")
+        
+        figma_url = st.text_input(
+            "Figma File URL",
+            placeholder="https://www.figma.com/file/ABC123/Your-Design-File",
+            help="Paste the URL of your Figma file"
+        )
+        
+        # Extract file key
+        file_key = ""
+        if figma_url:
+            import re
+            match = re.search(r'/file/([a-zA-Z0-9]+)', figma_url)
+            if match:
+                file_key = match.group(1)
+                st.info(f"File key: `{file_key}`")
+            else:
+                st.error("Invalid Figma URL format")
+    
+    with col2:
+        st.header("📊 Requirements")
+        
+        # Check requirements
+        requirements = {
+            "Figma Token": bool(figma_token),
+            "OpenAI Key": bool(openai_key),
+            "Valid URL": bool(file_key),
+            "Node.js": subprocess.run(['node', '--version'], capture_output=True).returncode == 0
+        }
+        
+        for req, status in requirements.items():
+            if status:
+                st.success(f"✅ {req}")
+            else:
+                st.error(f"❌ {req}")
+    
+    # Generation button
+    if st.button(
+        "🚀 Generate Angular App",
+        type="primary",
+        disabled=not all([figma_token, openai_key, file_key])
+    ):
+        
+        # Progress tracking
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Step 1: Connect to Figma
+            status_text.text("🔗 Connecting to Figma...")
+            progress_bar.progress(10)
+            
+            figma_agent = FigmaAgent(figma_token)
+            file_data = figma_agent.get_file(file_key)
+            
+            st.success(f"✅ Connected to: {file_data.get('name', 'Untitled')}")
+            
+            # Step 2: Extract components
+            status_text.text("🔍 Analyzing components...")
+            progress_bar.progress(25)
+            
+            components = figma_agent.extract_components(file_data)
+            st.info(f"Found {len(components)} components")
+            
+            # Display components
+            with st.expander("View Detected Components"):
+                for comp in components:
+                    st.write(f"- **{comp['name']}** ({comp['type']})")
+            
+            # Step 3: Generate Angular code
+            status_text.text("🤖 Generating Angular code with AI...")
+            progress_bar.progress(40)
+            
+            code_agent = CodeGeneratorAgent()
+            generated_components = []
+            
+            for i, component in enumerate(components):
+                comp_progress = 40 + (30 * i / len(components))
+                progress_bar.progress(int(comp_progress))
+                status_text.text(f"Generating {component['name']}...")
+                
+                generated = code_agent.generate_angular_component(component)
+                generated_components.append(generated)
+            
+            st.success(f"✅ Generated {len(generated_components)} components")
+            
+            # Step 4: Create Angular project
+            status_text.text("📁 Creating Angular project...")
+            progress_bar.progress(70)
+            
+            deployment_agent = DeploymentAgent()
+            project_name = f"figma-app-{int(time.time())}"
+            project_path = deployment_agent.create_angular_project(project_name, generated_components)
+            
+            st.session_state.project_path = project_path
+            st.session_state.deployment_agent = deployment_agent
+            
+            # Step 5: Install dependencies
+            status_text.text("📦 Installing dependencies...")
+            progress_bar.progress(80)
+            
+            if deployment_agent.install_dependencies():
+                st.success("✅ Dependencies installed")
+            else:
+                st.error("Failed to install dependencies")
+                return
+            
+            # Step 6: Start dev server
+            status_text.text("🚀 Starting development server...")
+            progress_bar.progress(90)
+            
+            success, port = deployment_agent.start_dev_server()
+            if success:
+                local_url = f"http://localhost:{port}"
+                st.session_state.local_url = local_url
+                progress_bar.progress(100)
+                status_text.text("✅ Complete!")
+                
+                # Success message
+                st.balloons()
+                st.success("🎉 Angular app generated and running!")
+                
+                # Display results
+                st.divider()
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.header("🌐 Access Your App")
+                    st.code(local_url)
+                    st.markdown(f"[Open in Browser]({local_url})")
+                
+                with col2:
+                    st.header("📂 Project Location")
+                    st.code(project_path)
+                    
+                    if st.button("📋 Copy Path"):
+                        st.code(project_path)
+                
+                # Show generated files
+                with st.expander("View Generated Files"):
+                    for comp in generated_components:
+                        st.subheader(f"Component: {comp['name']}")
+                        
+                        tab1, tab2, tab3 = st.tabs(["TypeScript", "HTML", "CSS"])
+                        
+                        with tab1:
+                            st.code(comp['typescript'], language='typescript')
+                        with tab2:
+                            st.code(comp['html'], language='html')
+                        with tab3:
+                            st.code(comp['css'], language='css')
+            else:
+                st.error("Failed to start development server")
+                
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
+            progress_bar.progress(0)
+            status_text.text("")
+    
+    # Display current status
+    if st.session_state.local_url:
+        st.divider()
+        st.info(f"🟢 App is running at: {st.session_state.local_url}")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔄 Refresh Status"):
+                st.rerun()
+        
+        with col2:
+            if st.button("🛑 Stop Server"):
+                if st.session_state.deployment_agent:
+                    st.session_state.deployment_agent.stop_server()
+                    st.session_state.local_url = None
+                    st.success("Server stopped")
+        
+        with col3:
+            if st.button("📂 Open Project Folder"):
+                if st.session_state.project_path:
+                    webbrowser.open(st.session_state.project_path)
 
-def create_dockerfile():
-    """Generate Dockerfile for deployment"""
-    dockerfile = """FROM python:3.9-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
-COPY . .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-"""
-    return dockerfile
-
-# Main execution
 if __name__ == "__main__":
-    # Check if running in deployment mode
-    if os.getenv("GENERATE_DEPLOYMENT_FILES"):
-        with open("requirements.txt", "w") as f:
-            f.write(create_requirements_txt())
-        with open("Dockerfile", "w") as f:
-            f.write(create_dockerfile())
-        print("Deployment files generated!")
-    else:
-        # Run the app
-        app = FigmaToAngularApp()
-        app.run()
+    main()
