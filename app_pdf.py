@@ -44,6 +44,29 @@ st.set_page_config(
     layout="wide"
 )
 
+def natural_sort_item_number(item_number: str) -> tuple:
+    """Convert item number to tuple for natural sorting
+    Examples:
+    - "1" -> (1, 0, "")
+    - "1a" -> (1, 1, "a")
+    - "10" -> (10, 0, "")
+    - "10b" -> (10, 2, "b")
+    """
+    if not item_number:
+        return (999, 999, "")
+    
+    # Match number and optional letter
+    match = re.match(r'^(\d+)([a-z])?$', item_number.lower())
+    if match:
+        num = int(match.group(1))
+        letter = match.group(2) or ""
+        # Convert letter to number for sub-sorting (a=1, b=2, etc.)
+        letter_num = ord(letter) - ord('a') + 1 if letter else 0
+        return (num, letter_num, letter)
+    
+    # Fallback for non-standard formats
+    return (999, 999, item_number)
+
 # Enhanced CSS
 st.markdown("""
 <style>
@@ -824,8 +847,8 @@ class ResearchAgent(Agent):
             # Ensure sub-items are properly ordered
             for main_item, group_fields in item_groups.items():
                 if len(group_fields) > 1:
-                    # Sort sub-items
-                    group_fields.sort(key=lambda f: f.item_number if f.item_number else "")
+                    # Sort sub-items using natural sort
+                    group_fields.sort(key=lambda f: natural_sort_item_number(f.item_number if f.item_number else ""))
                     
                     # Ensure proper lettering
                     sub_items = [f for f in group_fields if f.parent_item]
@@ -1279,6 +1302,8 @@ class ResearchAgent(Agent):
                                         # Check for sub-items
                                         if self._is_compound_field(label, lines, i):
                                             sub_items = self._extract_sub_items(lines, i + 1, item_num)
+                                            # Sort sub-items naturally
+                                            sub_items.sort(key=lambda f: natural_sort_item_number(f.item_number or ""))
                                             for sub_item in sub_items:
                                                 sub_item.page = page_num + 1
                                                 sub_item.part = part_name
@@ -1858,8 +1883,9 @@ class ValidationAgent(Agent):
                 sub_items = [f for f in group_fields if f.parent_item == parent_item]
                 
                 # Check ordering
+                sorted_sub_items = sorted(sub_items, key=lambda f: natural_sort_item_number(f.item_number or ""))
                 expected_order = ['a', 'b', 'c', 'd', 'e', 'f']
-                for i, field in enumerate(sub_items):
+                for i, field in enumerate(sorted_sub_items):
                     if field.item_number:
                         expected_suffix = expected_order[i] if i < len(expected_order) else ''
                         if not field.item_number.endswith(expected_suffix):
@@ -2250,7 +2276,9 @@ def add_new_field(part_name: str, form_structure: FormStructure):
                                     existing_nums.append(num)
                                 except:
                                     pass
-                        next_num = max(existing_nums) + 1 if existing_nums else 1
+                        # Sort numerically
+                        existing_nums.sort()
+                        next_num = existing_nums[-1] + 1 if existing_nums else 1
                         new_item = str(next_num)
                     
                     # Create new field
@@ -2396,7 +2424,9 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
                     standalone_fields.append(field)
             
             # Add grouped fields
-            for parent_item, sub_fields in sorted(item_groups.items()):
+            sorted_parent_items = sorted(item_groups.keys(), key=natural_sort_item_number)
+            for parent_item in sorted_parent_items:
+                sub_fields = item_groups[parent_item]
                 # Find parent field
                 parent_field = next((f for f in fields if f.item_number == parent_item), None)
                 if parent_field:
@@ -2409,7 +2439,7 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
                     })
                 
                 # Add sub-fields
-                for field in sorted(sub_fields, key=lambda f: f.item_number):
+                for field in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
                     label = f"{field.item_number}. {field.label}"
                     
                     control = {
@@ -2423,7 +2453,7 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
                     controls.append(control)
             
             # Add standalone fields
-            for field in standalone_fields:
+            for field in sorted(standalone_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
                 label = field.label
                 if field.item_number:
                     label = f"{field.item_number}. {label}"
@@ -2581,7 +2611,7 @@ def main():
                                             if sub_fields:
                                                 st.markdown(f"**Example from {part_name}:**")
                                                 st.markdown(f"- {field.item_number}. {field.label}")
-                                                for sub in sorted(sub_fields, key=lambda f: f.item_number):
+                                                for sub in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
                                                     st.markdown(f"  - {sub.item_number}. {sub.label}")
                                                 break
                                     else:
@@ -2658,9 +2688,12 @@ def main():
                         standalone_fields.append(field)
                 
                 # Display grouped fields first
-                for parent_item in sorted(item_groups.keys()):
+                # Sort parent items naturally
+                sorted_parent_items = sorted(item_groups.keys(), key=natural_sort_item_number)
+                
+                for parent_item in sorted_parent_items:
                     group_fields = sorted(item_groups[parent_item], 
-                                        key=lambda f: (f.parent_item == parent_item, f.item_number or ""))
+                                        key=lambda f: (f.parent_item != parent_item, natural_sort_item_number(f.item_number or "")))
                     
                     # Show parent field first
                     parent_field = next((f for f in group_fields if f.item_number == parent_item), None)
@@ -2671,13 +2704,13 @@ def main():
                         
                         # Show sub-items
                         sub_fields = [f for f in group_fields if f.parent_item == parent_item]
-                        for sub_field in sorted(sub_fields, key=lambda f: f.item_number or ""):
+                        for sub_field in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
                             render_field_card_enhanced(sub_field, fields.index(sub_field), selected_part, form_structure)
                         
                         st.markdown('</div>', unsafe_allow_html=True)
                 
                 # Display standalone fields
-                for field in sorted(standalone_fields, key=lambda f: f.item_number or "ZZZ"):
+                for field in sorted(standalone_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
                     render_field_card_enhanced(field, fields.index(field), selected_part, form_structure)
         else:
             st.info("👆 Please upload and process a form first")
