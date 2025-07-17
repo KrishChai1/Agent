@@ -13,3 +13,4 @@ pyyaml
 mammoth
 openai 
 python-dotenv
+plotly
