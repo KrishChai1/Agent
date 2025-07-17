@@ -165,7 +165,7 @@ elif selected_tab == "IBM Watson Products":
         "Analytics & Discovery": ["Watson Discovery", "Watson Studio"]
     }
     
-    # Detailed product information
+    # Detailed product information - FIXED: Removed extra bracket
     product_details = {
         "watsonx.ai": {
             "description": "Next-generation enterprise studio for AI builders to train, validate, tune, and deploy AI models",
@@ -366,7 +366,132 @@ elif selected_tab == "IBM Watson Products":
                         if 'ups_relevance' in details:
                             st.markdown(f"**UPS Relevance:** _{details['ups_relevance']}_")
 
-
+elif selected_tab == "UPS Use Cases":
+    st.markdown('<h2 class="sub-header">🎯 UPS-Specific Watson Use Cases</h2>', unsafe_allow_html=True)
+    
+    # Use case categories with detailed implementation
+    use_case_categories = {
+        "📦 Package Operations": {
+            "Intelligent Route Optimization Enhancement": {
+                "current_state": "ORION saves 100M miles/year",
+                "watson_solution": "watsonx.ai + watsonx.data",
+                "implementation": [
+                    "Real-time traffic and weather integration",
+                    "Dynamic re-routing based on package priorities",
+                    "Multi-modal transportation optimization",
+                    "Driver preference learning algorithms"
+                ],
+                "expected_impact": "Additional 30% efficiency gain",
+                "roi": "$150M annual savings"
+            },
+            "Predictive Package Volume Forecasting": {
+                "current_state": "Basic seasonal predictions",
+                "watson_solution": "watsonx.ai foundation models",
+                "implementation": [
+                    "Social media trend analysis",
+                    "Economic indicator integration",
+                    "Weather pattern correlation",
+                    "Event-based surge prediction"
+                ],
+                "expected_impact": "85% forecast accuracy",
+                "roi": "$75M in capacity optimization"
+            },
+            "Automated Damage Detection": {
+                "current_state": "Manual inspection",
+                "watson_solution": "Watson Visual Recognition + AI",
+                "implementation": [
+                    "Computer vision at sorting facilities",
+                    "Real-time damage classification",
+                    "Automated claim processing",
+                    "Root cause analysis"
+                ],
+                "expected_impact": "90% detection accuracy",
+                "roi": "$50M in reduced claims"
+            }
+        },
+        "🤝 Customer Experience": {
+            "Omnichannel Virtual Assistant": {
+                "current_state": "Basic chatbot with 60% resolution",
+                "watson_solution": "Watson Assistant + Discovery",
+                "implementation": [
+                    "Natural language understanding for complex queries",
+                    "Proactive shipment notifications",
+                    "Multi-language support (50+ languages)",
+                    "Voice-enabled tracking"
+                ],
+                "expected_impact": "95% first-contact resolution",
+                "roi": "$100M in support cost savings"
+            },
+            "Predictive Customer Service": {
+                "current_state": "Reactive support model",
+                "watson_solution": "watsonx.ai + Watson Assistant",
+                "implementation": [
+                    "Anticipate delivery issues before customer contact",
+                    "Automated compensation offers",
+                    "Personalized communication preferences",
+                    "Sentiment analysis and escalation"
+                ],
+                "expected_impact": "40% reduction in complaints",
+                "roi": "$60M in retention value"
+            }
+        },
+        "🚛 Fleet & Logistics": {
+            "Predictive Maintenance 2.0": {
+                "current_state": "Schedule-based maintenance",
+                "watson_solution": "watsonx.ai + IoT integration",
+                "implementation": [
+                    "Real-time vehicle telemetry analysis",
+                    "Component failure prediction",
+                    "Optimal maintenance scheduling",
+                    "Parts inventory optimization"
+                ],
+                "expected_impact": "70% reduction in breakdowns",
+                "roi": "$80M in reduced downtime"
+            },
+            "Driver Performance & Safety AI": {
+                "current_state": "Basic telematics monitoring",
+                "watson_solution": "watsonx.ai + Speech to Text",
+                "implementation": [
+                    "Real-time driver coaching via voice AI",
+                    "Fatigue detection algorithms",
+                    "Route-specific safety recommendations",
+                    "Gamified performance improvement"
+                ],
+                "expected_impact": "50% reduction in accidents",
+                "roi": "$120M in safety savings"
+            }
+        },
+        "📊 Supply Chain Intelligence": {
+            "End-to-End Visibility Platform": {
+                "current_state": "Fragmented tracking systems",
+                "watson_solution": "watsonx.data + Discovery",
+                "implementation": [
+                    "Unified data lakehouse for all shipments",
+                    "Real-time exception handling",
+                    "Predictive delay notifications",
+                    "Blockchain integration for transparency"
+                ],
+                "expected_impact": "99.9% shipment visibility",
+                "roi": "$90M in efficiency gains"
+            },
+            "Dynamic Capacity Planning": {
+                "current_state": "Weekly manual planning",
+                "watson_solution": "watsonx.ai + Orchestrate",
+                "implementation": [
+                    "AI-driven capacity allocation",
+                    "Automated staff scheduling",
+                    "Peak season optimization",
+                    "Cross-facility load balancing"
+                ],
+                "expected_impact": "95% capacity utilization",
+                "roi": "$110M in operational savings"
+            },
+            "Supply Chain Risk Management": {
+                "current_state": "Reactive risk response",
+                "watson_solution": "watsonx.ai + Discovery",
+                "implementation": [
+                    "Global event monitoring and impact analysis",
+                    "Supplier risk scoring",
                     "Automated compliance checking",
                     "Predictive disruption modeling",
                     "Alternative route planning"
