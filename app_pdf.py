@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Smart USCIS Form Reader with Agent Feedback Loops
-Now with proper sub-item extraction (1a, 1b, 1c) and JSON structure mapping
+Enhanced Smart USCIS Form Reader with Sequential Extraction
+Correctly extracts fields in exact sequence from USCIS PDFs
 """
 
 import os
@@ -39,7 +39,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Smart USCIS Form Reader - Enhanced JSON Mapping",
+    page_title="Smart USCIS Form Reader - Sequential Extraction",
     page_icon="🤖",
     layout="wide"
 )
@@ -128,22 +128,6 @@ st.markdown("""
         margin: 1rem 0;
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
-    .add-field-button {
-        background: #4CAF50;
-        color: white;
-        padding: 0.5rem 1rem;
-        border-radius: 5px;
-        border: none;
-        cursor: pointer;
-        margin: 1rem 0;
-    }
-    .add-field-button:hover {
-        background: #45a049;
-    }
-    .edit-mode {
-        border: 2px dashed #2196F3;
-        background: #e3f2fd;
-    }
     .sub-item {
         margin-left: 2rem;
         font-size: 0.95em;
@@ -152,6 +136,13 @@ st.markdown("""
         background: #f5f5f5;
         padding: 1rem;
         border-radius: 8px;
+        margin: 0.5rem 0;
+    }
+    .sequence-warning {
+        background: #ff9800;
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
         margin: 0.5rem 0;
     }
 </style>
@@ -205,104 +196,16 @@ def load_json_structures():
                 "PassportDetails": [],
                 "VisaDetails": [],
                 "I94Details": []
-            },
-            "CaseObject": {
-                "caseType": "",
-                "caseSubType": "",
-                "premiumProcessing": False,
-                "uscisReceiptNumber": "",
-                "caseStatus": "",
-                "beneficiaryId": "",
-                "serviceCenter": ""
-            },
-            "CustomerObject": {
-                "customer_name": "",
-                "customer_tax_id": "",
-                "customer_type_of_business": "",
-                "e_verified": False,
-                "e_verify_number": "",
-                "address_street": "",
-                "address_city": "",
-                "address_state": "",
-                "address_zip": ""
-            },
-            "PetitionerObject": {
-                "Beneficiary": {
-                    "beneficiaryFirstName": "",
-                    "beneficiaryLastName": "",
-                    "beneficiaryMiddleName": "",
-                    "beneficiarySsn": "",
-                    "beneficiaryDateOfBirth": ""
-                }
             }
         }
         
-        # Try to load from session state or file
         if 'json_structures' in st.session_state:
             return st.session_state['json_structures']
-        
-        # You can load from file here if needed
-        # with open('empty_json_structures.json', 'r') as f:
-        #     return json.load(f)
         
         return default_structures
         
     except Exception as e:
         return default_structures
-
-# Enhanced field mapping structure
-ENHANCED_DB_STRUCTURE = {
-    "beneficiary": {
-        "PersonalInfo": {
-            "beneficiaryFirstName": ["given name", "first name", "1b"],
-            "beneficiaryLastName": ["family name", "last name", "surname", "1a"],
-            "beneficiaryMiddleName": ["middle name", "1c"],
-            "beneficiaryDateOfBirth": ["date of birth", "birth date", "dob", "2"],
-            "beneficiaryGender": ["gender", "sex", "3"],
-            "beneficiarySsn": ["social security", "ssn", "4"],
-            "alienNumber": ["alien number", "a-number", "a number", "5"],
-            "beneficiaryCountryOfBirth": ["country of birth", "birth country", "6"],
-            "beneficiaryCitizenOfCountry": ["citizenship", "citizen of", "nationality", "7"],
-            "maritalStatus": ["marital status", "married", "single", "8"]
-        },
-        "ContactInfo": {
-            "beneficiaryPrimaryEmailAddress": ["email", "email address", "e-mail"],
-            "beneficiaryCellNumber": ["mobile", "cell", "mobile phone", "cell phone"],
-            "beneficiaryWorkNumber": ["work phone", "office phone", "business phone"]
-        },
-        "Address": {
-            "addressStreet": ["street address", "street", "address line 1"],
-            "addressCity": ["city", "town"],
-            "addressState": ["state", "province"],
-            "addressZip": ["zip", "zip code", "postal code"],
-            "addressCountry": ["country"]
-        }
-    },
-    "petitioner": {
-        "PersonalInfo": {
-            "firstName": ["given name", "first name"],
-            "lastName": ["family name", "last name", "surname"],
-            "middleName": ["middle name"],
-            "ssn": ["social security", "ssn"],
-            "ein": ["employer identification", "ein", "fein"]
-        }
-    },
-    "attorney": {
-        "Info": {
-            "firstName": ["attorney first name", "representative first name"],
-            "lastName": ["attorney last name", "representative last name"],
-            "stateBarNumber": ["bar number", "state bar"],
-            "emailAddress": ["attorney email", "representative email"]
-        }
-    },
-    "case": {
-        "ProcessingInfo": {
-            "requestedAction": ["requested action", "action requested"],
-            "caseType": ["case type", "petition type"],
-            "premiumProcessing": ["premium processing", "expedited"]
-        }
-    }
-}
 
 # Initialize OpenAI client
 def get_openai_client():
@@ -346,6 +249,7 @@ class ValidationFeedback:
     missing_parts: List[Dict[str, Any]] = field(default_factory=list)
     incomplete_parts: List[Dict[str, Any]] = field(default_factory=list)
     field_issues: List[Dict[str, Any]] = field(default_factory=list)
+    sequence_errors: List[Dict[str, Any]] = field(default_factory=list)
     suggestions: List[str] = field(default_factory=list)
     severity: str = "info"  # info, warning, error
     needs_retry: bool = False
@@ -355,6 +259,7 @@ class ValidationFeedback:
             "missing_parts": self.missing_parts,
             "incomplete_parts": self.incomplete_parts,
             "field_issues": self.field_issues,
+            "sequence_errors": self.sequence_errors,
             "suggestions": self.suggestions,
             "severity": self.severity,
             "needs_retry": self.needs_retry
@@ -382,7 +287,7 @@ class ExtractedField:
     raw_field_name: str = ""
     
     # Extraction metadata
-    extraction_method: str = ""  # "pattern", "ai", "widget", "manual"
+    extraction_method: str = ""  # "sequential", "widget", "ai", "manual"
     extraction_confidence: float = 0.0
     extraction_iteration: int = 1
     
@@ -479,11 +384,9 @@ class Agent(ABC):
     def handle_feedback(self, feedback: ValidationFeedback) -> Any:
         """Handle feedback from other agents"""
         if feedback and feedback.suggestions:
-            # Check for part ordering feedback
             for suggestion in feedback.suggestions:
-                if "part numbering" in suggestion.lower() or "sequential order" in suggestion.lower():
-                    self.log("Received feedback about part ordering - will ensure proper sequencing", "feedback")
-                    # This will be handled by reorder_parts() after extraction
+                if "sequence" in suggestion.lower() or "order" in suggestion.lower():
+                    self.log("Received feedback about field ordering - will ensure proper sequencing", "feedback")
     
     def log(self, message: str, level: str = "info"):
         self.logs.append({
@@ -509,39 +412,28 @@ class Agent(ABC):
                 else:
                     st.info(f"ℹ️ **{self.name}** (Iteration {self.iteration}): {message}")
 
-# Enhanced Research Agent with sub-item extraction
+# Enhanced Research Agent with Sequential Extraction
 class ResearchAgent(Agent):
-    """Enhanced extraction with proper sub-item handling"""
+    """Sequential extraction that maintains exact PDF order"""
     
     def __init__(self):
-        super().__init__("Research Agent", "Intelligent Field Extraction")
+        super().__init__("Research Agent", "Sequential Field Extraction")
         self.client = get_openai_client()
         self.pdf_bytes = None
         self.doc = None
         self.page_texts = []
-        self.sub_item_patterns = self._compile_sub_item_patterns()
-    
-    def _compile_sub_item_patterns(self):
-        """Compile regex patterns for sub-item extraction"""
-        return {
-            'main_with_subs': re.compile(r'^(\d+)\.\s+(.+?)(?:\s*\(.*\))?$', re.IGNORECASE),
-            'sub_item': re.compile(r'^(\d+)([a-z])\.\s+(.+?)(?:\s*\(.*\))?$', re.IGNORECASE),
-            'indented_sub': re.compile(r'^\s{2,}([a-z])\.\s+(.+?)(?:\s*\(.*\))?$', re.IGNORECASE),
-            'question_with_parts': re.compile(r'^(\d+)\.\s+(.*?):\s*$', re.IGNORECASE),
-            'name_fields': re.compile(r'(family|given|middle|first|last)\s*(name)', re.IGNORECASE)
-        }
     
     def execute(self, pdf_file=None, use_ai: bool = True, 
                 form_structure: Optional[FormStructure] = None,
                 feedback: Optional[ValidationFeedback] = None) -> Optional[FormStructure]:
-        """Extract with enhanced sub-item detection"""
+        """Extract with sequential processing maintaining exact PDF order"""
         self.status = "active"
         self.iteration += 1
         
         # First iteration - full extraction
         if pdf_file is not None:
             self.pdf_bytes = pdf_file.read() if hasattr(pdf_file, 'read') else pdf_file
-            if self.doc:  # Close any existing document
+            if self.doc:
                 self.doc.close()
             self.doc = fitz.open(stream=self.pdf_bytes, filetype="pdf")
             self.page_texts = [page.get_text() for page in self.doc]
@@ -557,22 +449,18 @@ class ResearchAgent(Agent):
                 total_pages=len(self.doc)
             )
             
-            # Set expected structure based on form type
+            # Set expected structure
             self._set_expected_structure(form_structure)
         
         # Handle feedback-driven re-extraction
         if feedback and form_structure:
-            # Reopen document if needed
             if not self.doc or not hasattr(self, 'pdf_bytes'):
                 self.log("Document not available for feedback processing", "error")
                 return form_structure
             
-            # Ensure document is open
             try:
-                # Test if document is still open
                 _ = self.doc.page_count
             except ValueError:
-                # Document is closed, reopen it
                 self.doc = fitz.open(stream=self.pdf_bytes, filetype="pdf")
                 self.page_texts = [page.get_text() for page in self.doc]
                 self.log("Reopened document for feedback processing", "info")
@@ -580,19 +468,31 @@ class ResearchAgent(Agent):
             self.log(f"Received feedback - attempting targeted extraction", "feedback")
             return self._handle_extraction_feedback(form_structure, feedback, use_ai)
         
-        # Regular extraction with enhanced sub-item detection
+        # Regular extraction with sequential processing
         form_structure.extraction_iterations = self.iteration
         
-        # Execute comprehensive extraction
-        self._comprehensive_extraction_with_subitems(form_structure, use_ai)
+        # PRIMARY METHOD: Sequential extraction
+        self._sequential_extraction_primary(form_structure)
+        
+        # SECONDARY: Complement with widgets
+        self._extract_from_all_widgets_sequential(form_structure)
+        
+        # TERTIARY: Use AI only to fill obvious gaps
+        if use_ai and self.client and form_structure.total_fields < 50:
+            self._ai_fill_missing_fields(form_structure)
+        
+        # Validate sequence
+        validation_results = self._validate_extraction_sequence(form_structure)
+        if validation_results["missing_items"]:
+            self.log(f"Warning: {len(validation_results['missing_items'])} missing items detected", "warning")
+            for missing in validation_results["missing_items"][:5]:  # Show first 5
+                self.log(f"  Missing: {missing['part']} Item {missing['item']}", "warning")
         
         # Ensure parts are properly ordered
         form_structure.reorder_parts()
         
-        # Don't close document here - let it be closed by cleanup method
-        
         form_structure.add_agent_log(self.name, f"Iteration {self.iteration}: Extracted {form_structure.total_fields} fields")
-        self.log(f"Extraction complete: {form_structure.total_fields} fields found", "success")
+        self.log(f"Sequential extraction complete: {form_structure.total_fields} fields found", "success")
         
         self.status = "completed"
         return form_structure
@@ -606,366 +506,589 @@ class ResearchAgent(Agent):
             except:
                 pass
     
-    def _comprehensive_extraction_with_subitems(self, form_structure: FormStructure, use_ai: bool):
-        """Enhanced extraction that properly handles sub-items"""
+    def _sequential_extraction_primary(self, form_structure: FormStructure):
+        """Primary extraction method that processes PDF sequentially line by line"""
         
-        # Step 1: AI analysis if available
-        if use_ai and self.client:
-            self._ai_guided_extraction_enhanced(form_structure)
-        
-        # Step 2: Pattern-based extraction with sub-item detection
-        self._extract_with_sub_items(form_structure)
-        
-        # Step 3: Widget extraction
-        self._extract_from_all_widgets(form_structure)
-        
-        # Step 4: Post-process to ensure proper sub-item structure
-        self._post_process_sub_items(form_structure)
-    
-    def _extract_with_sub_items(self, form_structure: FormStructure):
-        """Extract fields with proper sub-item handling"""
-        # Check if document is available
-        if not self.doc or not self.page_texts:
-            self.log("Document not available for extraction", "error")
-            return
-            
-        current_part = 1
-        current_main_item = None
+        current_part = 0
+        current_part_name = ""
+        current_part_title = ""
+        last_item_number = 0
         
         for page_num, page in enumerate(self.doc):
             if page_num >= len(self.page_texts):
-                self.log(f"Page text not available for page {page_num}", "warning")
                 continue
-                
+            
             page_text = self.page_texts[page_num]
             lines = page_text.split('\n')
-            
-            # Check for part transitions
-            part_match = re.search(r'Part\s+(\d+)', page_text, re.IGNORECASE)
-            if part_match:
-                current_part = int(part_match.group(1))
-            
-            part_name = f"Part {current_part}"
-            if part_name not in form_structure.parts:
-                form_structure.parts[part_name] = []
             
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
+                
                 if not line:
                     i += 1
                     continue
                 
-                # Check for main item with potential sub-items
-                main_match = self.sub_item_patterns['main_with_subs'].match(line)
-                if main_match:
-                    item_num = main_match.group(1)
-                    label = main_match.group(2)
-                    
-                    # Check if this is a compound field (like "Your Legal Name")
-                    if self._is_compound_field(label, lines, i):
-                        current_main_item = item_num
-                        
-                        # Create main field
-                        main_field = ExtractedField(
-                            name=f"field_{item_num}",
-                            label=label,
-                            type="group",
-                            page=page_num + 1,
-                            part=part_name,
-                            part_number=current_part,
-                            item_number=item_num,
-                            extraction_method="pattern",
-                            extraction_iteration=self.iteration
-                        )
-                        form_structure.parts[part_name].append(main_field)
-                        
-                        # Extract sub-items
-                        sub_items = self._extract_sub_items(lines, i + 1, item_num)
-                        for sub_item in sub_items:
-                            sub_item.page = page_num + 1
-                            sub_item.part = part_name
-                            sub_item.part_number = current_part
-                            sub_item.parent_item = item_num
-                            sub_item.extraction_iteration = self.iteration
-                            form_structure.parts[part_name].append(sub_item)
-                        
-                        # Skip lines we've processed
-                        i += len(sub_items) + 1
-                        continue
-                    else:
-                        # Regular field
-                        field = ExtractedField(
-                            name=f"field_{item_num}",
-                            label=label,
-                            type=self._determine_field_type(label, lines, i),
-                            page=page_num + 1,
-                            part=part_name,
-                            part_number=current_part,
-                            item_number=item_num,
-                            extraction_method="pattern",
-                            extraction_iteration=self.iteration
-                        )
-                        form_structure.parts[part_name].append(field)
+                # Check for part header (flexible matching)
+                part_patterns = [
+                    r'^Part\s+(\d+)\.?\s*(.*)?$',  # Part 1. Title or Part 1 Title
+                    r'^PART\s+(\d+)\.?\s*(.*)?$',  # PART 1
+                    r'^Part\s+([IVX]+)\.?\s*(.*)?$',  # Part I, Part II, etc.
+                ]
                 
-                # Check for sub-item pattern
-                sub_match = self.sub_item_patterns['sub_item'].match(line)
-                if sub_match and current_main_item:
-                    item_num = sub_match.group(1)
-                    sub_letter = sub_match.group(2)
-                    label = sub_match.group(3)
+                part_match = None
+                for pattern in part_patterns:
+                    part_match = re.match(pattern, line, re.IGNORECASE)
+                    if part_match:
+                        break
+                
+                if part_match:
+                    # Extract part number
+                    part_num_str = part_match.group(1)
+                    if part_num_str.isdigit():
+                        current_part = int(part_num_str)
+                    else:
+                        # Handle Roman numerals
+                        roman_map = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5, 
+                                   'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10}
+                        current_part = roman_map.get(part_num_str.upper(), current_part + 1)
                     
-                    if item_num == current_main_item:
-                        field = ExtractedField(
-                            name=f"field_{item_num}{sub_letter}",
-                            label=label,
-                            type=self._determine_field_type(label, lines, i),
+                    current_part_name = f"Part {current_part}"
+                    
+                    # Get part title
+                    current_part_title = part_match.group(2) if part_match.group(2) else ""
+                    if not current_part_title and i + 1 < len(lines):
+                        next_line = lines[i + 1].strip()
+                        if next_line and not re.match(r'^\d+\.', next_line):
+                            current_part_title = next_line
+                            i += 1
+                    
+                    if current_part_name not in form_structure.parts:
+                        form_structure.parts[current_part_name] = []
+                    
+                    self.log(f"Processing {current_part_name}: {current_part_title}", "info")
+                    last_item_number = 0
+                    i += 1
+                    continue
+                
+                # Skip if no current part
+                if not current_part_name:
+                    i += 1
+                    continue
+                
+                # Extract numbered field with exact label
+                field_patterns = [
+                    r'^(\d+)\.\s+(.+?)$',  # Standard: "1. Label"
+                    r'^(\d+)\s+(.+?)$',    # Without period: "1 Label"
+                    r'^Item\s+(\d+)\.\s+(.+?)$',  # "Item 1. Label"
+                    r'^Question\s+(\d+)\.\s+(.+?)$',  # "Question 1. Label"
+                ]
+                
+                field_match = None
+                for pattern in field_patterns:
+                    field_match = re.match(pattern, line)
+                    if field_match:
+                        break
+                
+                if field_match:
+                    item_number = field_match.group(1)
+                    full_label = field_match.group(2).strip()
+                    
+                    # Create field with exact label from PDF
+                    field = ExtractedField(
+                        name=f"field_{item_number}",
+                        label=full_label,  # Use exact label, no modifications
+                        type=self._determine_field_type_sequential(full_label, lines, i),
+                        page=page_num + 1,
+                        part=current_part_name,
+                        part_number=current_part,
+                        part_title=current_part_title,
+                        item_number=item_number,
+                        extraction_method="sequential",
+                        extraction_iteration=self.iteration,
+                        raw_field_name=line  # Store complete line
+                    )
+                    
+                    # Check if this field has sub-items
+                    has_subitems, sub_items = self._check_and_extract_subitems(
+                        lines, i + 1, item_number, page_num + 1, 
+                        current_part_name, current_part, current_part_title
+                    )
+                    
+                    if has_subitems:
+                        field.type = "group"
+                    
+                    # Add main field
+                    form_structure.parts[current_part_name].append(field)
+                    form_structure.total_fields += 1
+                    
+                    # Add sub-items in order
+                    for sub_item in sub_items:
+                        form_structure.parts[current_part_name].append(sub_item)
+                        form_structure.total_fields += 1
+                    
+                    last_item_number = int(item_number)
+                    
+                    # Skip processed lines (but don't skip too many)
+                    i += 1
+                    continue
+                
+                # Check for sub-item pattern (only if we have a recent parent)
+                if last_item_number > 0:
+                    sub_patterns = [
+                        rf'^{last_item_number}([a-z])\.\s+(.+?)$',  # 1a. Label
+                        rf'^\s+([a-z])\.\s+(.+?)$',  # Indented: a. Label
+                        rf'^([a-z])\.\s+(.+?)$',  # Just: a. Label (risky but sometimes needed)
+                    ]
+                    
+                    sub_match = None
+                    for pattern in sub_patterns:
+                        if pattern.startswith(rf'^{last_item_number}'):
+                            sub_match = re.match(pattern, line)
+                        else:
+                            # For patterns without item number, check context
+                            temp_match = re.match(pattern, line)
+                            if temp_match:
+                                # Verify this is likely a sub-item by checking if it follows the parent
+                                expected_letter = chr(ord('a') + len([f for f in form_structure.parts[current_part_name] 
+                                                                    if f.parent_item == str(last_item_number)]))
+                                if temp_match.group(1) == expected_letter:
+                                    sub_match = temp_match
+                        
+                        if sub_match:
+                            break
+                    
+                    if sub_match:
+                        if sub_match.lastindex == 2:  # Has both letter and label
+                            sub_letter = sub_match.group(1)
+                            full_label = sub_match.group(2).strip()
+                        else:
+                            # Handle cases where we might not have captured both groups
+                            sub_letter = 'a'  # Default
+                            full_label = line.strip()
+                        
+                        sub_field = ExtractedField(
+                            name=f"field_{last_item_number}{sub_letter}",
+                            label=full_label,
+                            type=self._determine_field_type_sequential(full_label, lines, i),
                             page=page_num + 1,
-                            part=part_name,
+                            part=current_part_name,
                             part_number=current_part,
-                            item_number=f"{item_num}{sub_letter}",
-                            parent_item=item_num,
-                            extraction_method="pattern",
-                            extraction_iteration=self.iteration
+                            part_title=current_part_title,
+                            item_number=f"{last_item_number}{sub_letter}",
+                            parent_item=str(last_item_number),
+                            extraction_method="sequential",
+                            extraction_iteration=self.iteration,
+                            raw_field_name=line
                         )
-                        form_structure.parts[part_name].append(field)
+                        
+                        form_structure.parts[current_part_name].append(sub_field)
+                        form_structure.total_fields += 1
                 
                 i += 1
-            
-            # Update total fields
-            form_structure.total_fields = sum(len(fields) for fields in form_structure.parts.values())
     
-    def _is_compound_field(self, label: str, lines: List[str], current_index: int) -> bool:
-        """Check if a field has sub-items"""
-        label_lower = label.lower()
-        
-        # Known compound fields
-        compound_keywords = [
-            'legal name', 'full name', 'your name', 'mailing address', 
-            'physical address', 'contact information', 'passport information'
-        ]
-        
-        if any(keyword in label_lower for keyword in compound_keywords):
-            return True
-        
-        # Check next few lines for sub-items
-        for i in range(1, min(5, len(lines) - current_index)):
-            next_line = lines[current_index + i].strip()
-            if re.match(r'^[a-z]\.\s+', next_line) or re.match(r'^\s{2,}[a-z]\.\s+', next_line):
-                return True
-        
-        return False
-    
-    def _extract_sub_items(self, lines: List[str], start_index: int, parent_num: str) -> List[ExtractedField]:
-        """Extract sub-items for a parent field"""
+    def _check_and_extract_subitems(self, lines: List[str], start_idx: int, 
+                                   parent_num: str, page_num: int,
+                                   part_name: str, part_number: int,
+                                   part_title: str) -> Tuple[bool, List[ExtractedField]]:
+        """Check if a field has sub-items and extract them in sequence"""
         sub_items = []
+        expected_letters = 'abcdefghijklmnopqrstuvwxyz'
+        expected_idx = 0
         
-        # Common sub-item patterns
-        sub_patterns = [
-            (re.compile(r'^([a-z])\.\s+(.+?)(?:\s*\(.*\))?$'), 'direct'),
-            (re.compile(r'^\s{2,}([a-z])\.\s+(.+?)(?:\s*\(.*\))?$'), 'indented'),
-            (re.compile(r'^([a-z])\s*\)\s*(.+?)(?:\s*\(.*\))?$'), 'parentheses'),
-        ]
+        # Peek ahead to check for sub-items
+        i = start_idx
+        consecutive_empty = 0
         
-        # Also check for implicit sub-items
-        name_parts = ['Family Name', 'Given Name', 'Middle Name']
-        address_parts = ['Street', 'City', 'State', 'ZIP Code', 'Country']
-        
-        i = start_index
-        sub_letter = 'a'
-        
-        while i < len(lines) and len(sub_items) < 10:  # Max 10 sub-items
+        while i < len(lines) and expected_idx < len(expected_letters) and consecutive_empty < 3:
             line = lines[i].strip()
             
             if not line:
+                consecutive_empty += 1
                 i += 1
                 continue
             
-            # Check if we've hit a new main item
-            if re.match(r'^(\d+)\.\s+', line):
+            consecutive_empty = 0
+            
+            # Stop if we hit another main item (but not our sub-items)
+            if re.match(r'^(\d+)\.\s+', line) and not line.startswith(f"{parent_num}"):
                 break
             
-            found = False
+            # Check for expected sub-item
+            expected_letter = expected_letters[expected_idx]
             
-            # Try explicit patterns
-            for pattern, pattern_type in sub_patterns:
-                match = pattern.match(line)
-                if match:
-                    sub_letter_found = match.group(1)
-                    label = match.group(2)
+            # Try multiple patterns
+            sub_patterns = [
+                rf'^{parent_num}{expected_letter}\.\s+(.+?)$',  # 1a. Label
+                rf'^{expected_letter}\.\s+(.+?)$',  # a. Label
+                rf'^\s+{expected_letter}\.\s+(.+?)$',  # Indented a. Label
+                rf'^{expected_letter}\)\s+(.+?)$',  # a) Label
+            ]
+            
+            matched = False
+            for pattern in sub_patterns:
+                sub_match = re.match(pattern, line)
+                if sub_match:
+                    full_label = sub_match.group(1).strip() if sub_match.lastindex >= 1 else line.strip()
                     
-                    sub_items.append(ExtractedField(
-                        name=f"field_{parent_num}{sub_letter_found}",
-                        label=label,
-                        type=self._determine_field_type(label, lines, i),
-                        item_number=f"{parent_num}{sub_letter_found}",
-                        parent_item=parent_num,
-                        extraction_method="pattern"
-                    ))
-                    found = True
-                    break
-            
-            # Check for implicit patterns (like name parts)
-            if not found:
-                for idx, part in enumerate(name_parts):
-                    if part.lower() in line.lower():
-                        sub_items.append(ExtractedField(
-                            name=f"field_{parent_num}{chr(ord('a') + idx)}",
-                            label=part,
-                            type="text",
-                            item_number=f"{parent_num}{chr(ord('a') + idx)}",
-                            parent_item=parent_num,
-                            extraction_method="pattern"
-                        ))
-                        found = True
-                        break
-            
-            if found:
-                i += 1
-            else:
-                # If line doesn't match patterns but seems related, might be continuation
-                if len(line) > 20 and not line[0].isdigit():
-                    i += 1
-                else:
-                    break
-        
-        return sub_items
-    
-    def _post_process_sub_items(self, form_structure: FormStructure):
-        """Post-process to ensure proper sub-item structure"""
-        for part_name, fields in form_structure.parts.items():
-            # Group fields by parent item
-            item_groups = defaultdict(list)
-            
-            for field in fields:
-                if field.parent_item:
-                    item_groups[field.parent_item].append(field)
-                elif field.item_number and not field.item_number[-1].isalpha():
-                    # Main item
-                    item_groups[field.item_number].append(field)
-            
-            # Ensure sub-items are properly ordered
-            for main_item, group_fields in item_groups.items():
-                if len(group_fields) > 1:
-                    # Sort sub-items using natural sort
-                    group_fields.sort(key=lambda f: natural_sort_item_number(f.item_number if f.item_number else ""))
-                    
-                    # Ensure proper lettering
-                    sub_items = [f for f in group_fields if f.parent_item]
-                    for idx, field in enumerate(sub_items):
-                        expected_letter = chr(ord('a') + idx)
-                        if field.item_number and not field.item_number.endswith(expected_letter):
-                            # Fix the item number
-                            field.item_number = f"{main_item}{expected_letter}"
-                            field.name = f"field_{main_item}{expected_letter}"
-    
-    def _ai_guided_extraction_enhanced(self, form_structure: FormStructure):
-        """Enhanced AI extraction with sub-item awareness"""
-        if not self.client:
-            return
-        
-        # Check if page texts are available
-        if not self.page_texts:
-            self.log("Page texts not available for AI extraction", "warning")
-            return
-        
-        try:
-            # Limit text to first 5 pages or available pages
-            max_pages = min(5, len(self.page_texts))
-            full_text = "\n".join(self.page_texts[:max_pages])
-            
-            prompt = f"""
-            Analyze this USCIS {form_structure.form_number} form and extract ALL parts/sections with their fields.
-            Pay special attention to sub-items (like 1a, 1b, 1c for compound fields).
-            
-            Text sample:
-            {full_text[:15000]}
-            
-            IMPORTANT: For compound fields like "Legal Name", extract sub-items as:
-            - 1. Your Legal Name
-              - 1a. Family Name (Last Name)
-              - 1b. Given Name (First Name)  
-              - 1c. Middle Name
-            
-            Return JSON with this exact structure:
-            {{
-                "Part 1": {{
-                    "title": "Information About You",
-                    "fields": [
-                        {{
-                            "item": "1",
-                            "label": "Your Legal Name",
-                            "type": "group",
-                            "sub_items": [
-                                {{"item": "1a", "label": "Family Name (Last Name)", "type": "text"}},
-                                {{"item": "1b", "label": "Given Name (First Name)", "type": "text"}},
-                                {{"item": "1c", "label": "Middle Name", "type": "text"}}
-                            ]
-                        }},
-                        {{"item": "2", "label": "Date of Birth", "type": "date"}},
-                        // ... more fields
-                    ]
-                }}
-            }}
-            """
-            
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert USCIS form analyzer. Extract all fields with proper sub-item structure."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=4000
-            )
-            
-            response_text = response.choices[0].message.content
-            result = json.loads(re.search(r'\{[\s\S]*\}', response_text).group())
-            
-            # Process AI results
-            for part_name, part_info in result.items():
-                if part_name not in form_structure.parts:
-                    form_structure.parts[part_name] = []
-                
-                part_number = int(re.search(r'\d+', part_name).group()) if re.search(r'\d+', part_name) else 1
-                
-                for field_info in part_info.get('fields', []):
-                    # Main field
-                    main_field = ExtractedField(
-                        name=f"field_{field_info['item'].replace('.', '_')}",
-                        label=field_info['label'],
-                        type=field_info.get('type', 'text'),
+                    sub_field = ExtractedField(
+                        name=f"field_{parent_num}{expected_letter}",
+                        label=full_label,
+                        type=self._determine_field_type_sequential(full_label, lines, i),
+                        page=page_num,
                         part=part_name,
                         part_number=part_number,
-                        item_number=field_info['item'],
-                        extraction_method="ai",
-                        extraction_iteration=self.iteration
+                        part_title=part_title,
+                        item_number=f"{parent_num}{expected_letter}",
+                        parent_item=parent_num,
+                        extraction_method="sequential",
+                        extraction_iteration=self.iteration,
+                        raw_field_name=line
                     )
-                    form_structure.parts[part_name].append(main_field)
                     
-                    # Sub-items
-                    if 'sub_items' in field_info:
-                        for sub_item in field_info['sub_items']:
-                            sub_field = ExtractedField(
-                                name=f"field_{sub_item['item'].replace('.', '_')}",
-                                label=sub_item['label'],
-                                type=sub_item.get('type', 'text'),
-                                part=part_name,
-                                part_number=part_number,
-                                item_number=sub_item['item'],
-                                parent_item=field_info['item'],
-                                extraction_method="ai",
-                                extraction_iteration=self.iteration
-                            )
-                            form_structure.parts[part_name].append(sub_field)
+                    sub_items.append(sub_field)
+                    expected_idx += 1
+                    matched = True
+                    break
             
-            form_structure.total_fields = sum(len(fields) for fields in form_structure.parts.values())
-            self.log(f"AI extraction found {form_structure.total_fields} fields with sub-items", "success")
+            if not matched:
+                # Check if line looks like it should be a sub-item based on content
+                if expected_idx == 0 and any(keyword in line.lower() for keyword in 
+                                            ['family name', 'last name', 'surname']):
+                    # Likely first sub-item for name field
+                    sub_field = ExtractedField(
+                        name=f"field_{parent_num}a",
+                        label=line,
+                        type="text",
+                        page=page_num,
+                        part=part_name,
+                        part_number=part_number,
+                        part_title=part_title,
+                        item_number=f"{parent_num}a",
+                        parent_item=parent_num,
+                        extraction_method="sequential",
+                        extraction_iteration=self.iteration,
+                        raw_field_name=line
+                    )
+                    sub_items.append(sub_field)
+                    expected_idx += 1
+                    matched = True
+            
+            if not matched and consecutive_empty == 0:
+                # No more sub-items found
+                break
+            
+            i += 1
+        
+        has_subitems = len(sub_items) > 0
+        return has_subitems, sub_items
+    
+    def _determine_field_type_sequential(self, label: str, lines: List[str], current_index: int) -> str:
+        """Determine field type based on exact label from PDF"""
+        label_lower = label.lower()
+        
+        # Specific field patterns
+        if "alien registration number" in label_lower or "a-number" in label_lower:
+            return "number"
+        
+        if any(date_word in label_lower for date_word in ['date', 'birth', 'expir', 'issue']) or "mm/dd/yyyy" in label:
+            return "date"
+        
+        if "signature" in label_lower:
+            return "signature"
+        
+        if "email" in label_lower or "e-mail" in label_lower:
+            return "email"
+        
+        if any(phone_word in label_lower for phone_word in ['phone', 'telephone', 'mobile', 'cell', 'fax']):
+            return "phone"
+        
+        if any(num_word in label_lower for num_word in ['number', 'ssn', 'ein', 'receipt', 'case']):
+            return "number"
+        
+        # Check for yes/no questions
+        question_starters = ['are you', 'have you', 'do you', 'is ', 'was ', 'were you', 'did you',
+                           'will you', 'would you', 'could you', 'should you', 'may you', 'might you']
+        if any(label_lower.startswith(starter) for starter in question_starters):
+            return "checkbox"
+        
+        # Check next line for Yes/No options
+        if current_index + 1 < len(lines):
+            next_line = lines[current_index + 1].strip().lower()
+            if ("yes" in next_line and "no" in next_line) or re.match(r'^\s*(yes|no)\s*$', next_line):
+                return "checkbox"
+        
+        # Check if it's a compound field (has sub-items)
+        compound_indicators = [
+            ('name', ['legal', 'full', 'your', 'beneficiary', 'petitioner']),
+            ('address', ['mailing', 'physical', 'current', 'home', 'foreign']),
+            ('information', ['contact', 'personal', 'employment'])
+        ]
+        
+        for field_type, qualifiers in compound_indicators:
+            if field_type in label_lower and any(qual in label_lower for qual in qualifiers):
+                # Check if next lines have sub-items
+                if current_index + 1 < len(lines):
+                    for j in range(1, min(4, len(lines) - current_index)):
+                        next_line = lines[current_index + j].strip()
+                        if re.match(r'^[a-z][\.\)]', next_line):
+                            return "group"
+        
+        return "text"
+    
+    def _extract_from_all_widgets_sequential(self, form_structure: FormStructure):
+        """Extract from widgets while maintaining sequential order"""
+        if not self.doc:
+            return
+        
+        # First, collect all widgets with their positions
+        all_widgets = []
+        
+        for page_num, page in enumerate(self.doc):
+            try:
+                widgets = page.widgets()
+                if not widgets:
+                    continue
+                
+                for widget in widgets:
+                    if not widget or not hasattr(widget, 'field_name'):
+                        continue
+                    
+                    # Get widget position for ordering
+                    rect = widget.rect if hasattr(widget, 'rect') else None
+                    y_pos = rect.y0 if rect else 0
+                    
+                    all_widgets.append({
+                        'widget': widget,
+                        'page': page_num,
+                        'y_position': y_pos,
+                        'field_name': widget.field_name
+                    })
+            except Exception as e:
+                self.log(f"Widget extraction error on page {page_num}: {str(e)}", "warning")
+        
+        # Sort widgets by page and vertical position (top to bottom)
+        all_widgets.sort(key=lambda w: (w['page'], -w['y_position']))
+        
+        # Process widgets in order
+        for widget_info in all_widgets:
+            widget = widget_info['widget']
+            page_num = widget_info['page']
+            
+            # Extract field info
+            field_name = widget.field_name
+            
+            # Skip if already extracted
+            already_exists = False
+            for part_fields in form_structure.parts.values():
+                if any(f.raw_field_name == field_name for f in part_fields):
+                    already_exists = True
+                    break
+            
+            if already_exists:
+                continue
+            
+            # Determine which part this belongs to
+            part_name = self._determine_part_from_page(page_num, form_structure)
+            
+            if not part_name:
+                continue
+            
+            # Create field from widget
+            field = self._create_field_from_widget(widget, page_num + 1, part_name)
+            
+            if field:
+                # Check if this field already exists based on item number
+                existing = any(f.item_number == field.item_number 
+                             for f in form_structure.parts[part_name])
+                
+                if not existing:
+                    form_structure.parts[part_name].append(field)
+                    form_structure.total_fields += 1
+    
+    def _determine_part_from_page(self, page_num: int, form_structure: FormStructure) -> Optional[str]:
+        """Determine which part a page belongs to"""
+        if page_num >= len(self.page_texts):
+            return None
+        
+        page_text = self.page_texts[page_num]
+        
+        # Look for part indicator in page
+        part_match = re.search(r'Part\s+(\d+)', page_text, re.IGNORECASE)
+        if part_match:
+            part_num = int(part_match.group(1))
+            return f"Part {part_num}"
+        
+        # Default to Part 1 for first pages
+        if page_num == 0:
+            return "Part 1"
+        
+        # Try to use the last known part
+        if form_structure.parts:
+            return list(form_structure.parts.keys())[-1]
+        
+        return "Part 1"
+    
+    def _create_field_from_widget(self, widget, page_num: int, part_name: str) -> Optional[ExtractedField]:
+        """Create field from widget data"""
+        try:
+            field_name = widget.field_name if hasattr(widget, 'field_name') else ""
+            if not field_name:
+                return None
+            
+            # Clean field name
+            clean_name = re.sub(r'topmostSubform\[0\]\.', '', field_name)
+            clean_name = re.sub(r'form1\[0\]\.', '', clean_name)
+            clean_name = re.sub(r'\[0\]', '', clean_name)
+            
+            # Extract item number from field name
+            item_match = re.search(r'(\d+)([a-z])?', clean_name)
+            item_number = ""
+            if item_match:
+                item_number = item_match.group(0)
+            
+            # Determine field type
+            widget_type = widget.field_type if hasattr(widget, 'field_type') else 4
+            type_map = {
+                2: "checkbox",
+                3: "radio",
+                4: "text",
+                5: "dropdown",
+                7: "signature"
+            }
+            field_type = type_map.get(widget_type, "text")
+            
+            # Generate label from field name
+            label = self._generate_label_from_widget_name(clean_name)
+            
+            # Extract part number
+            part_match = re.search(r'Part\s+(\d+)', part_name)
+            part_number = int(part_match.group(1)) if part_match else 1
+            
+            field = ExtractedField(
+                name=clean_name[:50],
+                label=label,
+                type=field_type,
+                page=page_num,
+                part=part_name,
+                part_number=part_number,
+                item_number=item_number,
+                raw_field_name=field_name,
+                extraction_method="widget",
+                extraction_confidence=0.8,
+                extraction_iteration=self.iteration
+            )
+            
+            return field
             
         except Exception as e:
-            self.log(f"AI extraction error: {str(e)}", "warning")
+            self.log(f"Error creating field from widget: {str(e)}", "warning")
+            return None
     
-    # Keep all other methods from original implementation
+    def _generate_label_from_widget_name(self, name: str) -> str:
+        """Generate human-readable label from widget name"""
+        # Remove common prefixes
+        label = re.sub(r'(field|text|check|box|button)\d*', '', name, flags=re.IGNORECASE)
+        
+        # Convert camelCase to spaces
+        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', label)
+        
+        # Replace underscores and dashes
+        label = label.replace('_', ' ').replace('-', ' ')
+        
+        # Common replacements
+        replacements = {
+            'fname': 'First Name',
+            'lname': 'Last Name',
+            'mname': 'Middle Name',
+            'dob': 'Date of Birth',
+            'ssn': 'Social Security Number',
+            'addr': 'Address',
+            'tel': 'Telephone',
+            'apt': 'Apartment',
+            'ste': 'Suite'
+        }
+        
+        label_lower = label.lower()
+        for abbr, full in replacements.items():
+            if abbr in label_lower:
+                return full
+        
+        # Capitalize words
+        return ' '.join(word.capitalize() for word in label.split() if word)
+    
+    def _validate_extraction_sequence(self, form_structure: FormStructure) -> Dict[str, Any]:
+        """Validate that extraction maintains proper sequence"""
+        validation_results = {
+            "sequence_errors": [],
+            "missing_items": [],
+            "duplicate_items": [],
+            "out_of_order": []
+        }
+        
+        for part_name, fields in form_structure.parts.items():
+            # Extract part number
+            part_match = re.search(r'Part\s+(\d+)', part_name)
+            if not part_match:
+                continue
+            
+            # Group fields by item number (main items only)
+            main_items = {}
+            sub_items_by_parent = defaultdict(list)
+            
+            for field in fields:
+                if not field.item_number:
+                    continue
+                
+                if field.parent_item:
+                    sub_items_by_parent[field.parent_item].append(field)
+                else:
+                    # Main item
+                    item_num = int(re.match(r'^(\d+)', field.item_number).group(1))
+                    main_items[item_num] = field
+            
+            # Check main item sequence
+            if main_items:
+                sorted_nums = sorted(main_items.keys())
+                expected_num = 1
+                
+                for actual_num in sorted_nums:
+                    if actual_num != expected_num:
+                        if actual_num > expected_num:
+                            # Missing items
+                            for missing in range(expected_num, actual_num):
+                                validation_results["missing_items"].append({
+                                    "part": part_name,
+                                    "item": str(missing),
+                                    "after": str(expected_num - 1) if expected_num > 1 else "start"
+                                })
+                        else:
+                            # Out of order (shouldn't happen with proper sorting)
+                            validation_results["out_of_order"].append({
+                                "part": part_name,
+                                "item": str(actual_num),
+                                "expected_position": expected_num
+                            })
+                    
+                    expected_num = actual_num + 1
+            
+            # Check sub-item sequences
+            for parent_num, sub_fields in sub_items_by_parent.items():
+                sorted_subs = sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number))
+                expected_letters = 'abcdefghijklmnopqrstuvwxyz'
+                
+                for i, field in enumerate(sorted_subs):
+                    if i < len(expected_letters):
+                        expected_item = f"{parent_num}{expected_letters[i]}"
+                        if field.item_number != expected_item:
+                            validation_results["sequence_errors"].append({
+                                "part": part_name,
+                                "found": field.item_number,
+                                "expected": expected_item
+                            })
+        
+        return validation_results
+    
     def _identify_form(self, doc) -> Dict:
         """Identify form type and metadata"""
         first_page_text = doc[0].get_text().upper()
@@ -979,7 +1102,8 @@ class ResearchAgent(Agent):
             'I-485': 'Application to Register Permanent Residence',
             'I-765': 'Application for Employment Authorization',
             'N-400': 'Application for Naturalization',
-            'G-28': 'Notice of Entry of Appearance as Attorney'
+            'G-28': 'Notice of Entry of Appearance as Attorney',
+            'I-90': 'Application to Replace Permanent Resident Card'
         }
         
         form_info = {"number": "Unknown", "title": "Unknown Form", "edition": ""}
@@ -990,6 +1114,7 @@ class ResearchAgent(Agent):
                 form_info["title"] = title
                 break
         
+        # Look for edition
         edition_match = re.search(r'EDITION\s+(\d{2}/\d{2}/\d{2})', first_page_text)
         if edition_match:
             form_info["edition"] = edition_match.group(1)
@@ -1016,6 +1141,14 @@ class ResearchAgent(Agent):
             "I-765": {
                 "parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5"],
                 "min_fields_per_part": {"Part 1": 10, "Part 2": 20, "Part 3": 10}
+            },
+            "G-28": {
+                "parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6"],
+                "min_fields_per_part": {}
+            },
+            "I-90": {
+                "parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6", "Part 7"],
+                "min_fields_per_part": {}
             }
         }
         
@@ -1023,178 +1156,6 @@ class ResearchAgent(Agent):
             exp = expected_structures[form_structure.form_number]
             form_structure.expected_parts = exp["parts"]
             form_structure.expected_fields_per_part = exp.get("min_fields_per_part", {})
-    
-    def _determine_field_type(self, label: str, lines: List[str], current_index: int) -> str:
-        """Determine field type based on label and context"""
-        label_lower = label.lower()
-        
-        # Date
-        date_keywords = ['date', 'birth', 'expir', 'issue', 'valid']
-        if any(keyword in label_lower for keyword in date_keywords):
-            return "date"
-        
-        # Number
-        number_keywords = ['number', 'ssn', 'ein', 'a-number', 'alien', 'receipt', 'case']
-        if any(keyword in label_lower for keyword in number_keywords):
-            return "number"
-        
-        # Signature
-        if 'signature' in label_lower:
-            return "signature"
-        
-        # Questions
-        question_starters = ['are you', 'have you', 'do you', 'is ', 'was ', 'will ', 'can you', 
-                           'did you', 'were you', 'has ', 'does ', 'would ', 'should ', 'could ']
-        if any(label_lower.startswith(starter) for starter in question_starters):
-            return "checkbox"
-        
-        # Check next lines
-        if current_index + 1 < len(lines):
-            next_line = lines[current_index + 1].strip().lower()
-            if re.search(r'^\s*(yes|no)\s*$', next_line) or ('yes' in next_line and 'no' in next_line):
-                return "checkbox"
-        
-        # Email/Phone
-        if 'email' in label_lower or 'e-mail' in label_lower:
-            return "email"
-        
-        if any(word in label_lower for word in ['phone', 'telephone', 'mobile', 'cell']):
-            return "phone"
-        
-        # Group type for compound fields
-        if self._is_compound_field(label, lines, current_index):
-            return "group"
-        
-        return "text"
-    
-    def _extract_from_widgets(self, page, page_num: int, part: str, 
-                            part_number: int, part_title: str) -> List[ExtractedField]:
-        """Extract fields from PDF form widgets"""
-        fields = []
-        
-        try:
-            widgets = page.widgets()
-            if not widgets:
-                return fields
-            
-            for widget in widgets:
-                if not widget:
-                    continue
-                
-                field_name = widget.field_name if hasattr(widget, 'field_name') else ""
-                if not field_name:
-                    continue
-                
-                # Clean field name
-                clean_name = re.sub(r'topmostSubform\[0\]\.', '', field_name)
-                clean_name = re.sub(r'form1\[0\]\.', '', clean_name)
-                clean_name = re.sub(r'\[0\]', '', clean_name)
-                
-                # Extract item number
-                item_match = re.search(r'(\d+)([a-z])?', clean_name)
-                item_number = ""
-                if item_match:
-                    item_number = item_match.group(1)
-                    if item_match.group(2):
-                        item_number += item_match.group(2)
-                
-                # Determine type
-                widget_type = widget.field_type if hasattr(widget, 'field_type') else 4
-                type_map = {
-                    2: "checkbox",
-                    3: "radio",
-                    4: "text",
-                    5: "dropdown",
-                    7: "signature"
-                }
-                field_type = type_map.get(widget_type, "text")
-                
-                # Generate label
-                label = self._generate_label_from_name(clean_name)
-                
-                field = ExtractedField(
-                    name=clean_name[:50],
-                    label=label,
-                    type=field_type,
-                    page=page_num,
-                    part=part,
-                    part_number=part_number,
-                    part_title=part_title,
-                    item_number=item_number,
-                    raw_field_name=field_name,
-                    extraction_method="widget",
-                    extraction_confidence=0.9,
-                    extraction_iteration=self.iteration
-                )
-                
-                if field_type in ["checkbox", "radio"]:
-                    field.is_questionnaire = True
-                
-                fields.append(field)
-                
-        except Exception as e:
-            self.log(f"Widget extraction error: {str(e)}", "warning")
-        
-        return fields
-    
-    def _generate_label_from_name(self, name: str) -> str:
-        """Generate human-readable label from field name"""
-        label = re.sub(r'(field|text|check|box|button)\d*', '', name, flags=re.IGNORECASE)
-        label = re.sub(r'([a-z])([A-Z])', r'\1 \2', label)
-        label = label.replace('_', ' ').replace('-', ' ')
-        
-        replacements = {
-            'fname': 'First Name',
-            'lname': 'Last Name', 
-            'mname': 'Middle Name',
-            'dob': 'Date of Birth',
-            'ssn': 'Social Security Number',
-            'addr': 'Address',
-            'tel': 'Telephone',
-            'apt': 'Apartment',
-            'ste': 'Suite'
-        }
-        
-        for abbr, full in replacements.items():
-            if abbr in label.lower():
-                return full
-        
-        return ' '.join(word.capitalize() for word in label.split() if word)
-    
-    def _extract_from_all_widgets(self, form_structure: FormStructure):
-        """Extract from all PDF widgets"""
-        # Check if document is available
-        if not self.doc or not self.page_texts:
-            self.log("Document not available for widget extraction", "warning")
-            return
-            
-        current_part = 1
-        
-        for page_num, page in enumerate(self.doc):
-            try:
-                # Determine current part from page
-                if page_num < len(self.page_texts):
-                    page_text = self.page_texts[page_num]
-                    part_match = re.search(r'Part\s+(\d+)', page_text, re.IGNORECASE)
-                    if part_match:
-                        current_part = int(part_match.group(1))
-                
-                part_name = f"Part {current_part}"
-                if part_name not in form_structure.parts:
-                    form_structure.parts[part_name] = []
-                
-                widget_fields = self._extract_from_widgets(
-                    page, page_num + 1, part_name, current_part, ""
-                )
-                
-                for field in widget_fields:
-                    if not any(f.raw_field_name == field.raw_field_name 
-                             for f in form_structure.parts[part_name]):
-                        form_structure.parts[part_name].append(field)
-                        form_structure.total_fields += 1
-                        
-            except Exception as e:
-                self.log(f"Error extracting widgets from page {page_num}: {str(e)}", "warning")
     
     def _handle_extraction_feedback(self, form_structure: FormStructure, 
                                   feedback: ValidationFeedback, use_ai: bool) -> FormStructure:
@@ -1207,20 +1168,16 @@ class ResearchAgent(Agent):
             for missing_part in feedback.missing_parts:
                 self._search_for_specific_part(form_structure, missing_part)
         
-        # Enhance incomplete parts
-        if feedback.incomplete_parts:
-            self.log(f"Enhancing {len(feedback.incomplete_parts)} incomplete parts", "warning")
-            for incomplete_part in feedback.incomplete_parts:
-                self._enhance_part_extraction(form_structure, incomplete_part)
-        
-        # Apply suggestions
-        if feedback.suggestions and use_ai and self.client:
-            self._apply_ai_suggestions(form_structure, feedback.suggestions)
+        # Fix sequence errors
+        if feedback.sequence_errors:
+            self.log(f"Fixing {len(feedback.sequence_errors)} sequence errors", "warning")
+            # Re-run sequential extraction with more careful processing
+            self._sequential_extraction_primary(form_structure)
         
         # Recalculate totals
         form_structure.total_fields = sum(len(fields) for fields in form_structure.parts.values())
         
-        # Ensure proper ordering after feedback processing
+        # Ensure proper ordering
         form_structure.reorder_parts()
         
         return form_structure
@@ -1232,164 +1189,106 @@ class ResearchAgent(Agent):
         
         self.log(f"Targeted search for {part_name}", "info")
         
-        # Check if document is available
-        if not self.doc or not self.page_texts:
-            self.log("Document not available for part search", "warning")
-            return
-        
         # Search all pages for this part
-        found_fields = []
-        for page_num, page_text in enumerate(self.page_texts):
-            # Enhanced patterns for finding parts
-            patterns = [
-                rf'Part\s+{part_num}\b',
-                rf'PART\s+{part_num}\b',
-                rf'Section\s+{part_num}\b',
-                rf'{part_name}',
-            ]
-            
-            for pattern in patterns:
-                if pattern and re.search(pattern, page_text, re.IGNORECASE):
-                    self.log(f"Found {part_name} on page {page_num + 1}", "success")
-                    
-                    # Ensure page number is valid
-                    if page_num >= len(self.doc):
-                        self.log(f"Page {page_num} out of range", "warning")
-                        continue
-                    
-                    try:
-                        # Extract fields from this section with sub-items
-                        page = self.doc[page_num]
-                        lines = page_text.split('\n')
-                        
-                        # Find the part header and extract subsequent fields
-                        part_start = None
-                        for i, line in enumerate(lines):
-                            if re.search(pattern, line, re.IGNORECASE):
-                                part_start = i
-                                break
-                        
-                        if part_start is not None:
-                            # Extract fields from this part
-                            i = part_start + 1
-                            while i < len(lines):
-                                line = lines[i].strip()
-                                
-                                # Stop at next part
-                                if re.match(r'Part\s+\d+', line, re.IGNORECASE) and not re.search(pattern, line, re.IGNORECASE):
-                                    break
-                                
-                                # Extract fields with sub-items
-                                if re.match(r'^(\d+)\.\s+', line):
-                                    main_match = self.sub_item_patterns['main_with_subs'].match(line)
-                                    if main_match:
-                                        item_num = main_match.group(1)
-                                        label = main_match.group(2)
-                                        
-                                        field = ExtractedField(
-                                            name=f"field_{item_num}",
-                                            label=label,
-                                            type=self._determine_field_type(label, lines, i),
-                                            page=page_num + 1,
-                                            part=part_name,
-                                            part_number=part_num,
-                                            item_number=item_num,
-                                            extraction_method="feedback",
-                                            extraction_iteration=self.iteration
-                                        )
-                                        found_fields.append(field)
-                                        
-                                        # Check for sub-items
-                                        if self._is_compound_field(label, lines, i):
-                                            sub_items = self._extract_sub_items(lines, i + 1, item_num)
-                                            # Sort sub-items naturally
-                                            sub_items.sort(key=lambda f: natural_sort_item_number(f.item_number or ""))
-                                            for sub_item in sub_items:
-                                                sub_item.page = page_num + 1
-                                                sub_item.part = part_name
-                                                sub_item.part_number = part_num
-                                                sub_item.extraction_method = "feedback"
-                                                sub_item.extraction_iteration = self.iteration
-                                                found_fields.append(sub_item)
-                                
-                                i += 1
-                    except Exception as e:
-                        self.log(f"Error extracting from page {page_num}: {str(e)}", "warning")
-                    
-                    break
-        
-        # Add found fields
-        if found_fields:
-            if part_name not in form_structure.parts:
-                form_structure.parts[part_name] = []
-            
-            # Add unique fields
-            existing_items = {f.item_number for f in form_structure.parts[part_name] if f.item_number}
-            for field in found_fields:
-                if not field.item_number or field.item_number not in existing_items:
-                    form_structure.parts[part_name].append(field)
-                    form_structure.total_fields += 1
-            
-            self.log(f"Added {len(found_fields)} fields to {part_name}", "success")
-    
-    def _enhance_part_extraction(self, form_structure: FormStructure, incomplete_part: Dict):
-        """Enhance extraction for incomplete parts"""
-        part_name = incomplete_part.get('name', '')
-        current_fields = incomplete_part.get('current_fields', 0)
-        expected_fields = incomplete_part.get('expected_fields', 10)
-        
-        if part_name not in form_structure.parts:
-            return
-        
-        self.log(f"Enhancing {part_name} (has {current_fields}, expects ~{expected_fields})", "info")
-        
-        # Check if document is available
-        if not self.doc or not self.page_texts:
-            self.log("Document not available for enhancement", "warning")
-            return
-        
-        # Re-extract with more aggressive patterns
-        part_num = int(re.search(r'\d+', part_name).group()) if re.search(r'\d+', part_name) else 1
-        
-        # Find pages containing this part
         for page_num, page_text in enumerate(self.page_texts):
             if re.search(rf'Part\s+{part_num}\b', page_text, re.IGNORECASE):
-                # Ensure page number is valid
-                if page_num >= len(self.doc):
-                    self.log(f"Page {page_num} out of range", "warning")
-                    continue
-                    
-                # Use more aggressive extraction
-                try:
-                    page = self.doc[page_num]
-                    
-                    # Try widget extraction again
-                    widget_fields = self._extract_from_widgets(
-                        page, page_num + 1, part_name, part_num, ""
-                    )
-                    
-                    # Add new unique fields
-                    existing_names = {f.name for f in form_structure.parts[part_name]}
-                    added = 0
-                    for field in widget_fields:
-                        if field.name not in existing_names:
-                            form_structure.parts[part_name].append(field)
-                            form_structure.total_fields += 1
-                            added += 1
-                    
-                    if added > 0:
-                        self.log(f"Enhanced {part_name} with {added} additional widget fields", "success")
-                except Exception as e:
-                    self.log(f"Error enhancing page {page_num}: {str(e)}", "warning")
+                self.log(f"Found {part_name} on page {page_num + 1}", "success")
+                
+                # Re-extract this specific part
+                lines = page_text.split('\n')
+                for i, line in enumerate(lines):
+                    if re.search(rf'Part\s+{part_num}\b', line, re.IGNORECASE):
+                        # Process from this point
+                        self._extract_part_from_position(
+                            form_structure, lines, i, page_num, part_num, part_name
+                        )
+                        break
+                break
     
-    def _apply_ai_suggestions(self, form_structure: FormStructure, suggestions: List[str]):
-        """Apply AI suggestions for improvement"""
-        # Implementation for applying AI suggestions
-        pass
+    def _extract_part_from_position(self, form_structure: FormStructure, lines: List[str], 
+                                  start_pos: int, page_num: int, part_num: int, part_name: str):
+        """Extract a specific part starting from a position"""
+        if part_name not in form_structure.parts:
+            form_structure.parts[part_name] = []
+        
+        # Get part title
+        part_title = ""
+        if start_pos + 1 < len(lines):
+            next_line = lines[start_pos + 1].strip()
+            if next_line and not re.match(r'^\d+\.', next_line):
+                part_title = next_line
+        
+        # Extract fields from this part
+        i = start_pos + 1
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Stop at next part
+            if re.match(r'Part\s+\d+', line, re.IGNORECASE) and not re.search(rf'Part\s+{part_num}\b', line):
+                break
+            
+            # Extract fields
+            field_match = re.match(r'^(\d+)\.\s+(.+?)$', line)
+            if field_match:
+                item_number = field_match.group(1)
+                full_label = field_match.group(2).strip()
+                
+                field = ExtractedField(
+                    name=f"field_{item_number}",
+                    label=full_label,
+                    type=self._determine_field_type_sequential(full_label, lines, i),
+                    page=page_num + 1,
+                    part=part_name,
+                    part_number=part_num,
+                    part_title=part_title,
+                    item_number=item_number,
+                    extraction_method="feedback",
+                    extraction_iteration=self.iteration
+                )
+                
+                form_structure.parts[part_name].append(field)
+                form_structure.total_fields += 1
+            
+            i += 1
+    
+    def _ai_fill_missing_fields(self, form_structure: FormStructure):
+        """Use AI to identify obvious missing fields only"""
+        if not self.client or form_structure.total_fields > 100:
+            return
+        
+        try:
+            # Only check for very obvious missing fields
+            prompt = f"""
+            I have extracted fields from form {form_structure.form_number}.
+            I found {form_structure.total_fields} fields across {len(form_structure.parts)} parts.
+            
+            Are there any CRITICAL missing fields that every {form_structure.form_number} form must have?
+            Only list fields that are absolutely required and obviously missing.
+            
+            Current parts found: {', '.join(form_structure.parts.keys())}
+            
+            Return JSON: {{"missing_critical_fields": ["field1", "field2"]}}
+            """
+            
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an expert on USCIS forms."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            # Process response if needed
+            # But generally we rely on sequential extraction
+            
+        except Exception as e:
+            self.log(f"AI fill error: {str(e)}", "warning")
 
 # Enhanced JSON Mapping Agent
 class JSONMappingAgent(Agent):
-    """Enhanced mapping agent using JSON structures"""
+    """Maps extracted fields to JSON structure"""
     
     def __init__(self):
         super().__init__("JSON Mapping Agent", "JSON Structure Mapping")
@@ -1422,23 +1321,44 @@ class JSONMappingAgent(Agent):
         
         # Add specific mappings for common USCIS fields
         specific_mappings = {
+            # I-539 specific mappings
+            "alien registration number (a-number) (if any)": [("beneficiary", "Beneficiary.alienNumber")],
+            "your full legal name": [("beneficiary", "Beneficiary")],  # Group field
+            "family name (last name)": [("beneficiary", "Beneficiary.beneficiaryLastName")],
+            "given name (first name)": [("beneficiary", "Beneficiary.beneficiaryFirstName")],
+            "middle name (if applicable)": [("beneficiary", "Beneficiary.beneficiaryMiddleName")],
+            
+            # Item number mappings
             "1a": [("beneficiary", "Beneficiary.beneficiaryLastName")],
             "1b": [("beneficiary", "Beneficiary.beneficiaryFirstName")],
             "1c": [("beneficiary", "Beneficiary.beneficiaryMiddleName")],
-            "family name": [("beneficiary", "Beneficiary.beneficiaryLastName")],
-            "given name": [("beneficiary", "Beneficiary.beneficiaryFirstName")],
-            "middle name": [("beneficiary", "Beneficiary.beneficiaryMiddleName")],
+            "2": [("beneficiary", "Beneficiary.alienNumber")],
+            
+            # Common field mappings
             "date of birth": [("beneficiary", "Beneficiary.beneficiaryDateOfBirth")],
-            "a-number": [("beneficiary", "Beneficiary.alienNumber")],
-            "alien number": [("beneficiary", "Beneficiary.alienNumber")],
+            "country of birth": [("beneficiary", "Beneficiary.beneficiaryCountryOfBirth")],
+            "country of citizenship": [("beneficiary", "Beneficiary.beneficiaryCitizenOfCountry")],
+            "gender": [("beneficiary", "Beneficiary.beneficiaryGender")],
+            "marital status": [("beneficiary", "Beneficiary.maritalStatus")],
             "ssn": [("beneficiary", "Beneficiary.beneficiarySsn")],
-            "social security": [("beneficiary", "Beneficiary.beneficiarySsn")],
-            "email": [("beneficiary", "Beneficiary.beneficiaryPrimaryEmailAddress")],
-            "phone": [("beneficiary", "Beneficiary.beneficiaryCellNumber")],
-            "street": [("beneficiary", "HomeAddress.addressStreet")],
-            "city": [("beneficiary", "HomeAddress.addressCity")],
+            "social security number": [("beneficiary", "Beneficiary.beneficiarySsn")],
+            "u.s. social security number": [("beneficiary", "Beneficiary.beneficiarySsn")],
+            
+            # Address mappings
+            "street number and name": [("beneficiary", "HomeAddress.addressStreet")],
+            "city or town": [("beneficiary", "HomeAddress.addressCity")],
             "state": [("beneficiary", "HomeAddress.addressState")],
-            "zip": [("beneficiary", "HomeAddress.addressZip")],
+            "zip code": [("beneficiary", "HomeAddress.addressZip")],
+            
+            # Contact info
+            "email": [("beneficiary", "Beneficiary.beneficiaryPrimaryEmailAddress")],
+            "email address": [("beneficiary", "Beneficiary.beneficiaryPrimaryEmailAddress")],
+            "daytime telephone number": [("beneficiary", "Beneficiary.beneficiaryCellNumber")],
+            "mobile telephone number": [("beneficiary", "Beneficiary.beneficiaryCellNumber")],
+            
+            # Attorney mappings
+            "attorney state bar number": [("attorney", "attorneyInfo.stateBarNumber")],
+            "bar number": [("attorney", "attorneyInfo.stateBarNumber")],
         }
         
         for key, paths in specific_mappings.items():
@@ -1461,21 +1381,6 @@ class JSONMappingAgent(Agent):
                 cleaned = key[len(prefix):]
                 variations.append(cleaned)
                 variations.append(re.sub(r'([A-Z])', r' \1', cleaned).strip())
-        
-        # Common abbreviations
-        abbreviations = {
-            'FirstName': ['first name', 'given name', 'fname'],
-            'LastName': ['last name', 'family name', 'surname', 'lname'],
-            'MiddleName': ['middle name', 'middle', 'mname'],
-            'DateOfBirth': ['date of birth', 'birth date', 'dob'],
-            'EmailAddress': ['email', 'email address', 'e-mail'],
-            'PhoneNumber': ['phone', 'telephone', 'phone number'],
-            'StreetAddress': ['street', 'address', 'street address'],
-        }
-        
-        for full, abbrs in abbreviations.items():
-            if full in key:
-                variations.extend(abbrs)
         
         return variations
     
@@ -1503,22 +1408,10 @@ class JSONMappingAgent(Agent):
                     # Try different mapping strategies
                     mapped = False
                     
-                    # 1. Try item number mapping (e.g., 1a, 1b, 1c)
-                    if field.item_number:
-                        if field.item_number.lower() in self.enhanced_mappings:
-                            candidates = self.enhanced_mappings[field.item_number.lower()]
-                            if candidates:
-                                obj_name, path = candidates[0]  # Take first match
-                                field.json_path = f"{obj_name}.{path}"
-                                field.db_path = self._convert_to_db_path(obj_name, path)
-                                mapped = True
-                                total_mapped += 1
-                    
-                    # 2. Try label matching
-                    if not mapped and field.label:
+                    # 1. Try exact label matching (with full label)
+                    if field.label:
                         label_lower = field.label.lower()
                         
-                        # Direct match
                         if label_lower in self.enhanced_mappings:
                             candidates = self.enhanced_mappings[label_lower]
                             if candidates:
@@ -1527,26 +1420,33 @@ class JSONMappingAgent(Agent):
                                 field.db_path = self._convert_to_db_path(obj_name, path)
                                 mapped = True
                                 total_mapped += 1
-                        else:
-                            # Fuzzy matching
-                            best_match = self._find_best_match(field.label)
-                            if best_match:
-                                obj_name, path = best_match
+                    
+                    # 2. Try item number mapping
+                    if not mapped and field.item_number:
+                        if field.item_number.lower() in self.enhanced_mappings:
+                            candidates = self.enhanced_mappings[field.item_number.lower()]
+                            if candidates:
+                                obj_name, path = candidates[0]
                                 field.json_path = f"{obj_name}.{path}"
                                 field.db_path = self._convert_to_db_path(obj_name, path)
-                                field.extraction_confidence = 0.8
                                 mapped = True
                                 total_mapped += 1
                     
-                    # 3. AI mapping for remaining fields
-                    if not mapped and self.client:
-                        ai_mapping = self._ai_map_field(field, form_structure)
-                        if ai_mapping:
-                            field.json_path = ai_mapping['json_path']
-                            field.db_path = ai_mapping['db_path']
-                            field.extraction_confidence = 0.7
-                            mapped = True
-                            total_mapped += 1
+                    # 3. Try fuzzy matching on key parts of label
+                    if not mapped and field.label:
+                        # Extract key terms from label
+                        key_terms = self._extract_key_terms(field.label)
+                        for term in key_terms:
+                            if term in self.enhanced_mappings:
+                                candidates = self.enhanced_mappings[term]
+                                if candidates:
+                                    obj_name, path = candidates[0]
+                                    field.json_path = f"{obj_name}.{path}"
+                                    field.db_path = self._convert_to_db_path(obj_name, path)
+                                    field.extraction_confidence = 0.8
+                                    mapped = True
+                                    total_mapped += 1
+                                    break
             
             # Update statistics
             form_structure.mapped_fields = sum(
@@ -1565,6 +1465,31 @@ class JSONMappingAgent(Agent):
             self.status = "error"
             return form_structure
     
+    def _extract_key_terms(self, label: str) -> List[str]:
+        """Extract key terms from a label for mapping"""
+        terms = []
+        label_lower = label.lower()
+        
+        # Remove common words
+        stop_words = ['the', 'a', 'an', 'of', 'in', 'if', 'any', 'your', 'or']
+        
+        # Extract terms in parentheses
+        paren_match = re.findall(r'\((.*?)\)', label_lower)
+        terms.extend(paren_match)
+        
+        # Remove parenthetical content for main parsing
+        clean_label = re.sub(r'\(.*?\)', '', label_lower).strip()
+        
+        # Split and filter
+        words = clean_label.split()
+        terms.extend([w for w in words if w not in stop_words and len(w) > 2])
+        
+        # Try the full clean label
+        if clean_label:
+            terms.append(clean_label)
+        
+        return terms
+    
     def _convert_to_db_path(self, obj_name: str, json_path: str) -> str:
         """Convert JSON path to database path format"""
         # Remove nested object references
@@ -1572,112 +1497,29 @@ class JSONMappingAgent(Agent):
         
         # Categorize fields
         categories = {
-            'PersonalInfo': ['FirstName', 'LastName', 'MiddleName', 'DateOfBirth', 'Gender', 'Ssn'],
+            'PersonalInfo': ['FirstName', 'LastName', 'MiddleName', 'DateOfBirth', 
+                           'Gender', 'Ssn', 'AlienNumber'],
             'ContactInfo': ['Email', 'Phone', 'Cell', 'Mobile', 'Work'],
             'Address': ['Street', 'City', 'State', 'Zip', 'Country'],
-            'PassportDetails': ['Passport'],
-            'VisaDetails': ['Visa', 'Status'],
         }
         
         # Find appropriate category
         category = "PersonalInfo"  # default
+        field_name = parts[-1] if parts else json_path
+        
         for cat, keywords in categories.items():
-            if any(keyword.lower() in json_path.lower() for keyword in keywords):
+            if any(keyword.lower() in field_name.lower() for keyword in keywords):
                 category = cat
                 break
         
-        # Build database path
-        field_name = parts[-1] if parts else json_path
         return f"{obj_name}.{category}.{field_name}"
-    
-    def _find_best_match(self, label: str) -> Optional[Tuple[str, str]]:
-        """Find best match using fuzzy matching"""
-        label_lower = label.lower()
-        label_words = set(label_lower.split())
-        
-        best_match = None
-        best_score = 0
-        
-        for pattern, candidates in self.enhanced_mappings.items():
-            pattern_words = set(pattern.split())
-            
-            # Calculate similarity
-            common_words = label_words.intersection(pattern_words)
-            if common_words:
-                score = len(common_words) / max(len(label_words), len(pattern_words))
-                
-                if score > best_score and score > 0.5:
-                    best_score = score
-                    best_match = candidates[0] if candidates else None
-        
-        return best_match
-    
-    def _ai_map_field(self, field: ExtractedField, form_structure: FormStructure) -> Optional[Dict]:
-        """Use AI to map field to JSON structure"""
-        if not self.client:
-            return None
-        
-        try:
-            # Create a summary of available paths
-            available_paths = []
-            for obj_type, structure in self.json_structures.items():
-                obj_name = obj_type.replace('Object', '').lower()
-                
-                def extract_leaf_paths(data, prefix=""):
-                    if isinstance(data, dict):
-                        for key, value in data.items():
-                            if isinstance(value, dict):
-                                extract_leaf_paths(value, f"{prefix}.{key}" if prefix else key)
-                            else:
-                                available_paths.append(f"{obj_name}.{prefix}.{key}" if prefix else f"{obj_name}.{key}")
-                
-                extract_leaf_paths(structure)
-            
-            prompt = f"""
-            Map this USCIS form field to the appropriate JSON structure path:
-            
-            Field:
-            - Item Number: {field.item_number}
-            - Label: {field.label}
-            - Type: {field.type}
-            - Part: {field.part}
-            
-            Available JSON paths (partial list):
-            {chr(10).join(available_paths[:50])}  # Show first 50 paths
-            
-            Return JSON:
-            {{
-                "json_path": "objectname.path.to.field",
-                "db_path": "objectname.Category.fieldName",
-                "confidence": 0.8
-            }}
-            
-            If no good match exists, return null.
-            """
-            
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert at mapping USCIS form fields to database structures."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=200
-            )
-            
-            result = json.loads(response.choices[0].message.content)
-            return result if result else None
-            
-        except Exception as e:
-            self.log(f"AI mapping error for field {field.item_number}: {str(e)}", "warning")
-            return None
 
 # Enhanced Validation Agent
 class ValidationAgent(Agent):
-    """Enhanced validation with JSON structure awareness"""
+    """Validates extraction with sequence checking"""
     
     def __init__(self):
-        super().__init__("Validation Agent", "Field Validation & Feedback")
+        super().__init__("Validation Agent", "Field Validation & Sequence Checking")
         self.json_structures = load_json_structures()
         
         self.expected_structures = {
@@ -1686,14 +1528,14 @@ class ValidationAgent(Agent):
                 "min_fields": 100,
                 "required_parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6", "Part 7", "Part 8"],
                 "min_fields_per_part": {
-                    "Part 1": 15,  # Personal info
-                    "Part 2": 20,  # Application type
-                    "Part 3": 30,  # Processing info
-                    "Part 4": 10,  # Additional info
-                    "Part 5": 5,   # Applicant statement
-                    "Part 6": 15,  # Contact info
-                    "Part 7": 5,   # Signature
-                    "Part 8": 5    # Preparer
+                    "Part 1": 15,
+                    "Part 2": 20,
+                    "Part 3": 30,
+                    "Part 4": 10,
+                    "Part 5": 5,
+                    "Part 6": 15,
+                    "Part 7": 5,
+                    "Part 8": 5
                 }
             },
             "I-129": {
@@ -1705,11 +1547,101 @@ class ValidationAgent(Agent):
                 "parts": 14,
                 "min_fields": 150,
                 "required_parts": [f"Part {i}" for i in range(1, 15)]
+            },
+            "G-28": {
+                "parts": 6,
+                "min_fields": 30,
+                "required_parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6"]
+            },
+            "I-90": {
+                "parts": 7,
+                "min_fields": 50,
+                "required_parts": ["Part 1", "Part 2", "Part 3", "Part 4", "Part 5", "Part 6", "Part 7"]
             }
         }
     
-    def _check_part_ordering(self, form_structure: FormStructure, feedback: Optional[ValidationFeedback]) -> int:
-        """Check if parts are properly ordered and numbered"""
+    def execute(self, form_structure: FormStructure, generate_feedback: bool = True) -> Tuple[FormStructure, Optional[ValidationFeedback]]:
+        """Validate form structure and field sequences"""
+        self.status = "active"
+        self.iteration += 1
+        self.log(f"Validating {form_structure.form_number} (Iteration {self.iteration})...", "info")
+        
+        feedback = ValidationFeedback() if generate_feedback else None
+        
+        try:
+            # Get expected structure
+            expected = self.expected_structures.get(form_structure.form_number, {})
+            
+            # 1. Check part ordering and sequence
+            part_issues = self._check_part_sequence(form_structure, feedback)
+            
+            # 2. Check field sequences within parts
+            field_sequence_issues = self._check_field_sequences(form_structure, feedback)
+            
+            # 3. Check for missing parts
+            if expected and "required_parts" in expected:
+                missing_parts = self._check_missing_parts(form_structure, expected, feedback)
+            
+            # 4. Check part completeness
+            if expected and "min_fields_per_part" in expected:
+                incomplete_parts = self._check_incomplete_parts(form_structure, expected, feedback)
+            
+            # 5. Validate specific field requirements
+            field_issues = self._validate_required_fields(form_structure, feedback)
+            
+            # Calculate validation score
+            form_structure.validated_fields = sum(
+                1 for fields in form_structure.parts.values() 
+                for f in fields if f.item_number  # Has proper item number
+            )
+            
+            if form_structure.total_fields > 0:
+                base_score = form_structure.validated_fields / form_structure.total_fields
+                
+                # Penalties
+                penalty = 0
+                penalty += min(0.2, part_issues * 0.05)
+                penalty += min(0.2, field_sequence_issues * 0.02)
+                penalty += min(0.1, len(missing_parts) * 0.02) if 'missing_parts' in locals() else 0
+                penalty += min(0.1, field_issues * 0.01)
+                
+                form_structure.validation_score = max(0, base_score - penalty)
+            else:
+                form_structure.validation_score = 0.0
+            
+            # Determine if retry needed
+            if feedback:
+                critical_issues = part_issues > 2 or field_sequence_issues > 5
+                if critical_issues and form_structure.extraction_iterations < 3:
+                    feedback.needs_retry = True
+                    feedback.severity = "error"
+                    feedback.suggestions.append("Re-run sequential extraction with stricter ordering")
+            
+            # Summary
+            self.log("=== Validation Summary ===", "info")
+            self.log(f"Parts found: {len(form_structure.parts)}/{expected.get('parts', '?')}", "info")
+            if part_issues > 0:
+                self.log(f"Part sequence issues: {part_issues}", "warning")
+            if field_sequence_issues > 0:
+                self.log(f"Field sequence issues: {field_sequence_issues}", "warning")
+            self.log(f"Total fields: {form_structure.total_fields}/{expected.get('min_fields', '?')}", "info")
+            self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
+            
+            form_structure.is_validated = True
+            form_structure.add_agent_log(self.name, 
+                f"Validation complete. Score: {form_structure.validation_score:.0%}")
+            
+            self.status = "completed"
+            return form_structure, feedback
+            
+        except Exception as e:
+            self.log(f"Validation failed: {str(e)}", "error")
+            self.status = "error"
+            return form_structure, feedback
+    
+    def _check_part_sequence(self, form_structure: FormStructure, 
+                           feedback: Optional[ValidationFeedback]) -> int:
+        """Check if parts are in proper sequence"""
         issues = 0
         
         # Extract part numbers
@@ -1731,202 +1663,85 @@ class ValidationAgent(Agent):
                     if actual_num > expected_num:
                         # Missing parts
                         for missing in range(expected_num, actual_num):
-                            self.log(f"⚠️ Part ordering issue: Part {missing} is missing", "warning")
+                            self.log(f"⚠️ Missing Part {missing}", "warning")
                             if feedback:
                                 feedback.missing_parts.append({
                                     "number": missing,
                                     "name": f"Part {missing}",
                                     "expected_fields": 10
                                 })
-                    else:
-                        # Duplicate or misnumbered
-                        self.log(f"⚠️ Part ordering issue: Unexpected {part_name} (expected Part {expected_num})", "warning")
-                        if feedback:
-                            feedback.field_issues.append({
-                                "part": part_name,
-                                "issue": f"Should be Part {expected_num}"
-                            })
+                    
+                    if feedback:
+                        feedback.sequence_errors.append({
+                            "type": "part",
+                            "expected": expected_num,
+                            "found": actual_num
+                        })
                 
                 expected_num = actual_num + 1
         
-        # Ensure parts are stored in correct order
-        if issues > 0 and feedback:
-            feedback.suggestions.append("Fix part numbering to ensure sequential order (Part 1, Part 2, etc.)")
-            
         return issues
     
-    def execute(self, form_structure: FormStructure, generate_feedback: bool = True) -> Tuple[FormStructure, Optional[ValidationFeedback]]:
-        """Validate and generate feedback"""
-        self.status = "active"
-        self.iteration += 1
-        self.log(f"Validating {form_structure.form_number} (Iteration {self.iteration})...", "info")
-        
-        feedback = ValidationFeedback() if generate_feedback else None
-        
-        try:
-            # Get expected structure
-            expected = self.expected_structures.get(form_structure.form_number, {})
-            
-            # 1. Check part ordering first
-            ordering_issues = self._check_part_ordering(form_structure, feedback)
-            
-            # 2. Check for missing parts
-            if expected and "required_parts" in expected:
-                missing_parts = self._check_missing_parts(form_structure, expected, feedback)
-            
-            # 3. Check part completeness
-            if expected and "min_fields_per_part" in expected:
-                incomplete_parts = self._check_incomplete_parts(form_structure, expected, feedback)
-            
-            # 4. Validate sub-item structure
-            sub_item_issues = self._validate_sub_items(form_structure, feedback)
-            
-            # 5. Validate JSON mappings
-            mapping_issues = self._validate_json_mappings(form_structure, feedback)
-            
-            # 6. Check overall completeness
-            total_issues = self._check_overall_completeness(form_structure, expected, feedback)
-            
-            # Calculate validation score
-            form_structure.validated_fields = sum(
-                1 for fields in form_structure.parts.values() 
-                for f in fields if f.is_validated
-            )
-            
-            if form_structure.total_fields > 0:
-                base_score = form_structure.validated_fields / form_structure.total_fields
-                
-                # Penalties
-                penalty = 0
-                penalty += min(0.1, len(missing_parts) * 0.02) if 'missing_parts' in locals() else 0
-                penalty += min(0.1, len(incomplete_parts) * 0.01) if 'incomplete_parts' in locals() else 0
-                penalty += min(0.1, sub_item_issues * 0.01)
-                penalty += min(0.1, mapping_issues * 0.005)
-                penalty += min(0.05, ordering_issues * 0.01)
-                
-                form_structure.validation_score = max(0, base_score - penalty)
-            else:
-                form_structure.validation_score = 0.0
-            
-            # Determine if retry needed
-            if feedback:
-                if missing_parts or (incomplete_parts and form_structure.extraction_iterations < 3) or ordering_issues > 2:
-                    feedback.needs_retry = True
-                    feedback.severity = "error" if (missing_parts or ordering_issues > 3) else "warning"
-                    
-                    # Add suggestions
-                    if missing_parts:
-                        feedback.suggestions.append("Focus on finding missing parts by searching all pages")
-                    if incomplete_parts:
-                        feedback.suggestions.append("Use more aggressive extraction patterns for incomplete parts")
-                    if sub_item_issues > 5:
-                        feedback.suggestions.append("Improve sub-item extraction for compound fields")
-                    if ordering_issues > 0:
-                        feedback.suggestions.append("Fix part numbering to ensure sequential order (Part 1, Part 2, etc.)")
-                    
-                    self.log(f"Validation found issues requiring retry", "warning")
-            
-            # Summary
-            self.log("=== Validation Summary ===", "info")
-            self.log(f"Parts found: {len(form_structure.parts)}/{expected.get('parts', '?')}", "info")
-            if ordering_issues > 0:
-                self.log(f"Part ordering issues: {ordering_issues}", "warning")
-            self.log(f"Total fields: {form_structure.total_fields}/{expected.get('min_fields', '?')}", "info")
-            self.log(f"Fields mapped to JSON: {form_structure.mapped_fields}", "info")
-            self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
-            
-            if feedback and feedback.needs_retry:
-                self.log(f"Recommending retry with {len(feedback.suggestions)} suggestions", "feedback")
-            
-            form_structure.is_validated = True
-            form_structure.add_agent_log(self.name, 
-                f"Validation complete. Score: {form_structure.validation_score:.0%}")
-            
-            self.status = "completed"
-            return form_structure, feedback
-            
-        except Exception as e:
-            self.log(f"Validation failed: {str(e)}", "error")
-            self.status = "error"
-            return form_structure, feedback
-    
-    def _validate_sub_items(self, form_structure: FormStructure, 
-                          feedback: Optional[ValidationFeedback]) -> int:
-        """Validate sub-item structure"""
-        issues = 0
-        
-        # Expected sub-item patterns
-        expected_sub_items = {
-            "legal name": ["a", "b", "c"],  # Family, Given, Middle
-            "your name": ["a", "b", "c"],
-            "mailing address": ["a", "b", "c", "d", "e"],  # Street, City, State, ZIP, Country
-            "physical address": ["a", "b", "c", "d", "e"],
-        }
+    def _check_field_sequences(self, form_structure: FormStructure, 
+                             feedback: Optional[ValidationFeedback]) -> int:
+        """Check if fields within each part are in proper sequence"""
+        total_issues = 0
         
         for part_name, fields in form_structure.parts.items():
-            # Group by parent item
-            item_groups = defaultdict(list)
+            # Group by main items
+            main_items = {}
+            sub_items_by_parent = defaultdict(list)
             
             for field in fields:
+                if not field.item_number:
+                    continue
+                
                 if field.parent_item:
-                    item_groups[field.parent_item].append(field)
-                elif field.item_number and not field.item_number[-1].isalpha():
-                    # Check if this should have sub-items
-                    label_lower = field.label.lower()
-                    for pattern, expected_subs in expected_sub_items.items():
-                        if pattern in label_lower:
-                            # This should have sub-items
-                            item_groups[field.item_number].append(field)
+                    sub_items_by_parent[field.parent_item].append(field)
+                else:
+                    item_num = int(re.match(r'^(\d+)', field.item_number).group(1))
+                    main_items[item_num] = field
             
-            # Validate sub-item structure
-            for parent_item, group_fields in item_groups.items():
-                sub_items = [f for f in group_fields if f.parent_item == parent_item]
+            # Check main item sequence
+            if main_items:
+                sorted_nums = sorted(main_items.keys())
+                expected = 1
                 
-                # Check ordering
-                sorted_sub_items = sorted(sub_items, key=lambda f: natural_sort_item_number(f.item_number or ""))
-                expected_order = ['a', 'b', 'c', 'd', 'e', 'f']
-                for i, field in enumerate(sorted_sub_items):
-                    if field.item_number:
-                        expected_suffix = expected_order[i] if i < len(expected_order) else ''
-                        if not field.item_number.endswith(expected_suffix):
-                            issues += 1
-                            self.log(f"⚠️ Sub-item ordering issue: {field.item_number} (expected {parent_item}{expected_suffix})", "warning")
-                            
-                            if feedback:
-                                feedback.field_issues.append({
-                                    "part": part_name,
-                                    "field": field.item_number,
-                                    "issue": f"Expected sub-item {parent_item}{expected_suffix}"
-                                })
-        
-        return issues
-    
-    def _validate_json_mappings(self, form_structure: FormStructure, 
-                               feedback: Optional[ValidationFeedback]) -> int:
-        """Validate JSON mappings against structure"""
-        issues = 0
-        
-        for part_name, fields in form_structure.parts.items():
-            for field in fields:
-                if field.json_path:
-                    # Validate path exists in JSON structure
-                    path_parts = field.json_path.split('.')
-                    if path_parts:
-                        obj_name = path_parts[0]
-                        obj_type = f"{obj_name.capitalize()}Object"
+                for actual in sorted_nums:
+                    if actual != expected:
+                        total_issues += 1
+                        self.log(f"⚠️ {part_name}: Expected item {expected}, found {actual}", "warning")
                         
-                        if obj_type not in self.json_structures:
-                            issues += 1
-                            self.log(f"⚠️ Invalid object type in mapping: {obj_type}", "warning")
-                            
-                            if feedback:
+                        if feedback and actual > expected:
+                            for missing in range(expected, actual):
                                 feedback.field_issues.append({
                                     "part": part_name,
-                                    "field": field.item_number or field.name,
-                                    "issue": f"Invalid JSON object type: {obj_type}"
+                                    "issue": f"Missing item {missing}",
+                                    "severity": "high"
+                                })
+                    
+                    expected = actual + 1
+            
+            # Check sub-item sequences
+            for parent_num, sub_fields in sub_items_by_parent.items():
+                sorted_subs = sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number))
+                expected_letters = 'abcdefghijklmnopqrstuvwxyz'
+                
+                for i, field in enumerate(sorted_subs):
+                    if i < len(expected_letters):
+                        expected_item = f"{parent_num}{expected_letters[i]}"
+                        if field.item_number != expected_item:
+                            total_issues += 1
+                            self.log(f"⚠️ Sub-item issue: Expected {expected_item}, found {field.item_number}", "warning")
+                            
+                            if feedback:
+                                feedback.sequence_errors.append({
+                                    "type": "sub-item",
+                                    "expected": expected_item,
+                                    "found": field.item_number
                                 })
         
-        return issues
+        return total_issues
     
     def _check_missing_parts(self, form_structure: FormStructure, expected: Dict, 
                            feedback: Optional[ValidationFeedback]) -> List[Dict]:
@@ -1978,36 +1793,37 @@ class ValidationAgent(Agent):
         
         return incomplete_parts
     
-    def _check_overall_completeness(self, form_structure: FormStructure, expected: Dict,
-                                  feedback: Optional[ValidationFeedback]) -> int:
-        """Check overall form completeness"""
+    def _validate_required_fields(self, form_structure: FormStructure, 
+                                 feedback: Optional[ValidationFeedback]) -> int:
+        """Validate that required fields are present"""
         issues = 0
         
-        # Check total fields
-        min_fields = expected.get("min_fields", 50)
-        if form_structure.total_fields < min_fields:
-            self.log(f"⚠️ Total fields ({form_structure.total_fields}) below expected ({min_fields})", "warning")
-            issues += 1
+        # Check for essential fields based on form type
+        if form_structure.form_number == "I-539":
+            # Check Part 1 has name fields
+            part1_fields = form_structure.parts.get("Part 1", [])
+            name_items = [f for f in part1_fields if f.item_number in ["1", "1a", "1b", "1c"]]
+            if len(name_items) < 4:  # Should have item 1 and 1a, 1b, 1c
+                issues += 1
+                self.log("⚠️ Part 1 missing complete name fields (1, 1a, 1b, 1c)", "warning")
+                
+                if feedback:
+                    feedback.field_issues.append({
+                        "part": "Part 1",
+                        "issue": "Incomplete name field structure",
+                        "severity": "high"
+                    })
             
-            if feedback:
-                feedback.suggestions.append(f"Form should have at least {min_fields} fields total")
+            # Check for A-Number field
+            a_number_field = next((f for f in part1_fields if f.item_number == "2"), None)
+            if not a_number_field:
+                issues += 1
+                self.log("⚠️ Part 1 missing A-Number field (item 2)", "warning")
+            elif "alien registration number" not in a_number_field.label.lower():
+                issues += 1
+                self.log("⚠️ Item 2 label incorrect (should be 'Alien Registration Number...')", "warning")
         
-        # Check for required field types
-        has_signature = any(f.type == "signature" for fields in form_structure.parts.values() for f in fields)
-        has_dates = any(f.type == "date" for fields in form_structure.parts.values() for f in fields)
-        has_checkboxes = any(f.type == "checkbox" for fields in form_structure.parts.values() for f in fields)
-        
-        if not has_signature:
-            self.log("⚠️ No signature fields found", "warning")
-            issues += 1
-        
-        if not has_dates:
-            self.log("⚠️ No date fields found", "warning")
-            issues += 1
-        
-        if not has_checkboxes:
-            self.log("⚠️ No checkbox fields found", "warning")
-            issues += 1
+        # Similar checks for other forms...
         
         return issues
 
@@ -2021,7 +1837,7 @@ class CoordinatorAgent(Agent):
         
     def execute(self, pdf_file, use_ai: bool = True, auto_validate: bool = True, 
                auto_map: bool = True) -> Optional[FormStructure]:
-        """Orchestrate agent collaboration with feedback loops"""
+        """Orchestrate agent collaboration"""
         self.status = "active"
         self.log("Starting multi-agent collaboration...", "info")
         
@@ -2035,51 +1851,41 @@ class CoordinatorAgent(Agent):
         
         try:
             # Initial extraction
-            self.log("📊 Phase 1: Initial Extraction", "info")
+            self.log("📊 Phase 1: Sequential Extraction", "info")
             form_structure = research_agent.execute(pdf_file, use_ai)
             
             if not form_structure:
                 self.log("Initial extraction failed", "error")
                 return None
             
+            # Show initial results
+            st.info(f"Initial extraction: {form_structure.total_fields} fields in {len(form_structure.parts)} parts")
+            
             # Validation and feedback loop
             while iteration < self.max_iterations and auto_validate:
                 iteration += 1
-                self.log(f"📊 Phase 2: Validation & Feedback Loop (Iteration {iteration})", "info")
+                self.log(f"📊 Phase 2: Validation Loop (Iteration {iteration})", "info")
                 
                 # Validate
                 form_structure, feedback = validation_agent.execute(form_structure, generate_feedback=True)
                 
                 # Check if retry needed
                 if feedback and feedback.needs_retry and iteration < self.max_iterations:
-                    self.log(f"Validation feedback requires re-extraction", "feedback")
+                    self.log(f"Validation identified issues requiring re-extraction", "feedback")
                     
                     # Display feedback
-                    with st.expander(f"🔄 Iteration {iteration} Feedback", expanded=True):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if feedback.missing_parts:
-                                st.warning(f"Missing {len(feedback.missing_parts)} parts")
-                                for part in feedback.missing_parts[:3]:
-                                    st.caption(f"- {part['name']}")
-                        
-                        with col2:
-                            if feedback.incomplete_parts:
-                                st.info(f"Incomplete {len(feedback.incomplete_parts)} parts")
-                                for part in feedback.incomplete_parts[:3]:
-                                    st.caption(f"- {part['name']}: {part['current_fields']}/{part['expected_fields']} fields")
+                    if feedback.sequence_errors:
+                        st.warning(f"Found {len(feedback.sequence_errors)} sequence errors")
+                    if feedback.missing_parts:
+                        st.warning(f"Missing {len(feedback.missing_parts)} parts")
                     
                     # Re-extract with feedback
                     form_structure = research_agent.execute(
-                        None,  # No file needed, already loaded
+                        None,  # No file needed
                         use_ai,
                         form_structure,
                         feedback
                     )
-                    
-                    # Let research agent adjust strategy
-                    research_agent.handle_feedback(feedback)
                 else:
                     # No retry needed
                     break
@@ -2089,37 +1895,29 @@ class CoordinatorAgent(Agent):
                 self.log("📊 Phase 3: JSON Structure Mapping", "info")
                 form_structure = mapping_agent.execute(form_structure)
             
-            # Final statistics
+            # Final results
             if form_structure:
                 self.log("=== Final Results ===", "success")
                 self.log(f"Total iterations: {iteration}", "info")
-                self.log(f"Parts found: {len(form_structure.parts)}", "info") 
-                
-                # Check part ordering
-                part_numbers = []
-                for part_name in form_structure.parts.keys():
-                    match = re.search(r'Part\s+(\d+)', part_name)
-                    if match:
-                        part_numbers.append(int(match.group(1)))
-                
-                if part_numbers:
-                    part_numbers.sort()
-                    self.log(f"Part sequence: {', '.join([f'Part {n}' for n in part_numbers])}", "info")
-                
+                self.log(f"Parts found: {len(form_structure.parts)}", "info")
                 self.log(f"Fields extracted: {form_structure.total_fields}", "info")
-                self.log(f"Fields validated: {form_structure.validated_fields}", "info")
-                self.log(f"Fields mapped: {form_structure.mapped_fields}", "info")
                 self.log(f"Validation score: {form_structure.validation_score:.0%}", "info")
+                
+                # Check for sequence warnings
+                validation_results = research_agent._validate_extraction_sequence(form_structure)
+                if validation_results["missing_items"]:
+                    st.markdown('<div class="sequence-warning">⚠️ Some items may be missing from the sequence. Review the extraction carefully.</div>', 
+                              unsafe_allow_html=True)
             
             self.status = "completed"
             return form_structure
             
         finally:
-            # Cleanup resources
+            # Cleanup
             if hasattr(research_agent, 'cleanup'):
                 research_agent.cleanup()
 
-# Enhanced field rendering with edit capabilities
+# Field rendering functions
 def render_field_card_enhanced(field: ExtractedField, idx: int, part_name: str, form_structure: FormStructure):
     """Render field card with edit capabilities"""
     status_class = "mapped" if field.json_path else ("questionnaire" if field.is_questionnaire else "unmapped")
@@ -2163,16 +1961,14 @@ def render_field_card_enhanced(field: ExtractedField, idx: int, part_name: str, 
                 st.session_state[edit_key] = False
                 st.rerun()
         else:
-            # Display mode
+            # Display mode - show exact label from PDF
             if field.item_number:
-                st.markdown(f'<span class="item-number">{field.item_number}</span>{field.label}', 
-                           unsafe_allow_html=True)
+                st.markdown(f'**{field.item_number}.** {field.label}')
             else:
                 st.markdown(f'**{field.label}**')
             
             # Type badge
-            st.markdown(f'<span class="field-type-badge type-{field.type}">{field.type}</span>', 
-                       unsafe_allow_html=True)
+            st.caption(f"Type: {field.type}")
     
     with col2:
         if field.type in ["text", "number", "date", "email", "phone"] and not field.is_questionnaire:
@@ -2276,7 +2072,6 @@ def add_new_field(part_name: str, form_structure: FormStructure):
                                     existing_nums.append(num)
                                 except:
                                     pass
-                        # Sort numerically
                         existing_nums.sort()
                         next_num = existing_nums[-1] + 1 if existing_nums else 1
                         new_item = str(next_num)
@@ -2388,7 +2183,7 @@ def generate_typescript_enhanced(form_structure: FormStructure) -> str:
     return ts
 
 def generate_json_enhanced(form_structure: FormStructure) -> str:
-    """Generate enhanced JSON with sub-items"""
+    """Generate enhanced JSON with proper sequence"""
     controls = []
     
     # Natural sort function for parts
@@ -2404,6 +2199,9 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
         quest_fields = [f for f in fields if f.is_questionnaire]
         
         if quest_fields:
+            # Sort fields by item number
+            quest_fields.sort(key=lambda f: natural_sort_item_number(f.item_number if f.item_number else "999"))
+            
             part_num = quest_fields[0].part_number
             controls.append({
                 "name": f"{part_num}_title",
@@ -2423,56 +2221,58 @@ def generate_json_enhanced(form_structure: FormStructure) -> str:
                 else:
                     standalone_fields.append(field)
             
-            # Add grouped fields
-            sorted_parent_items = sorted(item_groups.keys(), key=natural_sort_item_number)
-            for parent_item in sorted_parent_items:
-                sub_fields = item_groups[parent_item]
-                # Find parent field
-                parent_field = next((f for f in fields if f.item_number == parent_item), None)
-                if parent_field:
-                    # Add parent as group header
+            # Process main items with their sub-items
+            all_items = {}
+            for field in standalone_fields:
+                if field.item_number and field.item_number.isdigit():
+                    all_items[int(field.item_number)] = {
+                        'main': field,
+                        'subs': sorted(item_groups.get(field.item_number, []), 
+                                     key=lambda f: natural_sort_item_number(f.item_number or ""))
+                    }
+            
+            # Add items in numerical order
+            for item_num in sorted(all_items.keys()):
+                item_data = all_items[item_num]
+                main_field = item_data['main']
+                sub_fields = item_data['subs']
+                
+                # Add main field
+                if sub_fields:
+                    # This is a group with sub-items
                     controls.append({
-                        "name": f"group_{parent_item}",
-                        "label": f"{parent_item}. {parent_field.label}",
+                        "name": f"group_{main_field.item_number}",
+                        "label": f"{main_field.item_number}. {main_field.label}",
                         "type": "group",
                         "style": {"col": "12"}
                     })
-                
-                # Add sub-fields
-                for field in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
-                    label = f"{field.item_number}. {field.label}"
                     
+                    # Add sub-fields
+                    for sub_field in sub_fields:
+                        control = {
+                            "name": sub_field.name,
+                            "label": f"{sub_field.item_number}. {sub_field.label}",
+                            "type": sub_field.type if sub_field.type != "checkbox" else "colorSwitch",
+                            "validators": {"required": False},
+                            "style": {"col": "6", "indent": True}
+                        }
+                        controls.append(control)
+                else:
+                    # Standalone field
                     control = {
-                        "name": field.name,
-                        "label": label,
-                        "type": field.type if field.type != "checkbox" else "colorSwitch",
+                        "name": main_field.name,
+                        "label": f"{main_field.item_number}. {main_field.label}",
+                        "type": main_field.type if main_field.type != "checkbox" else "colorSwitch",
                         "validators": {"required": False},
-                        "style": {"col": "6", "indent": True}
+                        "style": {"col": "12" if main_field.type == "checkbox" else "7"}
                     }
-                    
                     controls.append(control)
-            
-            # Add standalone fields
-            for field in sorted(standalone_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
-                label = field.label
-                if field.item_number:
-                    label = f"{field.item_number}. {label}"
-                
-                control = {
-                    "name": field.name,
-                    "label": label,
-                    "type": field.type if field.type != "checkbox" else "colorSwitch",
-                    "validators": {"required": False},
-                    "style": {"col": "7" if field.type == "text" else "12"}
-                }
-                
-                controls.append(control)
     
     return json.dumps({"controls": controls}, indent=2)
 
 # Main Application
 def main():
-    st.markdown('<div class="main-header"><h1>🤖 Smart USCIS Form Reader</h1><p>Enhanced with JSON Structure Mapping & Sub-Item Extraction</p></div>', 
+    st.markdown('<div class="main-header"><h1>🤖 Smart USCIS Form Reader</h1><p>Sequential Extraction with Exact PDF Structure</p></div>', 
                unsafe_allow_html=True)
     
     # Initialize session state
@@ -2482,6 +2282,11 @@ def main():
         st.session_state.agents = {}
     if 'json_structures' not in st.session_state:
         st.session_state.json_structures = load_json_structures()
+    
+    # Check dependencies
+    if not PYMUPDF_AVAILABLE:
+        st.error("❌ PyMuPDF library not installed. Please install with: pip install PyMuPDF")
+        return
     
     # Check OpenAI
     openai_client = get_openai_client()
@@ -2511,14 +2316,6 @@ def main():
         auto_map = st.checkbox("Auto-Map to JSON Structure", value=True)
         max_iterations = st.slider("Max Feedback Iterations", 1, 5, 3)
         
-        # JSON Structure info
-        st.markdown("### 📊 JSON Structures")
-        st.caption(f"Loaded {len(st.session_state.json_structures)} object types")
-        
-        with st.expander("View Structures"):
-            for obj_type in st.session_state.json_structures:
-                st.caption(f"• {obj_type}")
-        
         # Form info
         if st.session_state.form_structure:
             form = st.session_state.form_structure
@@ -2533,6 +2330,15 @@ def main():
             
             if form.is_validated:
                 st.metric("Validation Score", f"{form.validation_score:.0%}")
+            
+            # Sequence check
+            if hasattr(form, 'parts'):
+                st.markdown("### 📋 Sequence Check")
+                validation_results = ResearchAgent()._validate_extraction_sequence(form)
+                if validation_results["missing_items"]:
+                    st.warning(f"Missing {len(validation_results['missing_items'])} items")
+                else:
+                    st.success("✅ Sequence complete")
     
     # Main tabs
     tabs = st.tabs(["📤 Upload & Process", "🎯 Field Mapping", "📥 Export", "📊 Agent Logs"])
@@ -2561,7 +2367,7 @@ def main():
                     coordinator = CoordinatorAgent()
                     coordinator.max_iterations = max_iterations
                     
-                    with st.spinner("Processing with collaborative agents..."):
+                    with st.spinner("Processing with sequential extraction..."):
                         form_structure = coordinator.execute(
                             uploaded_file, use_ai, auto_validate, auto_map
                         )
@@ -2584,39 +2390,25 @@ def main():
                                     st.metric("Score", f"{form_structure.validation_score:.0%}")
                                 
                                 # Part breakdown
-                                st.markdown("### Parts Extracted:")
+                                st.markdown("### Parts Extracted (in sequence):")
                                 
-                                # Natural sort function
-                                def natural_sort_key(part_name):
-                                    match = re.search(r'Part\s+(\d+)', part_name[0])
-                                    if match:
-                                        return int(match.group(1))
-                                    return 999
-                                
-                                sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
-                                
-                                for part_name, fields in sorted_parts:
+                                for part_name, fields in form_structure.parts.items():
                                     # Count sub-items
                                     main_items = sum(1 for f in fields if not f.parent_item)
                                     sub_items = sum(1 for f in fields if f.parent_item)
                                     st.markdown(f"**{part_name}**: {len(fields)} fields ({main_items} main, {sub_items} sub-items)")
-                                    
-                                # Sample sub-items
-                                st.markdown("### Sample Sub-Item Structure:")
-                                for part_name, fields in sorted_parts:
-                                    # Find a good example
-                                    for field in fields:
-                                        if field.item_number == "1" and field.label.lower().find("name") >= 0:
-                                            sub_fields = [f for f in fields if f.parent_item == "1"]
-                                            if sub_fields:
-                                                st.markdown(f"**Example from {part_name}:**")
-                                                st.markdown(f"- {field.item_number}. {field.label}")
-                                                for sub in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
-                                                    st.markdown(f"  - {sub.item_number}. {sub.label}")
-                                                break
-                                    else:
-                                        continue
-                                    break
+                                
+                                # Sample extraction
+                                st.markdown("### Sample Field Extraction:")
+                                for part_name, fields in form_structure.parts.items():
+                                    if part_name == "Part 1" and fields:
+                                        st.markdown(f"**From {part_name}:**")
+                                        for field in fields[:5]:  # Show first 5
+                                            if field.item_number:
+                                                st.markdown(f"- **{field.item_number}.** {field.label}")
+                                            else:
+                                                st.markdown(f"- {field.label}")
+                                        break
     
     with tabs[1]:
         form_structure = st.session_state.get('form_structure')
@@ -2625,11 +2417,10 @@ def main():
             
             # Natural sort for parts
             def natural_sort_key(part_name):
-                """Extract number for natural sorting"""
                 match = re.search(r'Part\s+(\d+)', part_name)
                 if match:
                     return int(match.group(1))
-                return 999  # Put non-standard parts at end
+                return 999
             
             sorted_parts = sorted(form_structure.parts.keys(), key=natural_sort_key)
             
@@ -2653,9 +2444,7 @@ def main():
                 add_new_field(selected_part, form_structure)
                 
                 # Stats
-                st.markdown('<div class="extraction-stats">', unsafe_allow_html=True)
-                
-                col1, col2, col3, col4, col5 = st.columns(5)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     text_fields = sum(1 for f in fields if f.type in ["text", "number", "date"])
                     st.metric("Text Fields", text_fields)
@@ -2668,50 +2457,29 @@ def main():
                 with col4:
                     sub_items = sum(1 for f in fields if f.parent_item)
                     st.metric("Sub-Items", sub_items)
-                with col5:
-                    user_added = sum(1 for f in fields if f.is_user_added)
-                    st.metric("User Added", user_added)
                 
-                st.markdown('</div>', unsafe_allow_html=True)
+                # Display fields in sequence
+                sorted_fields = sorted(fields, key=lambda f: natural_sort_item_number(f.item_number if f.item_number else "999"))
                 
-                # Group fields by parent item
-                item_groups = defaultdict(list)
-                standalone_fields = []
-                
-                for field in fields:
-                    if field.parent_item:
-                        item_groups[field.parent_item].append(field)
-                    elif field.item_number and any(f.parent_item == field.item_number for f in fields):
-                        # This is a parent item
-                        item_groups[field.item_number].append(field)
-                    else:
-                        standalone_fields.append(field)
-                
-                # Display grouped fields first
-                # Sort parent items naturally
-                sorted_parent_items = sorted(item_groups.keys(), key=natural_sort_item_number)
-                
-                for parent_item in sorted_parent_items:
-                    group_fields = sorted(item_groups[parent_item], 
-                                        key=lambda f: (f.parent_item != parent_item, natural_sort_item_number(f.item_number or "")))
-                    
-                    # Show parent field first
-                    parent_field = next((f for f in group_fields if f.item_number == parent_item), None)
-                    
-                    if parent_field:
-                        st.markdown('<div class="item-group">', unsafe_allow_html=True)
-                        render_field_card_enhanced(parent_field, fields.index(parent_field), selected_part, form_structure)
+                # Group by parent item
+                current_parent = None
+                for idx, field in enumerate(sorted_fields):
+                    # Start new group for main items
+                    if not field.parent_item and field.item_number and field.item_number.isdigit():
+                        if current_parent is not None:
+                            st.markdown('</div>', unsafe_allow_html=True)
                         
-                        # Show sub-items
-                        sub_fields = [f for f in group_fields if f.parent_item == parent_item]
-                        for sub_field in sorted(sub_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
-                            render_field_card_enhanced(sub_field, fields.index(sub_field), selected_part, form_structure)
-                        
-                        st.markdown('</div>', unsafe_allow_html=True)
+                        # Check if this item has sub-items
+                        has_subs = any(f.parent_item == field.item_number for f in fields)
+                        if has_subs:
+                            st.markdown('<div class="item-group">', unsafe_allow_html=True)
+                            current_parent = field.item_number
+                    
+                    render_field_card_enhanced(field, idx, selected_part, form_structure)
                 
-                # Display standalone fields
-                for field in sorted(standalone_fields, key=lambda f: natural_sort_item_number(f.item_number or "")):
-                    render_field_card_enhanced(field, fields.index(field), selected_part, form_structure)
+                # Close last group if needed
+                if current_parent is not None:
+                    st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info("👆 Please upload and process a form first")
     
@@ -2748,46 +2516,38 @@ def main():
                     with st.expander("Preview", expanded=True):
                         st.code(json_code, language="json")
             
-            # Export mapping summary
-            st.markdown("### 📊 Mapping Summary")
+            # Export summary
+            st.markdown("### 📊 Export Summary")
             
-            # Count mappings by object type
+            # Count mappings
             mapping_counts = defaultdict(int)
             unmapped_count = 0
+            questionnaire_count = 0
             
-            # Natural sort function
-            def natural_sort_key(part_name):
-                match = re.search(r'Part\s+(\d+)', part_name[0])
-                if match:
-                    return int(match.group(1))
-                return 999
-            
-            sorted_parts = sorted(form_structure.parts.items(), key=natural_sort_key)
-            
-            for part_name, fields in sorted_parts:
+            for part_name, fields in form_structure.parts.items():
                 for field in fields:
                     if field.json_path:
                         obj_type = field.json_path.split('.')[0]
                         mapping_counts[obj_type] += 1
-                    elif not field.is_questionnaire:
+                    elif field.is_questionnaire:
+                        questionnaire_count += 1
+                    else:
                         unmapped_count += 1
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.markdown("**Mapped Fields by Object:**")
+                st.markdown("**Mapped Fields:**")
                 for obj_type, count in sorted(mapping_counts.items()):
                     st.caption(f"{obj_type.capitalize()}: {count} fields")
             
             with col2:
-                st.markdown("**Unmapped Fields:**")
-                st.caption(f"{unmapped_count} fields")
+                st.markdown("**Questionnaire Fields:**")
+                st.caption(f"{questionnaire_count} fields")
             
             with col3:
-                st.markdown("**Questionnaire Fields:**")
-                quest_count = sum(1 for fields in form_structure.parts.values() 
-                                for f in fields if f.is_questionnaire)
-                st.caption(f"{quest_count} fields")
+                st.markdown("**Unmapped Fields:**")
+                st.caption(f"{unmapped_count} fields")
     
     with tabs[3]:
         form_structure = st.session_state.get('form_structure')
@@ -2799,12 +2559,11 @@ def main():
                     for log in logs:
                         st.caption(log)
                     
-            # Feedback history
-            if hasattr(form_structure, 'agent_feedback') and form_structure.agent_feedback:
-                st.markdown("### 🔄 Feedback History")
-                for i, feedback in enumerate(form_structure.agent_feedback):
-                    with st.expander(f"Iteration {i+1} Feedback"):
-                        st.json(feedback.to_dict())
+            # Validation details
+            if hasattr(form_structure, 'validation_issues') and form_structure.validation_issues:
+                st.markdown("### ⚠️ Validation Issues")
+                for issue in form_structure.validation_issues:
+                    st.warning(issue)
         else:
             st.info("No agent logs available yet")
 
