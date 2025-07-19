@@ -1,592 +1,331 @@
 #!/usr/bin/env python3
 """
-Advanced Multi-Agent USCIS Form Reader
-With Adaptive Pattern Recognition, Smart Assignment, and Questionnaire Validation
-FIXED: Correct class definition order
+Complete Integrated USCIS Form Reader System
+Combines your multi-agent extractor with database mapping
 """
 
-import os
-import json
-import re
-import time
-import hashlib
-import traceback
-import io
-import csv
-from datetime import datetime
+# First, include ALL your existing imports and classes
+# [Copy all imports from your original paste.txt here]
+
+# Then add these additional imports for mapping functionality:
 from typing import Dict, List, Optional, Any, Tuple, Set, Union
-from dataclasses import dataclass, field, asdict
-from collections import defaultdict, OrderedDict
-from abc import ABC, abstractmethod
-import copy
-from enum import Enum
+from collections import defaultdict
 
-import streamlit as st
+# Additional Enums for mapping
+class MappingStatus(Enum):
+    MAPPED = "mapped"
+    UNMAPPED = "unmapped"
+    MANUAL = "manual"
+    QUESTIONNAIRE = "questionnaire"
 
-# Initialize globals
-OPENAI_AVAILABLE = False
-OpenAI = None
-
-# Try imports
-try:
-    import fitz  # PyMuPDF
-    PYMUPDF_AVAILABLE = True
-except ImportError:
-    PYMUPDF_AVAILABLE = False
-    fitz = None
-
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-    OpenAI = None
-
-# Page config
-st.set_page_config(
-    page_title="Advanced USCIS Form Reader",
-    page_icon="🤖",
-    layout="wide"
-)
-
-# CSS Styling
-st.markdown("""
-<style>
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 2rem;
-        border-radius: 10px;
-        margin-bottom: 2rem;
-        text-align: center;
-    }
-    .agent-card {
-        background: white;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 0.5rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .agent-active {
-        border-left: 4px solid #2196F3;
-        background: #E3F2FD;
-    }
-    .agent-success {
-        border-left: 4px solid #4CAF50;
-        background: #E8F5E9;
-    }
-    .agent-error {
-        border-left: 4px solid #f44336;
-        background: #FFEBEE;
-    }
-    .field-card {
-        background: #f5f5f5;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 0.5rem;
-        margin: 0.2rem 0;
-        font-family: monospace;
-    }
-    .hierarchy-tree {
-        font-family: monospace;
-        white-space: pre;
-        background: #f5f5f5;
-        padding: 1rem;
-        border-radius: 4px;
-        overflow-x: auto;
-    }
-    .validation-badge {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        font-weight: bold;
-    }
-    .badge-success {
-        background: #4CAF50;
-        color: white;
-    }
-    .badge-warning {
-        background: #FF9800;
-        color: white;
-    }
-    .badge-error {
-        background: #f44336;
-        color: white;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# ===== ENUMS - Define first =====
-class FieldType(Enum):
-    TEXT = "text"
-    NUMBER = "number"
-    DATE = "date"
-    CHECKBOX = "checkbox"
-    RADIO = "radio"
-    SIGNATURE = "signature"
-    EMAIL = "email"
-    PHONE = "phone"
-    ADDRESS = "address"
-    NAME = "name"
-    UNKNOWN = "unknown"
-
-class ExtractionConfidence(Enum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    NONE = "none"
-
-# ===== DATA CLASSES - Define second (in dependency order) =====
-
+# Additional Data Classes for mapping
 @dataclass
-class FieldPattern:
-    """Pattern for field recognition"""
-    pattern: re.Pattern
-    field_type: FieldType
-    confidence: float = 1.0
-    description: str = ""
-
-@dataclass
-class FieldNode:
-    """Enhanced field node with better metadata"""
-    # Core properties
-    item_number: str  # e.g., "1", "1a", "2"
+class ExtractedField:
+    """Represents an extracted field from PDF"""
+    key: str
     label: str
-    field_type: FieldType = FieldType.UNKNOWN
-    value: str = ""
+    value: str
+    field_type: FieldType
+    page: int
+    confidence: float
+    mapping_status: MappingStatus = MappingStatus.UNMAPPED
+    mapped_to: Optional[str] = None
     
-    # Hierarchy
-    parent: Optional['FieldNode'] = None
-    children: List['FieldNode'] = field(default_factory=list)
-    
-    # Location
-    page: int = 1
-    part_number: int = 1
-    part_name: str = "Part 1"
-    bbox: Optional[Tuple[float, float, float, float]] = None  # x0, y0, x1, y1
-    
-    # Generated key
-    key: str = ""  # e.g., "P1_1a"
-    
-    # Extraction metadata
-    confidence: ExtractionConfidence = ExtractionConfidence.LOW
-    extraction_method: str = ""
-    raw_text: str = ""
-    patterns_matched: List[str] = field(default_factory=list)
-    
-    # Validation
-    is_required: bool = False
-    is_valid: bool = True
-    validation_errors: List[str] = field(default_factory=list)
-    
-    def add_child(self, child: 'FieldNode'):
-        """Add child node"""
-        child.parent = self
-        self.children.append(child)
-    
-    def get_full_path(self) -> str:
-        """Get full hierarchical path"""
-        if self.parent:
-            return f"{self.parent.get_full_path()}.{self.item_number}"
-        return self.item_number
-    
-    def get_depth(self) -> int:
-        """Get depth in hierarchy"""
-        if self.parent:
-            return self.parent.get_depth() + 1
-        return 0
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "key": self.key,
-            "item_number": self.item_number,
-            "label": self.label,
-            "type": self.field_type.value,
-            "value": self.value,
-            "confidence": self.confidence.value,
-            "page": self.page,
-            "children": [child.to_dict() for child in self.children]
-        }
-
 @dataclass
-class FormSchema:
-    """Schema definition for a form"""
-    form_number: str
-    form_title: str
-    parts: Dict[int, Dict[str, Any]] = field(default_factory=dict)
-    required_fields: List[str] = field(default_factory=list)
-    field_patterns: Dict[str, FieldPattern] = field(default_factory=dict)
-    
-    def get_expected_structure(self) -> Dict:
-        """Get expected structure"""
-        return {
-            "form_number": self.form_number,
-            "parts": self.parts,
-            "required_fields": self.required_fields
-        }
+class FieldMapping:
+    """Represents a mapping between PDF field and database field"""
+    pdf_field_key: str
+    pdf_field_label: str
+    database_table: str
+    database_field: str
+    transformation: Optional[str] = None
 
-@dataclass
-class PartStructure:
-    """Represents a part with hierarchical fields"""
-    part_number: int
-    part_name: str
-    part_title: str = ""
-    root_fields: List[FieldNode] = field(default_factory=list)
-    
-    def get_all_fields_flat(self) -> List[FieldNode]:
-        """Get all fields in flat list"""
-        fields = []
-        
-        def collect_fields(node: FieldNode):
-            fields.append(node)
-            for child in node.children:
-                collect_fields(child)
-        
-        for root in self.root_fields:
-            collect_fields(root)
-        
-        return fields
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "part_number": self.part_number,
-            "part_name": self.part_name,
-            "part_title": self.part_title,
-            "fields": [field.to_dict() for field in self.root_fields]
-        }
+# [Include ALL your existing classes here: PatternLibrary, BaseAgent, etc.]
 
-@dataclass
-class FormExtractionResult:
-    """Complete extraction result"""
-    form_number: str  # e.g., "I-539"
-    form_title: str
-    parts: Dict[int, PartStructure] = field(default_factory=dict)
-    
-    # Validation status
-    is_valid: bool = False
-    validation_errors: List[str] = field(default_factory=list)
-    validation_score: float = 0.0
-    
-    # Extraction metadata
-    extraction_iterations: int = 0
-    total_fields: int = 0
-    
-    def get_all_fields_with_keys(self) -> Dict[str, FieldNode]:
-        """Get all fields indexed by key"""
-        fields = {}
-        for part in self.parts.values():
-            for field in part.get_all_fields_flat():
-                if field.key:
-                    fields[field.key] = field
-        return fields
-    
-    def to_output_format(self) -> Dict[str, Any]:
-        """Convert to expected output format"""
-        output = {}
-        for part in self.parts.values():
-            for field in part.get_all_fields_flat():
-                if field.key:
-                    output[field.key] = field.value
-                    # Add title fields
-                    if field.label:
-                        output[f"{field.key}_title"] = field.label
-        return output
-
-# ===== PATTERN LIBRARY - Now safe to define =====
-class PatternLibrary:
-    """Library of extraction patterns"""
-    
-    def __init__(self):
-        self.patterns = self._build_patterns()
-        self.form_schemas = self._build_form_schemas()
-    
-    def _build_patterns(self) -> Dict[str, List[FieldPattern]]:
-        """Build comprehensive pattern library"""
-        return {
-            "structure": [
-                FieldPattern(
-                    re.compile(r'^Part\s+(\d+)\.?\s*(.*)$', re.IGNORECASE),
-                    FieldType.UNKNOWN,
-                    1.0,
-                    "Part header"
-                ),
-                FieldPattern(
-                    re.compile(r'^Section\s+([A-Z])\.\s*(.*)$', re.IGNORECASE),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Section header"
-                ),
-            ],
-            "item": [
-                # Standard numbered items
-                FieldPattern(
-                    re.compile(r'^(\d+)\.\s+(.+?)(?:\s*\(.*\))?$'),
-                    FieldType.UNKNOWN,
-                    0.95,
-                    "Numbered item with period"
-                ),
-                FieldPattern(
-                    re.compile(r'^(\d+)\s+([A-Z].+?)(?:\s*\(.*\))?$'),
-                    FieldType.UNKNOWN,
-                    0.85,
-                    "Numbered item without period"
-                ),
-                # Sub-items
-                FieldPattern(
-                    re.compile(r'^(\d+)([a-z])\.\s+(.+?)$'),
-                    FieldType.UNKNOWN,
-                    0.95,
-                    "Sub-item with number and letter"
-                ),
-                FieldPattern(
-                    re.compile(r'^\s*([a-z])\.\s+(.+?)$'),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Letter-only sub-item"
-                ),
-            ],
-            "field_type": [
-                # Names
-                FieldPattern(
-                    re.compile(r'(family|last|sur)\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Family/Last name"
-                ),
-                FieldPattern(
-                    re.compile(r'(given|first)\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Given/First name"
-                ),
-                FieldPattern(
-                    re.compile(r'middle\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Middle name"
-                ),
-                # Dates
-                FieldPattern(
-                    re.compile(r'date\s*of\s*birth', re.IGNORECASE),
-                    FieldType.DATE,
-                    0.95,
-                    "Date of birth"
-                ),
-                FieldPattern(
-                    re.compile(r'(expir|issue|effective)\s*date', re.IGNORECASE),
-                    FieldType.DATE,
-                    0.9,
-                    "Expiration/Issue date"
-                ),
-                # Numbers
-                FieldPattern(
-                    re.compile(r'(a[\-\s]?number|alien\s*(registration)?\s*number)', re.IGNORECASE),
-                    FieldType.NUMBER,
-                    0.95,
-                    "A-Number"
-                ),
-                FieldPattern(
-                    re.compile(r'(ssn|social\s*security)', re.IGNORECASE),
-                    FieldType.NUMBER,
-                    0.95,
-                    "SSN"
-                ),
-                # Contact
-                FieldPattern(
-                    re.compile(r'(e[\-\s]?mail|email)', re.IGNORECASE),
-                    FieldType.EMAIL,
-                    0.95,
-                    "Email"
-                ),
-                FieldPattern(
-                    re.compile(r'(phone|telephone|mobile)', re.IGNORECASE),
-                    FieldType.PHONE,
-                    0.95,
-                    "Phone"
-                ),
-                # Address
-                FieldPattern(
-                    re.compile(r'(street|address|apt|suite)', re.IGNORECASE),
-                    FieldType.ADDRESS,
-                    0.9,
-                    "Address"
-                ),
-                # Checkbox/Radio
-                FieldPattern(
-                    re.compile(r'^\s*[□☐]\s*(.+)$'),
-                    FieldType.CHECKBOX,
-                    0.95,
-                    "Checkbox"
-                ),
-                FieldPattern(
-                    re.compile(r'(are you|have you|do you|is this|was)', re.IGNORECASE),
-                    FieldType.CHECKBOX,
-                    0.85,
-                    "Yes/No question"
-                ),
-            ]
-        }
-    
-    def _build_form_schemas(self) -> Dict[str, FormSchema]:
-        """Build form schemas"""
-        schemas = {}
-        
-        # I-539 Schema
-        schemas["I-539"] = FormSchema(
-            form_number="I-539",
-            form_title="Application to Extend/Change Nonimmigrant Status",
-            parts={
-                1: {
-                    "title": "Information About You",
-                    "items": {
-                        "1": {"label": "Your Full Legal Name", "sub_items": ["a", "b", "c"]},
-                        "2": {"label": "Alien Registration Number (A-Number)"},
-                        "3": {"label": "Date of Birth"},
-                        "4": {"label": "U.S. Mailing Address"},
-                        "5": {"label": "Physical Address"},
-                        "6": {"label": "Contact Information"}
-                    }
-                },
-                2: {"title": "Application Type"},
-                3: {"title": "Processing Information"},
-                4: {"title": "Additional Information"},
-                5: {"title": "Applicant's Statement"},
-                6: {"title": "Interpreter's Contact Information"},
-                7: {"title": "Contact Information"},
-                8: {"title": "Additional Information"}
-            },
-            required_fields=["P1_1a", "P1_1b", "P1_2", "P1_3"]
-        )
-        
-        # G-28 Schema
-        schemas["G-28"] = FormSchema(
-            form_number="G-28",
-            form_title="Notice of Entry of Appearance",
-            parts={
-                1: {"title": "Information About Attorney"},
-                2: {"title": "Information About Representative"},
-                3: {"title": "Client Information"},
-                4: {"title": "Client Consent"},
-                5: {"title": "Signature of Attorney"},
-                6: {"title": "Signature of Client"}
-            },
-            required_fields=["P1_2a", "P1_2b", "P3_6a", "P3_6b", "P3_9"]
-        )
-        
-        return schemas
-    
-    def get_patterns_for_context(self, context: str) -> List[FieldPattern]:
-        """Get relevant patterns for context"""
-        relevant_patterns = []
-        
-        for category, patterns in self.patterns.items():
-            if category == context or context == "all":
-                relevant_patterns.extend(patterns)
-        
-        return sorted(relevant_patterns, key=lambda p: p.confidence, reverse=True)
-
-# ===== BASE AGENT CLASS =====
-class BaseAgent(ABC):
-    """Enhanced base agent with better logging"""
-    
-    def __init__(self, name: str, description: str = ""):
-        self.name = name
-        self.description = description
-        self.status = "idle"
-        self.logs = []
-        self.errors = []
-        self.start_time = None
-        self.end_time = None
-    
-    @abstractmethod
-    def execute(self, *args, **kwargs) -> Any:
-        pass
-    
-    def log(self, message: str, level: str = "info", details: Any = None):
-        """Enhanced logging"""
-        entry = {
-            "timestamp": datetime.now(),
-            "message": message,
-            "level": level,
-            "details": details
-        }
-        self.logs.append(entry)
-        
-        # Display in UI
-        self._display_log(entry)
-    
-    def _display_log(self, entry: Dict):
-        """Display log in UI"""
-        if hasattr(st.session_state, 'agent_container'):
-            with st.session_state.agent_container:
-                css_class = "agent-card"
-                if entry["level"] == "error":
-                    css_class += " agent-error"
-                elif entry["level"] == "success":
-                    css_class += " agent-success"
-                elif self.status == "active":
-                    css_class += " agent-active"
-                
-                st.markdown(
-                    f'<div class="{css_class}">'
-                    f'<strong>{self.name}</strong>: {entry["message"]}'
-                    f'</div>', 
-                    unsafe_allow_html=True
-                )
-    
-    def start(self):
-        """Start agent execution"""
-        self.status = "active"
-        self.start_time = datetime.now()
-        self.log(f"Starting {self.description}")
-    
-    def complete(self, success: bool = True):
-        """Complete agent execution"""
-        self.end_time = datetime.now()
-        duration = (self.end_time - self.start_time).total_seconds()
-        
-        if success:
-            self.status = "completed"
-            self.log(f"Completed successfully in {duration:.2f}s", "success")
-        else:
-            self.status = "error"
-            self.log(f"Failed after {duration:.2f}s", "error")
-
-# ===== AGENT IMPLEMENTATIONS =====
-
-# Include all your agent classes here in this order:
-# 1. AdaptivePatternExtractor
-# 2. SmartKeyAssignment  
-# 3. QuestionnaireValidator
-# 4. OutputFormatter
-# 5. MasterCoordinator
-
-# [Copy the rest of your agent classes here, they should work now that the dependencies are defined]
-
-# ===== MAIN APPLICATION =====
+# Then add this enhanced main function that combines both systems:
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>🤖 Advanced USCIS Form Reader</h1>'
-        '<p>Multi-Agent System with Adaptive Pattern Recognition</p>'
+        '<h1>🤖 USCIS Form Reader & Database Mapper</h1>'
+        '<p>Multi-Agent Extraction → Database Mapping → Export</p>'
         '</div>', 
         unsafe_allow_html=True
     )
     
-    # Check dependencies first
-    if not PYMUPDF_AVAILABLE:
-        st.error("❌ PyMuPDF is required but not installed!")
-        st.code("pip install PyMuPDF")
-        st.info("After installing, refresh this page.")
-        st.stop()
+    # Initialize session states
+    if 'extraction_output' not in st.session_state:
+        st.session_state.extraction_output = None
+    if 'extraction_result' not in st.session_state:
+        st.session_state.extraction_result = None
+    if 'mapped_fields' not in st.session_state:
+        st.session_state.mapped_fields = {}
+    if 'unmapped_fields' not in st.session_state:
+        st.session_state.unmapped_fields = {}
+    if 'database_schema' not in st.session_state:
+        st.session_state.database_schema = {
+            "beneficiary": {
+                "firstName": "string",
+                "lastName": "string",
+                "middleName": "string",
+                "dateOfBirth": "date",
+                "alienNumber": "string",
+                "socialSecurityNumber": "string",
+                "countryOfBirth": "string",
+                "countryOfCitizenship": "string"
+            },
+            "address": {
+                "streetNumber": "string",
+                "streetName": "string",
+                "aptNumber": "string",
+                "city": "string",
+                "state": "string",
+                "zipCode": "string"
+            },
+            "contact": {
+                "daytimePhone": "string",
+                "mobilePhone": "string",
+                "emailAddress": "string"
+            }
+        }
     
-    st.success("✅ All dependencies loaded successfully!")
+    # Create tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📄 Extract",
+        "🔗 Map Fields",
+        "✏️ Manual Entry",
+        "❓ Questionnaire",
+        "💾 Export"
+    ])
     
-    # [Continue with the rest of your main() function]
+    # Tab 1: Extraction (Your existing code)
+    with tab1:
+        st.markdown("## 📄 Upload USCIS Form")
+        
+        uploaded_file = st.file_uploader(
+            "Choose a PDF form",
+            type=['pdf'],
+            help="Supported forms: I-539, I-129, G-28, I-90, I-485, I-765, N-400"
+        )
+        
+        if uploaded_file:
+            col1, col2, col3 = st.columns([2, 1, 1])
+            
+            with col1:
+                st.success(f"✅ Uploaded: {uploaded_file.name}")
+            
+            with col2:
+                process_btn = st.button(
+                    "🚀 Extract & Map",
+                    type="primary",
+                    use_container_width=True
+                )
+            
+            if process_btn:
+                # Create containers
+                st.session_state.agent_container = st.container()
+                
+                with st.spinner("Processing with multi-agent system..."):
+                    # Run your existing extraction
+                    coordinator = MasterCoordinator(max_iterations=3)
+                    output = coordinator.execute(uploaded_file)
+                    
+                    if output:
+                        st.session_state.extraction_output = output
+                        
+                        # Convert to mapping format
+                        extracted_fields = {}
+                        for key, value in output.items():
+                            if not key.startswith('_') and not key.endswith('_title'):
+                                label = output.get(f"{key}_title", key)
+                                
+                                # Create ExtractedField
+                                field = ExtractedField(
+                                    key=key,
+                                    label=label,
+                                    value=str(value) if value else "",
+                                    field_type=determine_field_type(label),
+                                    page=1,
+                                    confidence=0.95
+                                )
+                                extracted_fields[key] = field
+                        
+                        # Auto-map fields
+                        mapped, unmapped = auto_map_fields(
+                            extracted_fields,
+                            st.session_state.database_schema
+                        )
+                        
+                        st.session_state.mapped_fields = mapped
+                        st.session_state.unmapped_fields = unmapped
+                        st.session_state.extracted_fields = extracted_fields
+                        
+                        st.success(f"✅ Extraction Complete!")
+                        st.info(f"📊 Extracted: {len(extracted_fields)} | "
+                               f"✅ Mapped: {len(mapped)} | "
+                               f"❓ Unmapped: {len(unmapped)}")
+                    else:
+                        st.error("❌ Extraction Failed")
+            
+            # Show results
+            if st.session_state.extraction_output:
+                metadata = st.session_state.extraction_output.get('_metadata', {})
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Form", metadata.get('form_number', 'Unknown'))
+                with col2:
+                    st.metric("Total Fields", metadata.get('total_fields', 0))
+                with col3:
+                    st.metric("Score", f"{metadata.get('validation_score', 0):.0%}")
+                with col4:
+                    st.metric("Mapped", len(st.session_state.mapped_fields))
+    
+    # Tab 2: Mapping Interface
+    with tab2:
+        st.markdown("### 🔗 Field Mapping")
+        
+        if st.session_state.extraction_output:
+            # Show mapping interface
+            for field_key, field in st.session_state.unmapped_fields.items():
+                col1, col2, col3 = st.columns([3, 1, 3])
+                
+                with col1:
+                    st.info(f"**{field.label}**\n\nValue: {field.value}")
+                
+                with col2:
+                    st.markdown("→")
+                
+                with col3:
+                    # Database field selector
+                    options = ["-- Select --"]
+                    for table, fields in st.session_state.database_schema.items():
+                        for fname in fields:
+                            options.append(f"{table}.{fname}")
+                    
+                    selected = st.selectbox(
+                        "Database field",
+                        options,
+                        key=f"map_{field_key}"
+                    )
+                    
+                    if selected != options[0]:
+                        if st.button("Map", key=f"btn_{field_key}"):
+                            # Create mapping
+                            table, fname = selected.split('.')
+                            mapping = FieldMapping(
+                                pdf_field_key=field_key,
+                                pdf_field_label=field.label,
+                                database_table=table,
+                                database_field=fname
+                            )
+                            st.session_state.mapped_fields[field_key] = mapping
+                            del st.session_state.unmapped_fields[field_key]
+                            st.rerun()
+        else:
+            st.info("Please extract fields first")
+    
+    # Tab 3: Manual Entry (from mapping system)
+    with tab3:
+        st.markdown("### ✏️ Add Fields Manually")
+        # [Include manual entry code from mapping system]
+    
+    # Tab 4: Questionnaire (from mapping system)
+    with tab4:
+        st.markdown("### ❓ Complete Unmapped Fields")
+        # [Include questionnaire code from mapping system]
+    
+    # Tab 5: Export
+    with tab5:
+        st.markdown("### 💾 Export Options")
+        
+        if st.session_state.mapped_fields:
+            # Generate exports
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # JSON export
+                export_data = generate_json_mapping(
+                    st.session_state.mapped_fields,
+                    st.session_state.extracted_fields
+                )
+                
+                json_str = json.dumps(export_data, indent=2)
+                st.download_button(
+                    "📥 Download Mapped JSON",
+                    json_str,
+                    "mapped_data.json",
+                    mime="application/json"
+                )
+            
+            with col2:
+                # TypeScript export
+                ts_code = generate_typescript_interface(
+                    st.session_state.mapped_fields,
+                    "USCISForm"
+                )
+                
+                st.download_button(
+                    "📥 Download TypeScript",
+                    ts_code,
+                    "form_interface.ts",
+                    mime="text/plain"
+                )
+            
+            with col3:
+                # Unmapped fields
+                if st.session_state.unmapped_fields:
+                    unmapped_data = {
+                        k: {"label": v.label, "value": v.value}
+                        for k, v in st.session_state.unmapped_fields.items()
+                    }
+                    
+                    json_str = json.dumps(unmapped_data, indent=2)
+                    st.download_button(
+                        "📥 Download Unmapped",
+                        json_str,
+                        "unmapped_fields.json",
+                        mime="application/json"
+                    )
+        else:
+            st.info("No data to export yet")
+
+# Helper functions
+def determine_field_type(label: str) -> FieldType:
+    """Determine field type from label"""
+    label_lower = label.lower()
+    
+    if 'date' in label_lower or 'birth' in label_lower:
+        return FieldType.DATE
+    elif 'number' in label_lower or 'phone' in label_lower:
+        return FieldType.NUMBER
+    elif 'email' in label_lower:
+        return FieldType.EMAIL
+    elif 'name' in label_lower:
+        return FieldType.NAME
+    elif 'address' in label_lower or 'street' in label_lower:
+        return FieldType.ADDRESS
+    else:
+        return FieldType.TEXT
+
+def auto_map_fields(extracted_fields: Dict[str, ExtractedField], 
+                   database_schema: Dict) -> Tuple[Dict, Dict]:
+    """Auto-map fields based on patterns"""
+    # [Include the auto_map_fields function from mapping system]
+    pass
+
+def generate_typescript_interface(mapped_fields: Dict[str, FieldMapping], 
+                                form_name: str) -> str:
+    """Generate TypeScript interface"""
+    # [Include the TypeScript generation function]
+    pass
+
+def generate_json_mapping(mapped_fields: Dict[str, FieldMapping], 
+                         extracted_fields: Dict[str, ExtractedField]) -> Dict:
+    """Generate JSON with mapped data"""
+    # [Include the JSON generation function]
+    pass
+
+# [Include all other helper functions]
 
 if __name__ == "__main__":
     main()
