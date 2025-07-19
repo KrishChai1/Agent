@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Smart USCIS Form Reader with Recursive Extraction and Validation Loop
-Correctly extracts fields with proper hierarchy and validation
+Multi-Agent USCIS Form Reader with Recursive Extraction and Validation Loop
+Extracts fields correctly with proper key assignment (P1_1a format)
 """
 
 import os
@@ -9,12 +9,19 @@ import json
 import re
 import time
 import hashlib
+import traceback
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set, Union
 from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
 from abc import ABC, abstractmethod
+import copy
+
 import streamlit as st
+
+# Initialize globals
+OPENAI_AVAILABLE = False
+OpenAI = None
 
 # Try imports
 try:
@@ -33,12 +40,12 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Enhanced USCIS Form Reader - Recursive Extraction",
+    page_title="Multi-Agent USCIS Form Reader",
     page_icon="🤖",
     layout="wide"
 )
 
-# Enhanced CSS
+# CSS Styling
 st.markdown("""
 <style>
     .main-header {
@@ -49,209 +56,154 @@ st.markdown("""
         margin-bottom: 2rem;
         text-align: center;
     }
-    .extraction-status {
-        background: #f0f4f8;
-        border-radius: 8px;
+    .agent-status {
+        background: #f0f0f0;
         padding: 1rem;
-        margin: 1rem 0;
+        border-radius: 8px;
+        margin: 0.5rem 0;
+        border-left: 4px solid #4CAF50;
     }
-    .field-hierarchy {
-        margin-left: 20px;
-        border-left: 2px solid #e0e0e0;
-        padding-left: 10px;
+    .agent-error {
+        border-left: 4px solid #f44336;
+        background: #ffebee;
     }
-    .field-item {
+    .agent-warning {
+        border-left: 4px solid #ff9800;
+        background: #fff3e0;
+    }
+    .field-output {
+        font-family: monospace;
+        background: #f5f5f5;
         padding: 0.5rem;
-        margin: 0.25rem 0;
-        background: white;
         border-radius: 4px;
-        border: 1px solid #e0e0e0;
-    }
-    .field-main {
-        font-weight: bold;
-        background: #e3f2fd;
-    }
-    .field-sub {
-        margin-left: 20px;
-        font-size: 0.95em;
+        margin: 0.2rem 0;
     }
     .validation-pass {
-        color: #4caf50;
+        color: #4CAF50;
         font-weight: bold;
     }
     .validation-fail {
         color: #f44336;
         font-weight: bold;
     }
-    .agent-status {
-        display: inline-block;
-        padding: 0.25rem 0.75rem;
-        border-radius: 20px;
-        font-size: 0.85em;
-        margin: 0.25rem;
-    }
-    .status-active {
-        background: #4caf50;
-        color: white;
-    }
-    .status-waiting {
-        background: #ff9800;
-        color: white;
-    }
-    .status-error {
-        background: #f44336;
-        color: white;
-    }
 </style>
 """, unsafe_allow_html=True)
 
+# Data Classes
 @dataclass
-class FieldItem:
-    """Represents a single field item with proper hierarchy"""
-    number: str  # e.g., "1", "1a", "2"
-    label: str   # e.g., "Your Full Legal Name", "Family Name (Last Name)"
-    type: str    # e.g., "text", "checkbox", "group"
+class FieldNode:
+    """Represents a field in hierarchical structure"""
+    item_number: str  # e.g., "1", "1a", "2"
+    label: str  # e.g., "Your Full Legal Name"
+    field_type: str  # text, checkbox, date, etc.
     value: str = ""
     
     # Hierarchy
-    parent_number: Optional[str] = None  # e.g., "1" for "1a"
-    children: List['FieldItem'] = field(default_factory=list)
-    level: int = 0  # 0 for main items, 1 for sub-items, etc.
+    parent: Optional['FieldNode'] = None
+    children: List['FieldNode'] = field(default_factory=list)
     
     # Location
     page: int = 1
-    line_number: int = 0
+    part_number: int = 1
+    part_name: str = "Part 1"
+    
+    # Generated key
+    key: str = ""  # e.g., "P1_1a"
     
     # Extraction metadata
+    confidence: float = 0.0
+    extraction_method: str = ""  # recursive, pattern, widget, ai
     raw_text: str = ""
-    confidence: float = 1.0
-    extraction_method: str = ""  # "pattern", "structure", "ai"
     
-    # Validation
-    is_valid: bool = True
-    validation_errors: List[str] = field(default_factory=list)
-    
-    def get_full_number(self) -> str:
-        """Get full hierarchical number"""
-        return self.number
-    
-    def add_child(self, child: 'FieldItem'):
-        """Add a child field"""
-        child.parent_number = self.number
-        child.level = self.level + 1
+    def add_child(self, child: 'FieldNode'):
+        """Add child node"""
+        child.parent = self
         self.children.append(child)
     
+    def get_full_path(self) -> str:
+        """Get full path from root"""
+        if self.parent:
+            return f"{self.parent.get_full_path()}.{self.item_number}"
+        return self.item_number
+    
     def to_dict(self) -> Dict:
-        """Convert to dictionary including children"""
-        result = {
-            "number": self.number,
+        """Convert to dictionary"""
+        return {
+            "key": self.key,
+            "item_number": self.item_number,
             "label": self.label,
-            "type": self.type,
+            "type": self.field_type,
             "value": self.value,
-            "level": self.level,
             "children": [child.to_dict() for child in self.children]
         }
-        return result
 
-@dataclass
+@dataclass 
 class PartStructure:
-    """Represents a part with its fields"""
-    number: int  # 1, 2, 3, etc.
-    title: str   # e.g., "Information About You"
-    fields: List[FieldItem] = field(default_factory=list)
+    """Represents a part with hierarchical fields"""
+    part_number: int
+    part_name: str
+    part_title: str = ""
+    root_fields: List[FieldNode] = field(default_factory=list)
     
-    # Validation
-    is_complete: bool = False
-    expected_fields: int = 0
-    validation_score: float = 0.0
-    
-    def add_field(self, field: FieldItem):
-        """Add a field to this part"""
-        self.fields.append(field)
-    
-    def get_field_by_number(self, number: str) -> Optional[FieldItem]:
-        """Get field by its number"""
-        for field in self.fields:
-            if field.number == number:
-                return field
-            # Check children recursively
-            for child in field.children:
-                if child.number == number:
-                    return child
-        return None
-    
-    def validate_sequence(self) -> List[str]:
-        """Validate field sequence"""
-        errors = []
-        main_numbers = []
+    def get_all_fields_flat(self) -> List[FieldNode]:
+        """Get all fields in flat list"""
+        fields = []
         
-        # Get all main field numbers
-        for field in self.fields:
-            if not field.parent_number and field.number.isdigit():
-                main_numbers.append(int(field.number))
+        def collect_fields(node: FieldNode):
+            fields.append(node)
+            for child in node.children:
+                collect_fields(child)
         
-        # Check sequence
-        main_numbers.sort()
-        expected = 1
-        for num in main_numbers:
-            if num != expected:
-                if num > expected:
-                    for missing in range(expected, num):
-                        errors.append(f"Missing field {missing}")
-                expected = num + 1
+        for root in self.root_fields:
+            collect_fields(root)
         
-        return errors
+        return fields
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            "part_number": self.part_number,
+            "part_name": self.part_name,
+            "part_title": self.part_title,
+            "fields": [field.to_dict() for field in self.root_fields]
+        }
 
 @dataclass
-class FormExtraction:
-    """Complete form extraction result"""
+class FormExtractionResult:
+    """Complete extraction result"""
     form_number: str  # e.g., "I-539"
     form_title: str
-    edition: str = ""
-    parts: Dict[int, PartStructure] = field(default_factory=OrderedDict)
+    parts: Dict[int, PartStructure] = field(default_factory=dict)
     
-    # Extraction metadata
-    extraction_timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    extraction_iterations: int = 0
-    
-    # Validation
+    # Validation status
     is_valid: bool = False
     validation_errors: List[str] = field(default_factory=list)
     validation_score: float = 0.0
     
-    # Agent logs
-    agent_logs: Dict[str, List[str]] = field(default_factory=dict)
+    # Extraction metadata
+    extraction_iterations: int = 0
+    total_fields: int = 0
     
-    def add_part(self, part: PartStructure):
-        """Add a part to the form"""
-        self.parts[part.number] = part
-    
-    def get_all_fields(self) -> List[FieldItem]:
-        """Get all fields from all parts"""
-        all_fields = []
+    def get_all_fields_with_keys(self) -> Dict[str, FieldNode]:
+        """Get all fields indexed by key"""
+        fields = {}
         for part in self.parts.values():
-            all_fields.extend(part.fields)
-            for field in part.fields:
-                all_fields.extend(field.children)
-        return all_fields
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    fields[field.key] = field
+        return fields
     
-    def to_json(self) -> str:
-        """Convert to JSON representation"""
-        data = {
-            "form_number": self.form_number,
-            "form_title": self.form_title,
-            "edition": self.edition,
-            "extraction_timestamp": self.extraction_timestamp,
-            "parts": {}
-        }
-        
-        for part_num, part in self.parts.items():
-            data["parts"][f"Part {part_num}"] = {
-                "title": part.title,
-                "fields": [field.to_dict() for field in part.fields]
-            }
-        
-        return json.dumps(data, indent=2)
+    def to_output_format(self) -> Dict[str, Any]:
+        """Convert to expected output format"""
+        output = {}
+        for part in self.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    output[field.key] = field.value
+                    # Add title fields
+                    if field.label:
+                        output[f"{field.key}_title"] = field.label
+        return output
 
 # Base Agent
 class BaseAgent(ABC):
@@ -259,661 +211,803 @@ class BaseAgent(ABC):
     
     def __init__(self, name: str):
         self.name = name
-        self.status = "waiting"
+        self.status = "idle"
         self.logs = []
         self.errors = []
+        
+    @abstractmethod
+    def execute(self, *args, **kwargs) -> Any:
+        pass
     
     def log(self, message: str, level: str = "info"):
-        """Log a message"""
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        log_entry = f"[{timestamp}] {message}"
-        self.logs.append((level, log_entry))
+        """Log message"""
+        entry = {
+            "timestamp": datetime.now().strftime('%H:%M:%S'),
+            "message": message,
+            "level": level
+        }
+        self.logs.append(entry)
         
-        # Display in UI
-        if 'agent_container' in st.session_state:
-            container = st.session_state.agent_container
-            with container:
+        # Display in UI if container exists
+        if hasattr(st.session_state, 'agent_container'):
+            with st.session_state.agent_container:
+                css_class = "agent-status"
                 if level == "error":
-                    st.error(f"❌ **{self.name}**: {message}")
-                elif level == "success":
-                    st.success(f"✅ **{self.name}**: {message}")
+                    css_class += " agent-error"
                 elif level == "warning":
-                    st.warning(f"⚠️ **{self.name}**: {message}")
-                else:
-                    st.info(f"ℹ️ **{self.name}**: {message}")
-    
-    @abstractmethod
-    def process(self, *args, **kwargs):
-        """Process method to be implemented by each agent"""
-        pass
+                    css_class += " agent-warning"
+                
+                st.markdown(f'<div class="{css_class}"><b>{self.name}</b>: {message}</div>', 
+                          unsafe_allow_html=True)
 
-# Recursive Extraction Agent
-class RecursiveExtractionAgent(BaseAgent):
+# Recursive Extractor Agent
+class RecursiveExtractorAgent(BaseAgent):
     """Extracts fields recursively with proper hierarchy"""
     
     def __init__(self):
-        super().__init__("Recursive Extraction Agent")
+        super().__init__("Recursive Extractor")
+        self.doc = None
         self.patterns = self._compile_patterns()
     
-    def _compile_patterns(self):
-        """Compile extraction patterns"""
+    def _compile_patterns(self) -> Dict[str, re.Pattern]:
+        """Compile regex patterns"""
         return {
-            'part_header': re.compile(r'^Part\s+(\d+)\.?\s*(.*?)$', re.IGNORECASE),
-            'main_field': re.compile(r'^(\d+)\.\s+(.+?)$'),
-            'sub_field': re.compile(r'^([a-z])\.\s+(.+?)$', re.IGNORECASE),
-            'numbered_sub': re.compile(r'^(\d+)([a-z])\.\s+(.+?)$'),
-            'checkbox': re.compile(r'^\s*□\s+(.+?)$'),
-            'arrow_field': re.compile(r'^►\s*(.*)$'),
+            # Part patterns
+            'part': re.compile(r'^Part\s+(\d+)(?:\.\s*(.*))?$', re.IGNORECASE),
+            
+            # Main item patterns
+            'main_item': re.compile(r'^(\d+)\.\s+(.+?)$'),
+            'item_no_period': re.compile(r'^(\d+)\s+(.+?)$'),
+            
+            # Sub-item patterns  
+            'sub_item': re.compile(r'^(\d+)([a-z])\.\s+(.+?)$'),
+            'letter_only': re.compile(r'^([a-z])\.\s+(.+?)$'),
+            'indented_sub': re.compile(r'^\s{2,}([a-z])\.\s+(.+?)$'),
+            
+            # Special patterns
+            'checkbox': re.compile(r'^\s*□\s*(.+?)$'),
+            'arrow': re.compile(r'^\s*►\s*(.*)$'),
+            'yes_no': re.compile(r'^\s*(Yes|No)\s*$', re.IGNORECASE),
         }
     
-    def process(self, pdf_bytes: bytes) -> FormExtraction:
-        """Process PDF and extract fields recursively"""
+    def execute(self, pdf_file) -> FormExtractionResult:
+        """Execute recursive extraction"""
         self.status = "active"
         self.log("Starting recursive extraction...")
         
         try:
             # Open PDF
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            pdf_bytes = pdf_file.read() if hasattr(pdf_file, 'read') else pdf_file
+            self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
             # Identify form
-            form_info = self._identify_form(doc)
-            extraction = FormExtraction(
+            form_info = self._identify_form()
+            result = FormExtractionResult(
                 form_number=form_info['number'],
-                form_title=form_info['title'],
-                edition=form_info.get('edition', '')
+                form_title=form_info['title']
             )
             
             # Extract each page
-            for page_num in range(len(doc)):
-                self._extract_page(doc[page_num], page_num + 1, extraction)
+            for page_num in range(len(self.doc)):
+                self._extract_page(page_num, result)
             
-            doc.close()
+            # Calculate totals
+            for part in result.parts.values():
+                result.total_fields += len(part.get_all_fields_flat())
             
-            extraction.extraction_iterations = 1
-            self.log(f"Extracted {len(extraction.parts)} parts", "success")
-            
-            return extraction
+            self.log(f"Extraction complete. Found {len(result.parts)} parts, {result.total_fields} fields", "success")
+            self.status = "completed"
+            return result
             
         except Exception as e:
             self.log(f"Extraction failed: {str(e)}", "error")
+            self.status = "error"
             raise
+        finally:
+            if self.doc:
+                self.doc.close()
     
-    def _identify_form(self, doc) -> Dict:
-        """Identify form type from first page"""
-        first_page_text = doc[0].get_text()
+    def _identify_form(self) -> Dict:
+        """Identify form type"""
+        first_page = self.doc[0].get_text()
         
-        # Look for form number
-        form_patterns = [
-            (r'Form\s+(I-\d+[A-Z]?)', r'Form\s+I-\d+[A-Z]?\s+(.+?)(?:\n|Department)'),
-            (r'Form\s+(N-\d+)', r'Form\s+N-\d+\s+(.+?)(?:\n|Department)'),
-            (r'Form\s+(G-\d+)', r'Form\s+G-\d+\s+(.+?)(?:\n|Department)'),
-        ]
+        forms = {
+            'I-539': 'Application to Extend/Change Nonimmigrant Status',
+            'I-129': 'Petition for a Nonimmigrant Worker',
+            'I-90': 'Application to Replace Permanent Resident Card',
+            'G-28': 'Notice of Entry of Appearance',
+            'I-485': 'Application to Register Permanent Residence',
+            'I-765': 'Application for Employment Authorization',
+            'N-400': 'Application for Naturalization'
+        }
         
-        form_info = {"number": "Unknown", "title": "Unknown Form", "edition": ""}
+        for form_num, title in forms.items():
+            if form_num in first_page:
+                self.log(f"Identified form: {form_num} - {title}")
+                return {"number": form_num, "title": title}
         
-        for num_pattern, title_pattern in form_patterns:
-            num_match = re.search(num_pattern, first_page_text)
-            if num_match:
-                form_info["number"] = num_match.group(1)
-                
-                title_match = re.search(title_pattern, first_page_text)
-                if title_match:
-                    form_info["title"] = title_match.group(1).strip()
-                break
-        
-        # Look for edition
-        edition_match = re.search(r'Edition\s+(\d{2}/\d{2}/\d{2})', first_page_text)
-        if edition_match:
-            form_info["edition"] = edition_match.group(1)
-        
-        return form_info
+        return {"number": "Unknown", "title": "Unknown Form"}
     
-    def _extract_page(self, page, page_num: int, extraction: FormExtraction):
-        """Extract fields from a single page"""
+    def _extract_page(self, page_num: int, result: FormExtractionResult):
+        """Extract fields from a page recursively"""
+        page = self.doc[page_num]
         text = page.get_text()
         lines = text.split('\n')
         
         current_part = None
-        current_part_num = 0
-        i = 0
+        current_parent = None
+        line_idx = 0
         
-        while i < len(lines):
-            line = lines[i].strip()
+        while line_idx < len(lines):
+            line = lines[line_idx].strip()
+            
+            if not line:
+                line_idx += 1
+                continue
             
             # Check for part header
-            part_match = self.patterns['part_header'].match(line)
+            part_match = self.patterns['part'].match(line)
             if part_match:
-                current_part_num = int(part_match.group(1))
-                part_title = part_match.group(2).strip()
+                part_num = int(part_match.group(1))
+                part_title = part_match.group(2) or ""
                 
                 # Get full title from next line if needed
-                if not part_title and i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
+                if not part_title and line_idx + 1 < len(lines):
+                    next_line = lines[line_idx + 1].strip()
                     if next_line and not any(p.match(next_line) for p in self.patterns.values()):
                         part_title = next_line
-                        i += 1
+                        line_idx += 1
                 
-                current_part = PartStructure(
-                    number=current_part_num,
-                    title=part_title
-                )
-                extraction.add_part(current_part)
-                self.log(f"Found Part {current_part_num}: {part_title}")
+                # Create or get part
+                if part_num not in result.parts:
+                    result.parts[part_num] = PartStructure(
+                        part_number=part_num,
+                        part_name=f"Part {part_num}",
+                        part_title=part_title
+                    )
                 
-                i += 1
+                current_part = result.parts[part_num]
+                current_parent = None
+                self.log(f"Processing Part {part_num}: {part_title}")
+                line_idx += 1
                 continue
             
             # Skip if no current part
             if not current_part:
-                i += 1
+                line_idx += 1
                 continue
             
-            # Extract fields recursively
-            field, lines_consumed = self._extract_field_recursive(lines, i, page_num)
-            if field:
-                current_part.add_field(field)
-                i += lines_consumed
-            else:
-                i += 1
-    
-    def _extract_field_recursive(self, lines: List[str], start_idx: int, 
-                               page_num: int, parent_number: str = "") -> Tuple[Optional[FieldItem], int]:
-        """Recursively extract a field and its sub-fields"""
-        line = lines[start_idx].strip()
-        if not line:
-            return None, 1
-        
-        # Try main field pattern
-        main_match = self.patterns['main_field'].match(line)
-        if main_match:
-            number = main_match.group(1)
-            label = main_match.group(2).strip()
-            
-            field = FieldItem(
-                number=number,
-                label=label,
-                type=self._determine_field_type(label, lines, start_idx),
-                page=page_num,
-                line_number=start_idx,
-                raw_text=line,
-                extraction_method="pattern"
+            # Extract field recursively
+            field, lines_consumed = self._extract_field_recursive(
+                lines, line_idx, page_num + 1, current_part, current_parent
             )
             
-            # Look for sub-fields
-            lines_consumed = 1
-            idx = start_idx + 1
+            if field:
+                if not field.parent:
+                    current_part.root_fields.append(field)
+                    
+                # Update parent for potential sub-items
+                if field.children or self._might_have_children(field.label):
+                    current_parent = field
+                elif not field.parent:
+                    current_parent = None
             
-            # Check if this is a group field with sub-items
-            if self._is_group_field(label, lines, start_idx):
-                field.type = "group"
+            line_idx += lines_consumed
+    
+    def _extract_field_recursive(self, lines: List[str], start_idx: int, page_num: int,
+                                part: PartStructure, parent: Optional[FieldNode]) -> Tuple[Optional[FieldNode], int]:
+        """Recursively extract a field and its children"""
+        line = lines[start_idx].strip()
+        lines_consumed = 1
+        
+        # Try main item pattern
+        main_match = self.patterns['main_item'].match(line)
+        if not main_match:
+            main_match = self.patterns['item_no_period'].match(line)
+        
+        if main_match:
+            item_num = main_match.group(1)
+            label = main_match.group(2).strip()
+            
+            # Create field node
+            field = FieldNode(
+                item_number=item_num,
+                label=label,
+                field_type=self._determine_field_type(label, lines, start_idx),
+                page=page_num,
+                part_number=part.part_number,
+                part_name=part.part_name,
+                extraction_method="recursive",
+                raw_text=line
+            )
+            
+            # Check for children
+            if self._might_have_children(label):
+                child_idx = start_idx + 1
+                expected_letter = 'a'
                 
-                # Extract sub-fields
-                while idx < len(lines):
-                    sub_line = lines[idx].strip()
-                    
-                    # Check for sub-field patterns
-                    sub_field = None
-                    
-                    # Numbered sub-field (e.g., "1a. Label")
-                    numbered_sub_match = self.patterns['numbered_sub'].match(sub_line)
-                    if numbered_sub_match and numbered_sub_match.group(1) == number:
-                        sub_number = number + numbered_sub_match.group(2)
-                        sub_label = numbered_sub_match.group(3)
-                        sub_field = FieldItem(
-                            number=sub_number,
-                            label=sub_label,
-                            type=self._determine_field_type(sub_label, lines, idx),
-                            page=page_num,
-                            line_number=idx,
-                            raw_text=sub_line,
-                            extraction_method="pattern"
-                        )
-                    else:
-                        # Letter sub-field (e.g., "a. Label")
-                        sub_match = self.patterns['sub_field'].match(sub_line)
-                        if sub_match:
-                            sub_letter = sub_match.group(1)
-                            sub_label = sub_match.group(2)
-                            sub_field = FieldItem(
-                                number=number + sub_letter,
-                                label=sub_label,
-                                type=self._determine_field_type(sub_label, lines, idx),
-                                page=page_num,
-                                line_number=idx,
-                                raw_text=sub_line,
-                                extraction_method="pattern"
-                            )
-                        elif self._is_field_component(sub_line):
-                            # Handle unmarked components (like address fields)
-                            sub_field = FieldItem(
-                                number=f"{number}_component_{len(field.children) + 1}",
-                                label=sub_line,
-                                type="text",
-                                page=page_num,
-                                line_number=idx,
-                                raw_text=sub_line,
-                                extraction_method="structure"
-                            )
+                while child_idx < len(lines):
+                    # Look for sub-items
+                    sub_field, sub_consumed = self._extract_sub_item(
+                        lines, child_idx, item_num, expected_letter, page_num, part, field
+                    )
                     
                     if sub_field:
                         field.add_child(sub_field)
-                        lines_consumed += 1
-                        idx += 1
+                        lines_consumed += sub_consumed
+                        child_idx += sub_consumed
+                        expected_letter = chr(ord(expected_letter) + 1)
                     else:
-                        # Stop if we hit something that's not a sub-field
-                        if self.patterns['main_field'].match(sub_line):
+                        # Check if line belongs to this field
+                        next_line = lines[child_idx].strip()
+                        
+                        # Stop if we hit another main item
+                        if self.patterns['main_item'].match(next_line):
                             break
-                        elif not sub_line:
-                            # Skip empty lines
+                        
+                        # Check for field value indicators
+                        if self.patterns['arrow'].match(next_line):
                             lines_consumed += 1
-                            idx += 1
+                            child_idx += 1
+                        elif self.patterns['checkbox'].match(next_line):
+                            lines_consumed += 1
+                            child_idx += 1
                         else:
                             break
             
             return field, lines_consumed
         
-        # Try arrow field pattern (for fields like "► A-")
-        arrow_match = self.patterns['arrow_field'].match(line)
-        if arrow_match:
-            # This is typically a continuation of a previous field
-            return None, 1
-        
-        # Try checkbox pattern
-        checkbox_match = self.patterns['checkbox'].match(line)
-        if checkbox_match:
-            # This might be an option for a previous field
-            return None, 1
+        # Try sub-item pattern if we have a parent
+        if parent:
+            sub_field, sub_consumed = self._extract_sub_item(
+                lines, start_idx, parent.item_number, None, page_num, part, parent
+            )
+            if sub_field:
+                return sub_field, sub_consumed
         
         return None, 1
     
-    def _is_group_field(self, label: str, lines: List[str], current_idx: int) -> bool:
-        """Determine if a field is a group field with sub-items"""
+    def _extract_sub_item(self, lines: List[str], start_idx: int, parent_num: str,
+                         expected_letter: Optional[str], page_num: int, 
+                         part: PartStructure, parent: FieldNode) -> Tuple[Optional[FieldNode], int]:
+        """Extract a sub-item"""
+        line = lines[start_idx].strip()
+        
+        # Try different sub-item patterns
+        patterns_to_try = [
+            (self.patterns['sub_item'], lambda m: (m.group(2), m.group(3))),
+            (self.patterns['letter_only'], lambda m: (m.group(1), m.group(2))),
+            (self.patterns['indented_sub'], lambda m: (m.group(1), m.group(2))),
+        ]
+        
+        for pattern, extractor in patterns_to_try:
+            match = pattern.match(line)
+            if match:
+                # Extract parts based on pattern
+                if pattern == self.patterns['sub_item']:
+                    # Check if parent number matches
+                    if match.group(1) != parent_num:
+                        continue
+                
+                letter, label = extractor(match)
+                
+                # Check if this is the expected letter
+                if expected_letter and letter != expected_letter:
+                    continue
+                
+                # Create sub-field
+                sub_field = FieldNode(
+                    item_number=f"{parent_num}{letter}",
+                    label=label.strip(),
+                    field_type=self._determine_field_type(label, lines, start_idx),
+                    page=page_num,
+                    part_number=part.part_number,
+                    part_name=part.part_name,
+                    extraction_method="recursive",
+                    raw_text=line
+                )
+                
+                return sub_field, 1
+        
+        # Check for special cases (e.g., address fields without letters)
+        if self._is_address_component(line) and parent and "address" in parent.label.lower():
+            # Create sub-field with auto-generated letter
+            if expected_letter:
+                sub_field = FieldNode(
+                    item_number=f"{parent_num}{expected_letter}",
+                    label=line,
+                    field_type="text",
+                    page=page_num,
+                    part_number=part.part_number,
+                    part_name=part.part_name,
+                    extraction_method="recursive",
+                    raw_text=line
+                )
+                return sub_field, 1
+        
+        return None, 0
+    
+    def _might_have_children(self, label: str) -> bool:
+        """Check if a field might have children"""
         label_lower = label.lower()
         
-        # Known group fields
-        group_keywords = [
-            'name', 'legal name', 'full name',
-            'address', 'mailing address', 'physical address',
-            'information', 'contact information'
+        parent_indicators = [
+            'name', 'address', 'information', 'contact',
+            'mailing', 'physical', 'employment', 'education'
         ]
         
-        if any(keyword in label_lower for keyword in group_keywords):
-            # Check next lines for sub-items
-            for i in range(1, min(5, len(lines) - current_idx)):
-                next_line = lines[current_idx + i].strip()
-                if self.patterns['sub_field'].match(next_line):
-                    return True
-                if self.patterns['numbered_sub'].match(next_line):
-                    return True
-                if self._is_field_component(next_line):
-                    return True
-        
-        return False
+        return any(indicator in label_lower for indicator in parent_indicators)
     
-    def _is_field_component(self, line: str) -> bool:
-        """Check if line is a field component (like address parts)"""
+    def _is_address_component(self, text: str) -> bool:
+        """Check if text is an address component"""
         components = [
-            'Family Name', 'Given Name', 'Middle Name',
-            'In Care Of Name', 'Street Number and Name',
-            'Apt.', 'Ste.', 'Flr.', 'Number',
-            'City or Town', 'State', 'ZIP Code', 'Country'
+            'street number', 'street name', 'apt', 'ste', 'flr',
+            'city', 'town', 'state', 'zip', 'postal', 'country',
+            'in care of', 'c/o'
         ]
         
-        line_stripped = line.strip()
-        return any(comp in line_stripped for comp in components)
+        text_lower = text.lower()
+        return any(comp in text_lower for comp in components)
     
     def _determine_field_type(self, label: str, lines: List[str], current_idx: int) -> str:
-        """Determine the type of field"""
+        """Determine field type from label and context"""
         label_lower = label.lower()
         
-        # Check patterns
-        if 'date' in label_lower or 'mm/dd/yyyy' in label:
-            return 'date'
+        # Date fields
+        if any(word in label_lower for word in ['date', 'birth', 'expire', 'issue']):
+            return "date"
         
-        if 'signature' in label_lower:
-            return 'signature'
+        # Number fields
+        if any(word in label_lower for word in ['number', 'ssn', 'ein', 'a-number', 'alien']):
+            return "number"
         
-        if any(word in label_lower for word in ['number', 'a-number', 'alien registration']):
-            return 'number'
-        
+        # Email/Phone
         if 'email' in label_lower:
-            return 'email'
-        
+            return "email"
         if any(word in label_lower for word in ['phone', 'telephone', 'mobile']):
-            return 'phone'
+            return "phone"
         
-        # Check if it's a yes/no question
-        question_starters = ['is', 'are', 'do', 'does', 'have', 'has', 'were', 'was', 'will']
-        if any(label_lower.startswith(starter + ' ') for starter in question_starters):
-            # Check next line for Yes/No options
-            if current_idx + 1 < len(lines):
-                next_line = lines[current_idx + 1].strip()
-                if '□ Yes' in next_line or 'Yes' in next_line and 'No' in next_line:
-                    return 'checkbox'
+        # Checkbox/Radio
+        if label_lower.startswith(('are you', 'have you', 'do you', 'is ', 'was ')):
+            return "checkbox"
         
-        return 'text'
+        # Check next line for Yes/No
+        if current_idx + 1 < len(lines):
+            next_line = lines[current_idx + 1].strip().lower()
+            if 'yes' in next_line and 'no' in next_line:
+                return "checkbox"
+        
+        # Signature
+        if 'signature' in label_lower:
+            return "signature"
+        
+        return "text"
 
-# Structure Validation Agent
-class StructureValidationAgent(BaseAgent):
-    """Validates the extracted structure against expected patterns"""
+# Key Assignment Agent
+class KeyAssignmentAgent(BaseAgent):
+    """Assigns proper keys (P1_1a format) to fields"""
     
     def __init__(self):
-        super().__init__("Structure Validation Agent")
-        self.expected_structures = self._load_expected_structures()
+        super().__init__("Key Assignment Agent")
     
-    def _load_expected_structures(self):
-        """Load expected form structures"""
+    def execute(self, result: FormExtractionResult) -> FormExtractionResult:
+        """Assign keys to all fields"""
+        self.status = "active"
+        self.log("Assigning keys to fields...")
+        
+        try:
+            for part_num, part in result.parts.items():
+                for field in part.get_all_fields_flat():
+                    # Generate key
+                    key = self._generate_key(field)
+                    field.key = key
+            
+            self.log(f"Key assignment complete", "success")
+            self.status = "completed"
+            return result
+            
+        except Exception as e:
+            self.log(f"Key assignment failed: {str(e)}", "error")
+            self.status = "error"
+            raise
+    
+    def _generate_key(self, field: FieldNode) -> str:
+        """Generate key in P{part}_{item} format"""
+        # Basic format: P{part_number}_{item_number}
+        key = f"P{field.part_number}_{field.item_number}"
+        
+        # Clean up the key
+        key = key.replace('.', '')
+        key = key.replace(' ', '_')
+        
+        return key
+
+# Validator Agent
+class ValidatorAgent(BaseAgent):
+    """Validates extraction results"""
+    
+    def __init__(self):
+        super().__init__("Validator Agent")
+        self.expected_patterns = self._load_expected_patterns()
+    
+    def _load_expected_patterns(self) -> Dict:
+        """Load expected patterns for forms"""
         return {
             "I-539": {
-                "parts": {
-                    1: {
-                        "title": "Information About You",
-                        "required_fields": ["1", "2", "3", "4", "5", "6"],
-                        "field_patterns": {
-                            "1": {"label_pattern": r"Your Full Legal Name", "has_sub_items": True, "sub_items": ["1a", "1b", "1c"]},
-                            "2": {"label_pattern": r"Alien Registration Number.*A-Number", "has_sub_items": False},
-                            "3": {"label_pattern": r"USCIS Online Account Number", "has_sub_items": False},
-                            "4": {"label_pattern": r"Your U\.S\. Mailing Address", "has_sub_items": True},
-                            "5": {"label_pattern": r"Is your mailing address.*same.*physical", "has_sub_items": False},
-                            "6": {"label_pattern": r"Your Current Physical Address", "has_sub_items": True}
-                        }
-                    }
-                }
+                "parts": [1, 2, 3, 4, 5, 6, 7, 8],
+                "part_1_items": ["1", "2", "3", "4", "5", "6"],
+                "sub_items": {
+                    "1": ["a", "b", "c"],  # Name fields
+                    "4": [],  # Address has components but not lettered
+                    "6": []   # Physical address
+                },
+                "required_fields": ["P1_1a", "P1_1b", "P1_2"]  # Family name, Given name, A-Number
+            },
+            "I-129": {
+                "parts": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+                "required_fields": ["P1_1", "P3_1a", "P3_1b"]
+            },
+            "G-28": {
+                "parts": [1, 2, 3, 4, 5, 6],
+                "required_fields": ["P1_2a", "P1_2b", "P3_6a", "P3_6b", "P3_9"]
             }
         }
     
-    def process(self, extraction: FormExtraction) -> Tuple[bool, List[str]]:
-        """Validate the extraction structure"""
+    def execute(self, result: FormExtractionResult) -> Tuple[bool, List[str]]:
+        """Validate extraction result"""
         self.status = "active"
-        self.log("Validating extraction structure...")
+        self.log(f"Validating {result.form_number} extraction...")
         
         errors = []
         
-        # Get expected structure
-        expected = self.expected_structures.get(extraction.form_number)
-        if not expected:
-            self.log(f"No expected structure defined for {extraction.form_number}", "warning")
-            return True, []
+        try:
+            # Get expected pattern
+            expected = self.expected_patterns.get(result.form_number, {})
+            
+            if expected:
+                # Check parts
+                errors.extend(self._validate_parts(result, expected))
+                
+                # Check required fields
+                errors.extend(self._validate_required_fields(result, expected))
+                
+                # Check field sequences
+                errors.extend(self._validate_sequences(result))
+                
+                # Check sub-item structure
+                errors.extend(self._validate_sub_items(result, expected))
+            
+            # Calculate validation score
+            if result.total_fields > 0:
+                error_penalty = min(len(errors) * 0.05, 0.5)
+                result.validation_score = max(0, 1.0 - error_penalty)
+            
+            result.validation_errors = errors
+            result.is_valid = len(errors) == 0
+            
+            if result.is_valid:
+                self.log(f"Validation passed! Score: {result.validation_score:.0%}", "success")
+            else:
+                self.log(f"Validation found {len(errors)} issues", "warning")
+                for error in errors[:5]:  # Show first 5
+                    self.log(f"  - {error}", "warning")
+            
+            self.status = "completed"
+            return result.is_valid, errors
+            
+        except Exception as e:
+            self.log(f"Validation failed: {str(e)}", "error")
+            self.status = "error"
+            return False, [str(e)]
+    
+    def _validate_parts(self, result: FormExtractionResult, expected: Dict) -> List[str]:
+        """Validate parts"""
+        errors = []
+        expected_parts = expected.get("parts", [])
         
-        # Validate parts
-        for part_num, part_info in expected.get("parts", {}).items():
-            if part_num not in extraction.parts:
+        for part_num in expected_parts:
+            if part_num not in result.parts:
                 errors.append(f"Missing Part {part_num}")
-                continue
+        
+        # Check part sequence
+        if result.parts:
+            part_nums = sorted(result.parts.keys())
+            for i, num in enumerate(part_nums):
+                if i > 0 and num != part_nums[i-1] + 1:
+                    errors.append(f"Part sequence gap between Part {part_nums[i-1]} and Part {num}")
+        
+        return errors
+    
+    def _validate_required_fields(self, result: FormExtractionResult, expected: Dict) -> List[str]:
+        """Validate required fields exist"""
+        errors = []
+        required = expected.get("required_fields", [])
+        all_fields = result.get_all_fields_with_keys()
+        
+        for field_key in required:
+            if field_key not in all_fields:
+                errors.append(f"Missing required field: {field_key}")
+        
+        return errors
+    
+    def _validate_sequences(self, result: FormExtractionResult) -> List[str]:
+        """Validate field sequences within parts"""
+        errors = []
+        
+        for part in result.parts.values():
+            # Get main items (root fields)
+            main_items = {}
+            for field in part.root_fields:
+                if field.item_number.isdigit():
+                    main_items[int(field.item_number)] = field
             
-            part = extraction.parts[part_num]
-            
-            # Validate title
-            if part_info.get("title") and part.title != part_info["title"]:
-                self.log(f"Part {part_num} title mismatch: expected '{part_info['title']}', got '{part.title}'", "warning")
-            
-            # Validate required fields
-            for req_field in part_info.get("required_fields", []):
-                field = part.get_field_by_number(req_field)
-                if not field:
-                    errors.append(f"Part {part_num}: Missing required field {req_field}")
-                else:
-                    # Validate field structure
-                    field_pattern = part_info.get("field_patterns", {}).get(req_field)
-                    if field_pattern:
-                        # Check label pattern
-                        if field_pattern.get("label_pattern"):
-                            if not re.search(field_pattern["label_pattern"], field.label, re.IGNORECASE):
-                                errors.append(f"Part {part_num}, Field {req_field}: Label doesn't match expected pattern")
+            # Check sequence
+            if main_items:
+                sorted_nums = sorted(main_items.keys())
+                for i, num in enumerate(sorted_nums):
+                    if i > 0 and num != sorted_nums[i-1] + 1:
+                        errors.append(f"{part.part_name}: Item sequence gap between {sorted_nums[i-1]} and {num}")
+        
+        return errors
+    
+    def _validate_sub_items(self, result: FormExtractionResult, expected: Dict) -> List[str]:
+        """Validate sub-item structure"""
+        errors = []
+        expected_subs = expected.get("sub_items", {})
+        
+        for part in result.parts.values():
+            for field in part.get_all_fields_flat():
+                # Check if this main item should have sub-items
+                if field.item_number in expected_subs:
+                    expected_letters = expected_subs[field.item_number]
+                    
+                    if expected_letters:
+                        # Get actual sub-items
+                        actual_letters = []
+                        for child in field.children:
+                            match = re.match(r'\d+([a-z])', child.item_number)
+                            if match:
+                                actual_letters.append(match.group(1))
                         
-                        # Check sub-items
-                        if field_pattern.get("has_sub_items"):
-                            expected_subs = field_pattern.get("sub_items", [])
-                            actual_subs = [child.number for child in field.children]
-                            
-                            for expected_sub in expected_subs:
-                                if expected_sub not in actual_subs:
-                                    errors.append(f"Part {part_num}, Field {req_field}: Missing sub-item {expected_sub}")
+                        # Compare
+                        for letter in expected_letters:
+                            if letter not in actual_letters:
+                                errors.append(f"Missing sub-item: {field.item_number}{letter}")
         
-        # Validate field sequences
-        for part_num, part in extraction.parts.items():
-            seq_errors = part.validate_sequence()
-            for error in seq_errors:
-                errors.append(f"Part {part_num}: {error}")
-        
-        is_valid = len(errors) == 0
-        
-        if is_valid:
-            self.log("Structure validation passed!", "success")
-        else:
-            self.log(f"Structure validation found {len(errors)} errors", "error")
-            for error in errors[:5]:  # Show first 5 errors
-                self.log(f"  - {error}", "error")
-        
-        return is_valid, errors
+        return errors
 
-# Field Assignment Agent
-class FieldAssignmentAgent(BaseAgent):
-    """Assigns fields to database structure"""
+# Output Checker Agent
+class OutputCheckerAgent(BaseAgent):
+    """Checks if output matches expected format"""
     
     def __init__(self):
-        super().__init__("Field Assignment Agent")
-        self.mappings = self._load_mappings()
+        super().__init__("Output Checker")
     
-    def _load_mappings(self):
-        """Load field mappings"""
-        return {
-            "I-539": {
-                "1a": "beneficiary.Beneficiary.beneficiaryLastName",
-                "1b": "beneficiary.Beneficiary.beneficiaryFirstName",
-                "1c": "beneficiary.Beneficiary.beneficiaryMiddleName",
-                "2": "beneficiary.Beneficiary.alienNumber",
-                "3": "beneficiary.Beneficiary.uscisAccountNumber",
-                # Add more mappings...
-            }
+    def execute(self, result: FormExtractionResult, expected_sample: Optional[Dict] = None) -> bool:
+        """Check if output is correct"""
+        self.status = "active"
+        self.log("Checking output format...")
+        
+        try:
+            output = result.to_output_format()
+            
+            # Basic checks
+            if not output:
+                self.log("Output is empty", "error")
+                return False
+            
+            # Check key format
+            for key in output.keys():
+                if not self._is_valid_key_format(key):
+                    self.log(f"Invalid key format: {key}", "error")
+                    return False
+            
+            # Check against expected sample if provided
+            if expected_sample:
+                missing_keys = set(expected_sample.keys()) - set(output.keys())
+                if missing_keys:
+                    self.log(f"Missing expected keys: {missing_keys}", "warning")
+                    return False
+            
+            # Check for common fields based on form type
+            if not self._check_common_fields(result.form_number, output):
+                return False
+            
+            self.log("Output check passed", "success")
+            self.status = "completed"
+            return True
+            
+        except Exception as e:
+            self.log(f"Output check failed: {str(e)}", "error")
+            self.status = "error"
+            return False
+    
+    def _is_valid_key_format(self, key: str) -> bool:
+        """Check if key matches expected format"""
+        # Should match patterns like P1_1, P1_1a, P1_1_title
+        patterns = [
+            r'^P\d+_\d+[a-z]?$',  # P1_1, P1_1a
+            r'^P\d+_\d+[a-z]?_title$',  # P1_1_title
+            r'^P\d+_\d+[a-z]?_\w+$',  # P1_1_other_suffix
+        ]
+        
+        return any(re.match(pattern, key) for pattern in patterns)
+    
+    def _check_common_fields(self, form_number: str, output: Dict) -> bool:
+        """Check for common fields that should exist"""
+        common_fields = {
+            "I-539": ["P1_1a", "P1_1b", "P1_2"],  # Name and A-Number
+            "I-129": ["P1_1", "P3_1a", "P3_1b"],  # Petitioner and beneficiary
+            "G-28": ["P1_2a", "P1_2b", "P3_6a", "P3_6b"],  # Attorney and client names
         }
-    
-    def process(self, extraction: FormExtraction) -> Dict[str, str]:
-        """Assign fields to database paths"""
-        self.status = "active"
-        self.log("Assigning fields to database structure...")
         
-        assignments = {}
-        form_mappings = self.mappings.get(extraction.form_number, {})
+        required = common_fields.get(form_number, [])
+        missing = [field for field in required if field not in output]
         
-        for part in extraction.parts.values():
-            for field in part.fields:
-                # Assign main field
-                if field.number in form_mappings:
-                    assignments[field.number] = form_mappings[field.number]
-                    self.log(f"Assigned field {field.number} to {form_mappings[field.number]}")
-                
-                # Assign children
-                for child in field.children:
-                    if child.number in form_mappings:
-                        assignments[child.number] = form_mappings[child.number]
-                        self.log(f"Assigned field {child.number} to {form_mappings[child.number]}")
-        
-        self.log(f"Assigned {len(assignments)} fields", "success")
-        return assignments
-
-# Output Verification Agent
-class OutputVerificationAgent(BaseAgent):
-    """Verifies the final output is correct"""
-    
-    def __init__(self):
-        super().__init__("Output Verification Agent")
-    
-    def process(self, extraction: FormExtraction, validation_errors: List[str], 
-                assignments: Dict[str, str]) -> bool:
-        """Verify the output is correct"""
-        self.status = "active"
-        self.log("Verifying final output...")
-        
-        # Check extraction completeness
-        total_fields = len(extraction.get_all_fields())
-        if total_fields < 10:
-            self.log(f"Warning: Only {total_fields} fields extracted", "warning")
+        if missing:
+            self.log(f"Missing common fields: {missing}", "error")
             return False
         
-        # Check validation
-        if validation_errors:
-            self.log(f"Validation errors present: {len(validation_errors)}", "error")
-            return False
-        
-        # Check assignments
-        assigned_fields = len(assignments)
-        if assigned_fields < total_fields * 0.5:
-            self.log(f"Warning: Only {assigned_fields}/{total_fields} fields assigned", "warning")
-            return False
-        
-        # Verify critical fields
-        critical_checks = self._verify_critical_fields(extraction)
-        if not all(critical_checks.values()):
-            failed = [k for k, v in critical_checks.items() if not v]
-            self.log(f"Critical field checks failed: {failed}", "error")
-            return False
-        
-        self.log("Output verification passed!", "success")
         return True
-    
-    def _verify_critical_fields(self, extraction: FormExtraction) -> Dict[str, bool]:
-        """Verify critical fields are present and correct"""
-        checks = {}
-        
-        # For I-539, check Part 1
-        if extraction.form_number == "I-539":
-            part1 = extraction.parts.get(1)
-            if part1:
-                # Check name field
-                name_field = part1.get_field_by_number("1")
-                checks["has_name_field"] = name_field is not None
-                checks["name_has_subitems"] = name_field and len(name_field.children) >= 3
-                
-                # Check A-Number field
-                a_number_field = part1.get_field_by_number("2")
-                checks["has_a_number"] = a_number_field is not None
-                checks["a_number_label_correct"] = (
-                    a_number_field and 
-                    "alien registration number" in a_number_field.label.lower()
-                )
-        
-        return checks
 
-# Master Coordinator Agent
-class MasterCoordinatorAgent(BaseAgent):
-    """Coordinates all agents and manages the extraction loop"""
+# Coordinator Agent
+class CoordinatorAgent(BaseAgent):
+    """Coordinates all agents with retry loop"""
     
-    def __init__(self):
-        super().__init__("Master Coordinator")
-        self.max_iterations = 5
+    def __init__(self, max_iterations: int = 5):
+        super().__init__("Coordinator")
+        self.max_iterations = max_iterations
         self.agents = {
-            'extractor': RecursiveExtractionAgent(),
-            'validator': StructureValidationAgent(),
-            'assigner': FieldAssignmentAgent(),
-            'verifier': OutputVerificationAgent()
+            'extractor': RecursiveExtractorAgent(),
+            'assigner': KeyAssignmentAgent(),
+            'validator': ValidatorAgent(),
+            'checker': OutputCheckerAgent()
         }
     
-    def process(self, pdf_bytes: bytes) -> Optional[FormExtraction]:
-        """Coordinate the extraction process"""
+    def execute(self, pdf_file) -> Optional[FormExtractionResult]:
+        """Execute extraction with validation loop"""
         self.status = "active"
-        self.log("Starting coordinated extraction process...")
+        self.log(f"Starting coordinated extraction (max {self.max_iterations} iterations)...")
         
         iteration = 0
-        extraction = None
+        result = None
         
-        while iteration < self.max_iterations:
-            iteration += 1
-            self.log(f"=== Iteration {iteration} ===")
-            
-            try:
+        try:
+            while iteration < self.max_iterations:
+                iteration += 1
+                self.log(f"\n=== Iteration {iteration} ===")
+                
                 # Step 1: Extract
                 if iteration == 1:
-                    extraction = self.agents['extractor'].process(pdf_bytes)
+                    result = self.agents['extractor'].execute(pdf_file)
                 else:
                     # Re-extract with feedback
-                    self.log("Re-extracting with enhanced patterns...")
-                    extraction = self._enhanced_extraction(pdf_bytes, extraction)
+                    self.log("Re-extracting with improved patterns...")
+                    result = self._re_extract_with_feedback(pdf_file, result)
                 
-                # Step 2: Validate
-                is_valid, validation_errors = self.agents['validator'].process(extraction)
+                if not result:
+                    self.log("Extraction failed", "error")
+                    break
                 
-                # Step 3: Assign
-                assignments = self.agents['assigner'].process(extraction)
+                # Step 2: Assign keys
+                result = self.agents['assigner'].execute(result)
                 
-                # Step 4: Verify
-                is_correct = self.agents['verifier'].process(
-                    extraction, validation_errors, assignments
-                )
+                # Step 3: Validate
+                is_valid, errors = self.agents['validator'].execute(result)
                 
-                if is_correct:
-                    self.log(f"Extraction successful after {iteration} iterations!", "success")
-                    
-                    # Add metadata
-                    extraction.extraction_iterations = iteration
-                    extraction.is_valid = True
-                    extraction.validation_score = 1.0
-                    
-                    # Add logs
-                    for agent_name, agent in self.agents.items():
-                        extraction.agent_logs[agent_name] = [log[1] for log in agent.logs]
-                    
-                    return extraction
-                else:
-                    self.log(f"Iteration {iteration} failed verification, retrying...", "warning")
-                    
-            except Exception as e:
-                self.log(f"Error in iteration {iteration}: {str(e)}", "error")
+                # Step 4: Check output
+                output_ok = self.agents['checker'].execute(result)
                 
-        self.log("Max iterations reached without success", "error")
-        return extraction
+                # Check if we're done
+                if is_valid and output_ok:
+                    self.log(f"✅ Extraction successful after {iteration} iterations!", "success")
+                    result.extraction_iterations = iteration
+                    break
+                
+                # Log issues
+                if not is_valid:
+                    self.log(f"Validation failed with {len(errors)} errors", "warning")
+                if not output_ok:
+                    self.log("Output format check failed", "warning")
+                
+                # Prepare for next iteration
+                if iteration < self.max_iterations:
+                    self.log("Preparing for next iteration...")
+                    time.sleep(0.5)  # Brief pause
+            
+            if iteration >= self.max_iterations:
+                self.log(f"⚠️ Reached max iterations ({self.max_iterations})", "warning")
+            
+            self.status = "completed"
+            return result
+            
+        except Exception as e:
+            self.log(f"Coordination failed: {str(e)}", "error")
+            self.status = "error"
+            return None
     
-    def _enhanced_extraction(self, pdf_bytes: bytes, previous_extraction: FormExtraction) -> FormExtraction:
-        """Enhanced extraction based on previous results"""
-        # This would implement more sophisticated extraction based on what was missed
-        # For now, just re-run the basic extraction
-        return self.agents['extractor'].process(pdf_bytes)
+    def _re_extract_with_feedback(self, pdf_file, previous_result: FormExtractionResult) -> FormExtractionResult:
+        """Re-extract with feedback from validation"""
+        # This is where we could implement smarter re-extraction
+        # For now, just re-run extraction
+        return self.agents['extractor'].execute(pdf_file)
 
-# UI Helper Functions
-def display_extraction_results(extraction: FormExtraction):
-    """Display extraction results in a structured way"""
-    st.markdown("## 📋 Extraction Results")
+# Utility Functions
+def get_openai_client():
+    """Get OpenAI client if available"""
+    if not OPENAI_AVAILABLE:
+        return None
+    
+    api_key = os.environ.get('OPENAI_API_KEY')
+    if not api_key and hasattr(st, 'secrets'):
+        api_key = st.secrets.get('OPENAI_API_KEY')
+    
+    if api_key:
+        return OpenAI(api_key=api_key)
+    
+    return None
+
+# Display Functions
+def display_extraction_result(result: FormExtractionResult):
+    """Display extraction result in UI"""
+    st.markdown("### 📊 Extraction Results")
     
     # Summary metrics
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Form", extraction.form_number)
+        st.metric("Form", result.form_number)
     with col2:
-        st.metric("Parts", len(extraction.parts))
+        st.metric("Parts", len(result.parts))
     with col3:
-        total_fields = len(extraction.get_all_fields())
-        st.metric("Total Fields", total_fields)
+        st.metric("Total Fields", result.total_fields)
     with col4:
-        st.metric("Iterations", extraction.extraction_iterations)
-    
-    # Display parts and fields
-    for part_num, part in extraction.parts.items():
-        with st.expander(f"Part {part_num}: {part.title}", expanded=(part_num == 1)):
-            display_fields_recursive(part.fields)
-
-def display_fields_recursive(fields: List[FieldItem], level: int = 0):
-    """Display fields recursively with proper indentation"""
-    for field in fields:
-        # Display main field
-        indent = "  " * level
-        if field.children:
-            st.markdown(f"{indent}**{field.number}. {field.label}** (Group)")
+        if result.is_valid:
+            st.markdown('<span class="validation-pass">✅ Valid</span>', unsafe_allow_html=True)
         else:
-            st.markdown(f"{indent}**{field.number}.** {field.label} `[{field.type}]`")
+            st.markdown('<span class="validation-fail">❌ Invalid</span>', unsafe_allow_html=True)
+    
+    # Parts breakdown
+    with st.expander("Parts Breakdown", expanded=True):
+        for part_num in sorted(result.parts.keys()):
+            part = result.parts[part_num]
+            st.markdown(f"**Part {part_num}**: {part.part_title}")
+            
+            # Show sample fields
+            all_fields = part.get_all_fields_flat()
+            st.caption(f"{len(all_fields)} fields")
+            
+            # Show first few fields
+            for field in all_fields[:5]:
+                indent = "  " * (field.item_number.count(chr) for chr in 'abcdefghij' if chr in field.item_number)
+                st.markdown(f'<div class="field-output">{indent}{field.key}: {field.label}</div>', 
+                          unsafe_allow_html=True)
+            
+            if len(all_fields) > 5:
+                st.caption(f"... and {len(all_fields) - 5} more fields")
+    
+    # Validation errors
+    if result.validation_errors:
+        with st.expander(f"⚠️ Validation Issues ({len(result.validation_errors)})", expanded=False):
+            for error in result.validation_errors:
+                st.warning(error)
+    
+    # Output format
+    with st.expander("Output Format", expanded=False):
+        output = result.to_output_format()
         
-        # Display children
-        if field.children:
-            display_fields_recursive(field.children, level + 1)
+        # Show sample
+        sample_keys = list(output.keys())[:20]
+        for key in sorted(sample_keys):
+            value = output[key]
+            if value and not key.endswith('_title'):
+                st.code(f'{key} = "{value}"')
+            elif not value:
+                st.code(f'{key} = null')
 
 # Main Application
 def main():
-    st.markdown('<div class="main-header"><h1>🤖 Enhanced USCIS Form Reader</h1><p>Recursive Extraction with Validation Loop</p></div>', 
+    st.markdown('<div class="main-header"><h1>🤖 Multi-Agent USCIS Form Reader</h1><p>Recursive Extraction with Validation Loop</p></div>', 
                unsafe_allow_html=True)
-    
-    # Check dependencies
-    if not PYMUPDF_AVAILABLE:
-        st.error("❌ PyMuPDF not installed. Please install: pip install PyMuPDF")
-        return
     
     # Initialize session state
     if 'extraction_result' not in st.session_state:
@@ -926,19 +1020,30 @@ def main():
         max_iterations = st.slider("Max Iterations", 1, 10, 5)
         show_agent_logs = st.checkbox("Show Agent Logs", value=True)
         
-        if st.session_state.extraction_result:
-            st.markdown("### 📊 Current Extraction")
-            extraction = st.session_state.extraction_result
-            st.info(f"Form: {extraction.form_number}")
-            st.metric("Validation Score", f"{extraction.validation_score:.0%}")
+        # OpenAI status
+        if OPENAI_AVAILABLE:
+            client = get_openai_client()
+            if client:
+                st.success("✅ OpenAI Available")
+            else:
+                st.warning("⚠️ OpenAI API key not configured")
+        else:
+            st.error("❌ OpenAI not installed")
+        
+        # PyMuPDF status
+        if PYMUPDF_AVAILABLE:
+            st.success("✅ PyMuPDF Available")
+        else:
+            st.error("❌ PyMuPDF not installed")
+            st.caption("Install with: pip install PyMuPDF")
     
     # Main content
-    st.markdown("## 📤 Upload USCIS Form")
+    st.markdown("## Upload USCIS Form")
     
     uploaded_file = st.file_uploader(
         "Choose a USCIS PDF form",
         type=['pdf'],
-        help="Upload any USCIS form (I-539, I-129, I-485, etc.)"
+        help="Upload forms like I-539, I-129, G-28, etc."
     )
     
     if uploaded_file:
@@ -948,58 +1053,76 @@ def main():
             st.success(f"✅ {uploaded_file.name} uploaded")
         
         with col2:
-            if st.button("🚀 Process", type="primary", use_container_width=True):
-                # Create containers for agent output
-                st.session_state.agent_container = st.container()
+            if st.button("🚀 Extract", type="primary", use_container_width=True):
+                # Create containers
+                if show_agent_logs:
+                    st.session_state.agent_container = st.container()
                 
-                # Process with coordinator
-                with st.spinner("Processing with recursive extraction..."):
-                    coordinator = MasterCoordinatorAgent()
-                    coordinator.max_iterations = max_iterations
-                    
-                    pdf_bytes = uploaded_file.read()
-                    extraction = coordinator.process(pdf_bytes)
-                    
-                    if extraction and extraction.is_valid:
-                        st.session_state.extraction_result = extraction
-                        st.success("✅ Extraction completed successfully!")
+                progress_container = st.container()
+                
+                with progress_container:
+                    with st.spinner("Extracting with multi-agent system..."):
+                        # Create coordinator
+                        coordinator = CoordinatorAgent(max_iterations=max_iterations)
                         
-                        # Display results
-                        display_extraction_results(extraction)
+                        # Execute extraction
+                        result = coordinator.execute(uploaded_file)
                         
-                        # Show agent logs if enabled
-                        if show_agent_logs:
-                            with st.expander("🤖 Agent Logs"):
-                                for agent_name, logs in extraction.agent_logs.items():
-                                    st.markdown(f"### {agent_name}")
-                                    for log in logs[-10:]:  # Show last 10 logs
-                                        st.text(log)
-                        
-                        # Export options
-                        st.markdown("## 📥 Export Options")
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            json_data = extraction.to_json()
-                            st.download_button(
-                                "📄 Download JSON",
-                                json_data,
-                                f"{extraction.form_number}_extraction.json",
-                                mime="application/json"
-                            )
-                        
-                        with col2:
-                            if st.button("🔄 Re-process"):
-                                st.session_state.extraction_result = None
-                                st.experimental_rerun()
-                    else:
-                        st.error("❌ Extraction failed after maximum iterations")
+                        if result:
+                            st.session_state.extraction_result = result
+                            st.success("✅ Extraction complete!")
+                        else:
+                            st.error("❌ Extraction failed")
     
-    # Display existing results
-    elif st.session_state.extraction_result:
-        extraction = st.session_state.extraction_result
-        st.info(f"Showing results for previously processed form: {extraction.form_number}")
-        display_extraction_results(extraction)
+    # Display results
+    if st.session_state.extraction_result:
+        st.markdown("---")
+        display_extraction_result(st.session_state.extraction_result)
+        
+        # Export options
+        st.markdown("### 📥 Export Options")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("Export as JSON", use_container_width=True):
+                output = st.session_state.extraction_result.to_output_format()
+                json_str = json.dumps(output, indent=2)
+                
+                st.download_button(
+                    "⬇️ Download JSON",
+                    json_str,
+                    f"{st.session_state.extraction_result.form_number}_extracted.json",
+                    mime="application/json"
+                )
+        
+        with col2:
+            if st.button("Export Structure", use_container_width=True):
+                structure = {
+                    "form_number": st.session_state.extraction_result.form_number,
+                    "form_title": st.session_state.extraction_result.form_title,
+                    "parts": {
+                        part_num: part.to_dict() 
+                        for part_num, part in st.session_state.extraction_result.parts.items()
+                    }
+                }
+                json_str = json.dumps(structure, indent=2)
+                
+                st.download_button(
+                    "⬇️ Download Structure",
+                    json_str,
+                    f"{st.session_state.extraction_result.form_number}_structure.json",
+                    mime="application/json"
+                )
+        
+        with col3:
+            if st.button("View Raw Output", use_container_width=True):
+                with st.expander("Raw Output", expanded=True):
+                    output = st.session_state.extraction_result.to_output_format()
+                    st.json(output)
 
 if __name__ == "__main__":
-    main()
+    if not PYMUPDF_AVAILABLE:
+        st.error("PyMuPDF is required. Install with: pip install PyMuPDF")
+    else:
+        main()
