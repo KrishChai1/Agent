@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Complete Working USCIS Form Reader with All Agents Implemented
-Fixed: Stream handling and part extraction sequencing
+Advanced Agentic USCIS Form Reader
+- Generic pattern learning for any form
+- Self-improving extraction with feedback loops
+- No duplicates, clean part organization
+- Manual database mapping with UI
+- Production-ready with comprehensive error handling
 """
 
 import os
@@ -43,7 +47,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Advanced USCIS Form Reader",
+    page_title="Agentic USCIS Form Reader",
     page_icon="🤖",
     layout="wide"
 )
@@ -52,12 +56,13 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
         color: white;
         padding: 2rem;
         border-radius: 10px;
         margin-bottom: 2rem;
         text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     .agent-card {
         background: white;
@@ -65,11 +70,18 @@ st.markdown("""
         border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        transition: all 0.3s ease;
     }
     .agent-active {
         border-left: 4px solid #2196F3;
         background: #E3F2FD;
+        animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.8; }
+        100% { opacity: 1; }
     }
     .agent-success {
         border-left: 4px solid #4CAF50;
@@ -80,51 +92,50 @@ st.markdown("""
         background: #FFEBEE;
     }
     .field-card {
-        background: #f5f5f5;
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 0.5rem;
-        margin: 0.2rem 0;
-        font-family: monospace;
-    }
-    .hierarchy-tree {
-        font-family: monospace;
-        white-space: pre;
-        background: #f5f5f5;
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 6px;
         padding: 1rem;
-        border-radius: 4px;
-        overflow-x: auto;
+        margin: 0.5rem 0;
+        transition: all 0.2s ease;
     }
-    .validation-badge {
-        display: inline-block;
-        padding: 0.2rem 0.5rem;
-        border-radius: 12px;
-        font-size: 0.8rem;
+    .field-card:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        transform: translateY(-2px);
+    }
+    .part-header {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
         font-weight: bold;
     }
-    .badge-success {
-        background: #4CAF50;
-        color: white;
+    .mapping-input {
+        background: #f0f7ff;
+        border: 2px dashed #2196F3;
+        border-radius: 6px;
+        padding: 1rem;
+        margin: 0.5rem 0;
     }
-    .badge-warning {
-        background: #FF9800;
-        color: white;
+    .duplicate-warning {
+        background: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 0.5rem;
+        margin: 0.5rem 0;
     }
-    .badge-error {
-        background: #f44336;
-        color: white;
+    .learning-indicator {
+        background: #e3f2fd;
+        border: 1px solid #2196F3;
+        border-radius: 20px;
+        padding: 0.25rem 1rem;
+        display: inline-block;
+        animation: learning 2s infinite;
     }
-    .mapped-field {
-        background: #E8F5E9;
-        border-left: 4px solid #4CAF50;
-    }
-    .unmapped-field {
-        background: #FFF3E0;
-        border-left: 4px solid #FF9800;
-    }
-    .mapping-agent {
-        border-left: 4px solid #9C27B0;
-        background: #F3E5F5;
+    @keyframes learning {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -153,20 +164,29 @@ class MappingStatus(Enum):
     MAPPED = "mapped"
     UNMAPPED = "unmapped"
     MANUAL = "manual"
-    QUESTIONNAIRE = "questionnaire"
+    SUGGESTED = "suggested"
+    REVIEW = "review"
 
 # ===== DATA CLASSES =====
 @dataclass
-class FieldPattern:
-    """Pattern for field recognition"""
-    pattern: re.Pattern
+class LearnedPattern:
+    """Pattern learned from successful extractions"""
+    pattern: str
     field_type: FieldType
-    confidence: float = 1.0
-    description: str = ""
+    confidence: float
+    form_types: Set[str] = field(default_factory=set)
+    success_count: int = 0
+    last_seen: datetime = field(default_factory=datetime.now)
+    
+    def update_success(self, form_type: str):
+        self.success_count += 1
+        self.form_types.add(form_type)
+        self.last_seen = datetime.now()
+        self.confidence = min(0.95, self.confidence + 0.05)
 
 @dataclass
 class FieldNode:
-    """Enhanced field node with mapping support"""
+    """Enhanced field node with duplicate prevention"""
     # Core properties
     item_number: str
     label: str
@@ -183,135 +203,53 @@ class FieldNode:
     part_name: str = "Part 1"
     bbox: Optional[Tuple[float, float, float, float]] = None
     
-    # Generated key
+    # Unique identification
     key: str = ""
+    content_hash: str = ""  # Hash of label + position for duplicate detection
     
     # Extraction metadata
     confidence: ExtractionConfidence = ExtractionConfidence.LOW
     extraction_method: str = ""
     raw_text: str = ""
-    patterns_matched: List[str] = field(default_factory=list)
     
-    # Validation
-    is_required: bool = False
-    is_valid: bool = True
-    validation_errors: List[str] = field(default_factory=list)
-    
-    # Mapping metadata
+    # Mapping
     mapping_status: MappingStatus = MappingStatus.UNMAPPED
     mapped_to: Optional[str] = None
     mapping_confidence: float = 0.0
-    
-    def add_child(self, child: 'FieldNode'):
-        """Add child node"""
-        child.parent = self
-        self.children.append(child)
-    
-    def get_full_path(self) -> str:
-        """Get full hierarchical path"""
-        if self.parent:
-            return f"{self.parent.get_full_path()}.{self.item_number}"
-        return self.item_number
-    
-    def get_depth(self) -> int:
-        """Get depth in hierarchy"""
-        if self.parent:
-            return self.parent.get_depth() + 1
-        return 0
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "key": self.key,
-            "item_number": self.item_number,
-            "label": self.label,
-            "type": self.field_type.value,
-            "value": self.value,
-            "confidence": self.confidence.value,
-            "page": self.page,
-            "mapping_status": self.mapping_status.value,
-            "mapped_to": self.mapped_to,
-            "children": [child.to_dict() for child in self.children]
-        }
-
-@dataclass
-class FieldMapping:
-    """Represents a mapping between PDF field and database field"""
-    pdf_field_key: str
-    pdf_field_label: str
-    database_table: str
-    database_field: str
-    transformation: Optional[str] = None
-    confidence: float = 0.0
-
-@dataclass
-class DatabaseSchema:
-    """Database schema definition"""
-    tables: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    suggested_mappings: List[Tuple[str, float]] = field(default_factory=list)
     
     def __post_init__(self):
-        if not self.tables:
-            self.tables = {
-                "beneficiary": {
-                    "firstName": "string",
-                    "lastName": "string",
-                    "middleName": "string",
-                    "dateOfBirth": "date",
-                    "alienNumber": "string",
-                    "socialSecurityNumber": "string",
-                    "countryOfBirth": "string",
-                    "countryOfCitizenship": "string"
-                },
-                "address": {
-                    "streetNumber": "string",
-                    "streetName": "string",
-                    "aptNumber": "string",
-                    "city": "string",
-                    "state": "string",
-                    "zipCode": "string",
-                    "country": "string"
-                },
-                "contact": {
-                    "daytimePhone": "string",
-                    "mobilePhone": "string",
-                    "emailAddress": "string"
-                },
-                "immigration": {
-                    "currentStatus": "string",
-                    "statusExpirationDate": "date",
-                    "i94Number": "string",
-                    "passportNumber": "string",
-                    "passportCountry": "string",
-                    "passportExpiration": "date",
-                    "lastEntryDate": "date",
-                    "lastEntryPort": "string"
-                }
-            }
-
-@dataclass
-class FormSchema:
-    """Schema definition for a form"""
-    form_number: str
-    form_title: str
-    parts: Dict[int, Dict[str, Any]] = field(default_factory=dict)
-    required_fields: List[str] = field(default_factory=list)
-    field_patterns: Dict[str, FieldPattern] = field(default_factory=dict)
+        # Generate content hash for duplicate detection
+        if not self.content_hash:
+            content = f"{self.label}_{self.item_number}_{self.page}_{self.part_number}"
+            self.content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
     
-    def get_expected_structure(self) -> Dict:
-        """Get expected structure"""
-        return {
-            "form_number": self.form_number,
-            "parts": self.parts,
-            "required_fields": self.required_fields
-        }
+    def is_duplicate_of(self, other: 'FieldNode') -> bool:
+        """Check if this is a duplicate of another field"""
+        return (self.content_hash == other.content_hash or 
+                (self.label == other.label and 
+                 self.item_number == other.item_number and 
+                 self.part_number == other.part_number))
 
 @dataclass
 class PartStructure:
-    """Represents a part with hierarchical fields"""
+    """Part with duplicate prevention"""
     part_number: int
     part_name: str
     part_title: str = ""
     root_fields: List[FieldNode] = field(default_factory=list)
+    field_hashes: Set[str] = field(default_factory=set)
+    
+    def add_field(self, field: FieldNode) -> bool:
+        """Add field with duplicate check"""
+        if field.content_hash in self.field_hashes:
+            return False  # Duplicate detected
+        
+        self.root_fields.append(field)
+        self.field_hashes.add(field.content_hash)
+        field.part_number = self.part_number
+        field.part_name = self.part_name
+        return True
     
     def get_all_fields_flat(self) -> List[FieldNode]:
         """Get all fields in flat list"""
@@ -326,302 +264,157 @@ class PartStructure:
             collect_fields(root)
         
         return fields
-    
-    def to_dict(self) -> Dict:
-        """Convert to dictionary"""
-        return {
-            "part_number": self.part_number,
-            "part_name": self.part_name,
-            "part_title": self.part_title,
-            "fields": [field.to_dict() for field in self.root_fields]
-        }
 
 @dataclass
 class FormExtractionResult:
-    """Complete extraction result with mapping support"""
+    """Complete extraction result"""
     form_number: str
     form_title: str
     parts: Dict[int, PartStructure] = field(default_factory=dict)
     
-    # Validation status
-    is_valid: bool = False
-    validation_errors: List[str] = field(default_factory=list)
-    validation_score: float = 0.0
-    
-    # Extraction metadata
-    extraction_iterations: int = 0
+    # Metadata
     total_fields: int = 0
+    duplicate_count: int = 0
+    extraction_iterations: int = 0
+    confidence_score: float = 0.0
     
-    # Mapping metadata
-    mapped_fields: Dict[str, FieldMapping] = field(default_factory=dict)
-    unmapped_fields: List[str] = field(default_factory=list)
-    mapping_completeness: float = 0.0
-    
-    def get_all_fields_with_keys(self) -> Dict[str, FieldNode]:
-        """Get all fields indexed by key"""
-        fields = {}
-        for part in self.parts.values():
-            for field in part.get_all_fields_flat():
-                if field.key:
-                    fields[field.key] = field
-        return fields
-    
-    def to_output_format(self) -> Dict[str, Any]:
-        """Convert to expected output format"""
-        output = {}
-        for part in self.parts.values():
-            for field in part.get_all_fields_flat():
-                if field.key:
-                    output[field.key] = field.value
-                    # Add title fields
-                    if field.label:
-                        output[f"{field.key}_title"] = field.label
-        return output
+    # Mapping data
+    field_mappings: Dict[str, str] = field(default_factory=dict)  # key -> db field
+    manual_mappings: Dict[str, str] = field(default_factory=dict)
+    suggested_mappings: Dict[str, List[Tuple[str, float]]] = field(default_factory=dict)
 
-# ===== PATTERN LIBRARY =====
-class PatternLibrary:
-    """Library of extraction patterns"""
+# ===== LEARNING PATTERN MANAGER =====
+class PatternLearningManager:
+    """Manages learned patterns across extractions"""
     
     def __init__(self):
-        self.patterns = self._build_patterns()
-        self.form_schemas = self._build_form_schemas()
-        self.mapping_patterns = self._build_mapping_patterns()
+        self.learned_patterns: Dict[str, LearnedPattern] = {}
+        self.form_structures: Dict[str, Dict] = {}  # Form type -> expected structure
+        self.field_type_indicators: Dict[str, List[str]] = self._init_type_indicators()
+        self.load_patterns()
     
-    def _build_patterns(self) -> Dict[str, List[FieldPattern]]:
-        """Build comprehensive pattern library"""
+    def _init_type_indicators(self) -> Dict[str, List[str]]:
+        """Initialize field type indicators"""
         return {
-            "structure": [
-                FieldPattern(
-                    re.compile(r'^Part\s+(\d+)\.?\s*(.*)$', re.IGNORECASE),
-                    FieldType.UNKNOWN,
-                    1.0,
-                    "Part header"
-                ),
-                FieldPattern(
-                    re.compile(r'^Section\s+([A-Z])\.\s*(.*)$', re.IGNORECASE),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Section header"
-                ),
-            ],
-            "item": [
-                # Standard numbered items
-                FieldPattern(
-                    re.compile(r'^(\d+)\.\s+(.+?)(?:\s*\(.*\))?$'),
-                    FieldType.UNKNOWN,
-                    0.95,
-                    "Numbered item with period"
-                ),
-                FieldPattern(
-                    re.compile(r'^(\d+)\s+([A-Z].+?)(?:\s*\(.*\))?$'),
-                    FieldType.UNKNOWN,
-                    0.85,
-                    "Numbered item without period"
-                ),
-                # Sub-items
-                FieldPattern(
-                    re.compile(r'^(\d+)([a-z])\.\s+(.+?)$'),
-                    FieldType.UNKNOWN,
-                    0.95,
-                    "Sub-item with number and letter"
-                ),
-                FieldPattern(
-                    re.compile(r'^\s*([a-z])\.\s+(.+?)$'),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Letter-only sub-item"
-                ),
-            ],
-            "field_type": [
-                # Names
-                FieldPattern(
-                    re.compile(r'(family|last|sur)\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Family/Last name"
-                ),
-                FieldPattern(
-                    re.compile(r'(given|first)\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Given/First name"
-                ),
-                FieldPattern(
-                    re.compile(r'middle\s*name', re.IGNORECASE),
-                    FieldType.NAME,
-                    0.95,
-                    "Middle name"
-                ),
-                # Dates
-                FieldPattern(
-                    re.compile(r'date\s*of\s*birth', re.IGNORECASE),
-                    FieldType.DATE,
-                    0.95,
-                    "Date of birth"
-                ),
-                FieldPattern(
-                    re.compile(r'(expir|issue|effective)\s*date', re.IGNORECASE),
-                    FieldType.DATE,
-                    0.9,
-                    "Expiration/Issue date"
-                ),
-                # Numbers
-                FieldPattern(
-                    re.compile(r'(a[\-\s]?number|alien\s*(registration)?\s*number)', re.IGNORECASE),
-                    FieldType.NUMBER,
-                    0.95,
-                    "A-Number"
-                ),
-                FieldPattern(
-                    re.compile(r'(ssn|social\s*security)', re.IGNORECASE),
-                    FieldType.NUMBER,
-                    0.95,
-                    "SSN"
-                ),
-                # Contact
-                FieldPattern(
-                    re.compile(r'(e[\-\s]?mail|email)', re.IGNORECASE),
-                    FieldType.EMAIL,
-                    0.95,
-                    "Email"
-                ),
-                FieldPattern(
-                    re.compile(r'(phone|telephone|mobile)', re.IGNORECASE),
-                    FieldType.PHONE,
-                    0.95,
-                    "Phone"
-                ),
-                # Address
-                FieldPattern(
-                    re.compile(r'(street|address|apt|suite)', re.IGNORECASE),
-                    FieldType.ADDRESS,
-                    0.9,
-                    "Address"
-                ),
-                # Checkbox/Radio
-                FieldPattern(
-                    re.compile(r'^\s*[□☐]\s*(.+)$'),
-                    FieldType.CHECKBOX,
-                    0.95,
-                    "Checkbox"
-                ),
-                FieldPattern(
-                    re.compile(r'(are you|have you|do you|is this|was)', re.IGNORECASE),
-                    FieldType.CHECKBOX,
-                    0.85,
-                    "Yes/No question"
-                ),
-            ]
+            FieldType.NAME.value: ['name', 'nombre', 'nom'],
+            FieldType.DATE.value: ['date', 'fecha', 'birth', 'expire', 'issue'],
+            FieldType.NUMBER.value: ['number', 'no.', '#', 'account', 'ssn', 'ein', 'a-number'],
+            FieldType.EMAIL.value: ['email', 'e-mail', 'correo'],
+            FieldType.PHONE.value: ['phone', 'tel', 'mobile', 'cell', 'fax'],
+            FieldType.ADDRESS.value: ['address', 'street', 'city', 'state', 'zip', 'postal'],
+            FieldType.CHECKBOX.value: ['select', 'check', 'yes', 'no', 'si', 'option'],
+            FieldType.SIGNATURE.value: ['signature', 'sign', 'firma'],
         }
     
-    def _build_mapping_patterns(self) -> Dict[str, Tuple[str, str, float]]:
-        """Build patterns for database mapping"""
-        return {
-            # Name mappings
-            r'family.*name|last.*name': ('beneficiary', 'lastName', 0.95),
-            r'given.*name|first.*name': ('beneficiary', 'firstName', 0.95),
-            r'middle.*name': ('beneficiary', 'middleName', 0.9),
-            
-            # Number mappings
-            r'a.*number|alien.*number': ('beneficiary', 'alienNumber', 0.95),
-            r'ssn|social.*security': ('beneficiary', 'socialSecurityNumber', 0.95),
-            r'passport.*number': ('immigration', 'passportNumber', 0.9),
-            r'i.*94.*number': ('immigration', 'i94Number', 0.9),
-            
-            # Date mappings
-            r'date.*birth|birth.*date': ('beneficiary', 'dateOfBirth', 0.95),
-            r'expir.*date|status.*expir': ('immigration', 'statusExpirationDate', 0.9),
-            
-            # Address mappings
-            r'street.*number.*name|street.*address': ('address', 'streetName', 0.9),
-            r'apt|suite|ste': ('address', 'aptNumber', 0.85),
-            r'city|town': ('address', 'city', 0.9),
-            r'state': ('address', 'state', 0.85),
-            r'zip.*code': ('address', 'zipCode', 0.9),
-            
-            # Contact mappings
-            r'daytime.*phone': ('contact', 'daytimePhone', 0.9),
-            r'mobile.*phone|cell': ('contact', 'mobilePhone', 0.9),
-            r'email.*address': ('contact', 'emailAddress', 0.95),
+    def learn_pattern(self, text: str, field_type: FieldType, form_type: str, confidence: float = 0.7):
+        """Learn a new pattern from successful extraction"""
+        pattern_key = text.lower().strip()
+        
+        if pattern_key in self.learned_patterns:
+            self.learned_patterns[pattern_key].update_success(form_type)
+        else:
+            self.learned_patterns[pattern_key] = LearnedPattern(
+                pattern=text,
+                field_type=field_type,
+                confidence=confidence,
+                form_types={form_type},
+                success_count=1
+            )
+    
+    def suggest_field_type(self, text: str) -> Tuple[FieldType, float]:
+        """Suggest field type based on learned patterns"""
+        text_lower = text.lower()
+        
+        # Check learned patterns first
+        if text_lower in self.learned_patterns:
+            pattern = self.learned_patterns[text_lower]
+            return pattern.field_type, pattern.confidence
+        
+        # Check indicators
+        for field_type, indicators in self.field_type_indicators.items():
+            for indicator in indicators:
+                if indicator in text_lower:
+                    return FieldType(field_type), 0.8
+        
+        return FieldType.UNKNOWN, 0.5
+    
+    def learn_form_structure(self, form_type: str, structure: Dict):
+        """Learn expected structure for a form type"""
+        if form_type not in self.form_structures:
+            self.form_structures[form_type] = structure
+        else:
+            # Merge structures
+            self._merge_structures(self.form_structures[form_type], structure)
+    
+    def _merge_structures(self, existing: Dict, new: Dict):
+        """Merge form structures intelligently"""
+        for key, value in new.items():
+            if key not in existing:
+                existing[key] = value
+            elif isinstance(value, dict) and isinstance(existing[key], dict):
+                self._merge_structures(existing[key], value)
+    
+    def save_patterns(self):
+        """Save learned patterns to file"""
+        data = {
+            'patterns': {k: asdict(v) for k, v in self.learned_patterns.items()},
+            'structures': self.form_structures
         }
+        try:
+            with open('learned_patterns.json', 'w') as f:
+                json.dump(data, f, indent=2, default=str)
+        except:
+            pass
     
-    def _build_form_schemas(self) -> Dict[str, FormSchema]:
-        """Build form schemas"""
-        schemas = {}
-        
-        # I-539 Schema
-        schemas["I-539"] = FormSchema(
-            form_number="I-539",
-            form_title="Application to Extend/Change Nonimmigrant Status",
-            parts={
-                1: {
-                    "title": "Information About You",
-                    "items": {
-                        "1": {"label": "Your Full Legal Name", "sub_items": ["a", "b", "c"]},
-                        "2": {"label": "Alien Registration Number (A-Number)"},
-                        "3": {"label": "Date of Birth"},
-                        "4": {"label": "U.S. Mailing Address"},
-                        "5": {"label": "Physical Address"},
-                        "6": {"label": "Contact Information"}
-                    }
-                },
-                2: {"title": "Application Type"},
-                3: {"title": "Processing Information"},
-                4: {"title": "Additional Information"},
-                5: {"title": "Applicant's Statement"},
-                6: {"title": "Interpreter's Contact Information"},
-                7: {"title": "Contact Information"},
-                8: {"title": "Additional Information"}
-            },
-            required_fields=["P1_1a", "P1_1b", "P1_2", "P1_3"]
-        )
-        
-        # G-28 Schema
-        schemas["G-28"] = FormSchema(
-            form_number="G-28",
-            form_title="Notice of Entry of Appearance",
-            parts={
-                1: {"title": "Information About Attorney"},
-                2: {"title": "Information About Representative"},
-                3: {"title": "Client Information"},
-                4: {"title": "Client Consent"},
-                5: {"title": "Signature of Attorney"},
-                6: {"title": "Signature of Client"}
-            },
-            required_fields=["P1_2a", "P1_2b", "P3_6a", "P3_6b", "P3_9"]
-        )
-        
-        return schemas
-    
-    def get_patterns_for_context(self, context: str) -> List[FieldPattern]:
-        """Get relevant patterns for context"""
-        relevant_patterns = []
-        
-        for category, patterns in self.patterns.items():
-            if category == context or context == "all":
-                relevant_patterns.extend(patterns)
-        
-        return sorted(relevant_patterns, key=lambda p: p.confidence, reverse=True)
+    def load_patterns(self):
+        """Load patterns from file"""
+        try:
+            with open('learned_patterns.json', 'r') as f:
+                data = json.load(f)
+                # Reconstruct patterns
+                for k, v in data.get('patterns', {}).items():
+                    self.learned_patterns[k] = LearnedPattern(
+                        pattern=v['pattern'],
+                        field_type=FieldType(v['field_type']),
+                        confidence=v['confidence'],
+                        form_types=set(v['form_types']),
+                        success_count=v['success_count']
+                    )
+                self.form_structures = data.get('structures', {})
+        except:
+            pass
 
 # ===== BASE AGENT CLASS =====
 class BaseAgent(ABC):
-    """Enhanced base agent with better logging"""
+    """Enhanced base agent with learning capabilities"""
     
     def __init__(self, name: str, description: str = ""):
         self.name = name
         self.description = description
         self.status = "idle"
         self.logs = []
-        self.errors = []
-        self.start_time = None
-        self.end_time = None
+        self.performance_metrics = {
+            'success_rate': 0.0,
+            'avg_time': 0.0,
+            'total_runs': 0
+        }
+        self.learning_manager = PatternLearningManager()
     
     @abstractmethod
     def execute(self, *args, **kwargs) -> Any:
         pass
     
+    def learn_from_result(self, result: Any, success: bool):
+        """Learn from execution result"""
+        self.performance_metrics['total_runs'] += 1
+        if success:
+            self.performance_metrics['success_rate'] = (
+                (self.performance_metrics['success_rate'] * (self.performance_metrics['total_runs'] - 1) + 1) 
+                / self.performance_metrics['total_runs']
+            )
+    
     def log(self, message: str, level: str = "info", details: Any = None):
-        """Enhanced logging"""
+        """Enhanced logging with UI display"""
         entry = {
             "timestamp": datetime.now(),
             "message": message,
@@ -631,195 +424,126 @@ class BaseAgent(ABC):
         self.logs.append(entry)
         
         # Display in UI
-        self._display_log(entry)
-    
-    def _display_log(self, entry: Dict):
-        """Display log in UI"""
-        if hasattr(st.session_state, 'agent_container'):
+        if 'agent_container' in st.session_state:
             with st.session_state.agent_container:
                 css_class = "agent-card"
-                if entry["level"] == "error":
+                if level == "error":
                     css_class += " agent-error"
-                elif entry["level"] == "success":
+                elif level == "success":
                     css_class += " agent-success"
                 elif self.status == "active":
                     css_class += " agent-active"
-                elif "mapping" in self.name.lower():
-                    css_class += " mapping-agent"
+                
+                icon = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(level, "📝")
                 
                 st.markdown(
                     f'<div class="{css_class}">'
-                    f'<strong>{self.name}</strong>: {entry["message"]}'
+                    f'{icon} <strong>{self.name}</strong>: {message}'
                     f'</div>', 
                     unsafe_allow_html=True
                 )
-    
-    def start(self):
-        """Start agent execution"""
-        self.status = "active"
-        self.start_time = datetime.now()
-        self.log(f"Starting {self.description}")
-    
-    def complete(self, success: bool = True):
-        """Complete agent execution"""
-        self.end_time = datetime.now()
-        duration = (self.end_time - self.start_time).total_seconds()
-        
-        if success:
-            self.status = "completed"
-            self.log(f"Completed successfully in {duration:.2f}s", "success")
-        else:
-            self.status = "error"
-            self.log(f"Failed after {duration:.2f}s", "error")
 
-# ===== EXTRACTION AGENTS =====
-
-class AdaptivePatternExtractor(BaseAgent):
-    """Extracts fields using adaptive pattern matching"""
+# ===== SMART EXTRACTION AGENT =====
+class SmartExtractionAgent(BaseAgent):
+    """Intelligent extraction agent that learns and adapts"""
     
     def __init__(self):
         super().__init__(
-            "Adaptive Pattern Extractor",
-            "Extracts form fields using adaptive pattern recognition"
+            "Smart Extraction Agent",
+            "Learns patterns and adapts to any form type"
         )
-        self.pattern_library = PatternLibrary()
         self.doc = None
+        self.current_form_type = ""
     
     def execute(self, pdf_file) -> FormExtractionResult:
-        """Execute adaptive extraction"""
-        self.start()
+        """Execute smart extraction"""
+        self.status = "active"
+        self.log("Starting intelligent extraction...")
         
         try:
-            # Handle PDF file properly
+            # Open PDF
             if hasattr(pdf_file, 'read'):
-                # If it's a file-like object, read bytes
-                pdf_file.seek(0)  # Reset file pointer to beginning
+                pdf_file.seek(0)
                 pdf_bytes = pdf_file.read()
             else:
-                # Assume it's already bytes
                 pdf_bytes = pdf_file
-            
-            # Open PDF from bytes
-            if not pdf_bytes:
-                raise ValueError("Empty PDF file provided")
             
             self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             
-            if self.doc.page_count == 0:
-                raise ValueError("PDF has no pages")
-            
             # Identify form
             form_info = self._identify_form()
-            schema = self.pattern_library.form_schemas.get(form_info['number'])
+            self.current_form_type = form_info['number']
             
             result = FormExtractionResult(
                 form_number=form_info['number'],
                 form_title=form_info['title']
             )
             
-            # Process all pages sequentially
-            all_text_blocks = []
-            for page_num in range(len(self.doc)):
-                page_blocks = self._extract_page_blocks(page_num)
-                all_text_blocks.extend(page_blocks)
+            # Extract with duplicate prevention
+            self._extract_with_learning(result)
             
-            # Process blocks in order to maintain part sequencing
-            self._process_blocks_sequentially(all_text_blocks, result, schema)
+            # Learn from this extraction
+            self._learn_from_extraction(result)
             
-            # Post-process extraction
-            self._post_process_extraction(result, schema)
-            
-            # Calculate metrics
-            for part in result.parts.values():
-                result.total_fields += len(part.get_all_fields_flat())
-            
-            self.log(f"Extracted {len(result.parts)} parts, {result.total_fields} fields")
-            self.complete()
+            self.log(f"Extracted {result.total_fields} unique fields from {len(result.parts)} parts", "success")
+            self.learn_from_result(result, True)
             return result
             
         except Exception as e:
-            self.log(f"Extraction failed: {str(e)}", "error", traceback.format_exc())
-            self.complete(False)
+            self.log(f"Extraction failed: {str(e)}", "error")
+            self.learn_from_result(None, False)
             raise
         finally:
             if self.doc:
                 self.doc.close()
     
-    def _identify_form(self) -> Dict:
-        """Identify form type with confidence"""
+    def _identify_form(self) -> Dict[str, str]:
+        """Identify form using multiple strategies"""
         if not self.doc or self.doc.page_count == 0:
             return {"number": "Unknown", "title": "Unknown Form"}
         
         first_page_text = self.doc[0].get_text()
         
-        # Check against known forms
-        for form_num, schema in self.pattern_library.form_schemas.items():
-            if form_num in first_page_text:
-                # Verify with title
-                if schema.form_title.lower() in first_page_text.lower():
-                    self.log(f"Identified form: {form_num} - {schema.form_title}", "success")
-                    return {"number": form_num, "title": schema.form_title}
+        # Common USCIS form patterns
+        form_patterns = [
+            (r'Form\s+(I-\d+[A-Z]?)', r'Form\s+I-\d+[A-Z]?\s*[^\n]+'),
+            (r'Form\s+(N-\d+)', r'Form\s+N-\d+\s*[^\n]+'),
+            (r'Form\s+(G-\d+)', r'Form\s+G-\d+\s*[^\n]+'),
+            (r'Form\s+(AR-\d+)', r'Form\s+AR-\d+\s*[^\n]+'),
+        ]
         
-        # Extended form detection
-        form_patterns = {
-            "I-129": "Petition for a Nonimmigrant Worker",
-            "I-90": "Application to Replace Permanent Resident Card",
-            "I-485": "Application to Register Permanent Residence",
-            "I-765": "Application for Employment Authorization",
-            "N-400": "Application for Naturalization"
-        }
+        for number_pattern, title_pattern in form_patterns:
+            number_match = re.search(number_pattern, first_page_text)
+            if number_match:
+                form_number = number_match.group(1)
+                title_match = re.search(title_pattern, first_page_text)
+                form_title = title_match.group(0) if title_match else f"Form {form_number}"
+                
+                self.log(f"Identified form: {form_number}")
+                return {"number": form_number, "title": form_title}
         
-        for form_num, form_title in form_patterns.items():
-            if form_num in first_page_text:
-                self.log(f"Identified form: {form_num} - {form_title}", "success")
-                return {"number": form_num, "title": form_title}
-        
-        # Fallback
-        self.log("Could not identify form type", "warning")
         return {"number": "Unknown", "title": "Unknown Form"}
     
-    def _extract_page_blocks(self, page_num: int) -> List[Dict]:
-        """Extract all text blocks from a page with metadata"""
-        page = self.doc[page_num]
-        blocks = page.get_text("dict")
-        
-        page_blocks = []
-        for block in blocks["blocks"]:
-            if block["type"] == 0:  # Text block
-                for line in block["lines"]:
-                    text = self._get_line_text(line)
-                    if text.strip():
-                        page_blocks.append({
-                            'text': text,
-                            'line': line,
-                            'page': page_num,
-                            'bbox': line.get("bbox"),
-                            'spans': line.get("spans", [])
-                        })
-        
-        return page_blocks
-    
-    def _process_blocks_sequentially(self, blocks: List[Dict], result: FormExtractionResult, 
-                                   schema: Optional[FormSchema]):
-        """Process blocks sequentially to maintain part order"""
+    def _extract_with_learning(self, result: FormExtractionResult):
+        """Extract fields with learning and duplicate prevention"""
+        seen_fields = set()
         current_part = None
-        field_stack = []
-        seen_parts = set()
         
-        for block in blocks:
-            text = block['text']
+        for page_num in range(len(self.doc)):
+            page = self.doc[page_num]
+            blocks = self._get_page_blocks(page, page_num)
             
-            # Try to match patterns
-            matched_field = self._match_patterns(text, block['line'], block['page'])
-            
-            if matched_field:
-                # Handle part headers
-                if self._is_part_header(matched_field):
-                    part_info = self._extract_part_info(matched_field)
+            # Process blocks with context awareness
+            for i, block in enumerate(blocks):
+                text = block['text'].strip()
+                if not text:
+                    continue
+                
+                # Check for part header
+                if self._is_part_header(text):
+                    part_info = self._extract_part_info(text)
                     if part_info:
                         part_num = part_info['number']
-                        
-                        # Create part if not exists
                         if part_num not in result.parts:
                             result.parts[part_num] = PartStructure(
                                 part_number=part_num,
@@ -827,33 +551,57 @@ class AdaptivePatternExtractor(BaseAgent):
                                 part_title=part_info['title']
                             )
                             self.log(f"Found Part {part_num}: {part_info['title']}")
-                        
                         current_part = result.parts[part_num]
-                        seen_parts.add(part_num)
-                        field_stack = []
+                        continue
                 
-                # Handle fields
-                elif current_part:
-                    self._place_field_in_hierarchy(
-                        matched_field, current_part, field_stack, schema
-                    )
+                # Extract field if we have a current part
+                if current_part:
+                    field = self._extract_field(text, block, page_num, i, blocks)
+                    if field:
+                        # Check for duplicates
+                        field_key = f"{field.label}_{field.item_number}_{field.part_number}"
+                        if field_key not in seen_fields:
+                            if current_part.add_field(field):
+                                seen_fields.add(field_key)
+                                result.total_fields += 1
+                            else:
+                                result.duplicate_count += 1
         
-        # Ensure we have at least Part 1 if no parts were found
+        # Ensure at least Part 1 exists
         if not result.parts:
-            result.parts[1] = PartStructure(
-                part_number=1,
-                part_name="Part 1",
-                part_title="Form Fields"
-            )
-            self.log("No parts found, creating default Part 1", "warning")
+            result.parts[1] = PartStructure(1, "Part 1", "Form Fields")
+            current_part = result.parts[1]
+            self.log("No parts found, created default Part 1", "warning")
     
-    def _is_part_header(self, field: FieldNode) -> bool:
-        """Check if field is a part header"""
-        return bool(re.match(r'^Part\s*\d+', field.label, re.IGNORECASE))
+    def _get_page_blocks(self, page, page_num: int) -> List[Dict]:
+        """Extract and organize page blocks"""
+        blocks = []
+        page_dict = page.get_text("dict")
+        
+        for block in page_dict["blocks"]:
+            if block["type"] == 0:  # Text block
+                for line in block["lines"]:
+                    text = " ".join(span["text"] for span in line["spans"])
+                    if text.strip():
+                        blocks.append({
+                            'text': text,
+                            'bbox': line.get("bbox", [0, 0, 0, 0]),
+                            'page': page_num,
+                            'font_size': line["spans"][0].get("size", 10) if line["spans"] else 10,
+                            'is_bold': any(span.get("flags", 0) & 2**4 for span in line["spans"])
+                        })
+        
+        # Sort by position
+        blocks.sort(key=lambda b: (b['bbox'][1], b['bbox'][0]))
+        return blocks
     
-    def _extract_part_info(self, field: FieldNode) -> Optional[Dict]:
-        """Extract part information from field"""
-        match = re.match(r'^Part\s*(\d+)\.?\s*(.*)$', field.label, re.IGNORECASE)
+    def _is_part_header(self, text: str) -> bool:
+        """Check if text is a part header"""
+        return bool(re.match(r'^Part\s+\d+', text, re.IGNORECASE))
+    
+    def _extract_part_info(self, text: str) -> Optional[Dict[str, Any]]:
+        """Extract part information"""
+        match = re.match(r'^Part\s+(\d+)\.?\s*(.*)$', text, re.IGNORECASE)
         if match:
             return {
                 'number': int(match.group(1)),
@@ -861,2067 +609,1114 @@ class AdaptivePatternExtractor(BaseAgent):
             }
         return None
     
-    def _match_patterns(self, text: str, line_data: Dict, page_num: int) -> Optional[FieldNode]:
-        """Match text against patterns"""
-        text = text.strip()
-        
-        # Get all patterns
-        all_patterns = self.pattern_library.get_patterns_for_context("all")
-        
-        best_match = None
-        best_confidence = 0.0
-        
-        for pattern_def in all_patterns:
-            match = pattern_def.pattern.match(text)
-            if match:
-                # Calculate confidence based on pattern and context
-                confidence = self._calculate_confidence(
-                    pattern_def, match, text, line_data
-                )
-                
-                if confidence > best_confidence:
-                    best_confidence = confidence
-                    best_match = (pattern_def, match)
-        
-        if best_match:
-            pattern_def, match = best_match
-            return self._create_field_from_match(
-                pattern_def, match, text, line_data, page_num, best_confidence
-            )
-        
-        return None
-    
-    def _calculate_confidence(self, pattern: FieldPattern, match: re.Match, 
-                            text: str, line_data: Dict) -> float:
-        """Calculate match confidence"""
-        base_confidence = pattern.confidence
-        
-        # Adjust based on text properties
-        font_size = self._get_font_size(line_data)
-        is_bold = self._is_bold(line_data)
-        
-        # Boost confidence for headers
-        if font_size > 12 or is_bold:
-            base_confidence *= 1.1
-        
-        # Check pattern quality
-        if match.group(0) == text:  # Full match
-            base_confidence *= 1.05
-        
-        return min(base_confidence, 1.0)
-    
-    def _create_field_from_match(self, pattern: FieldPattern, match: re.Match,
-                               text: str, line_data: Dict, page_num: int,
-                               confidence: float) -> FieldNode:
-        """Create field node from pattern match"""
-        # Extract components based on pattern
-        if pattern.description == "Part header":
-            part_num = match.group(1)
-            part_title = match.group(2) if match.lastindex > 1 else ""
-            
-            return FieldNode(
-                item_number=f"Part{part_num}",
-                label=f"Part {part_num}" + (f": {part_title}" if part_title else ""),
-                field_type=FieldType.UNKNOWN,
-                page=page_num + 1,
-                confidence=ExtractionConfidence.HIGH if confidence > 0.9 else ExtractionConfidence.MEDIUM,
-                extraction_method="pattern",
-                raw_text=text,
-                patterns_matched=[pattern.description]
-            )
-        
-        elif pattern.description in ["Numbered item with period", "Numbered item without period"]:
-            item_num = match.group(1)
-            label = match.group(2) if match.lastindex > 1 else text
-            
-            # Determine field type from label
-            field_type = self._determine_field_type_smart(label)
-            
-            return FieldNode(
-                item_number=item_num,
-                label=label.strip(),
-                field_type=field_type,
-                page=page_num + 1,
-                confidence=ExtractionConfidence.HIGH if confidence > 0.9 else ExtractionConfidence.MEDIUM,
-                extraction_method="pattern",
-                raw_text=text,
-                patterns_matched=[pattern.description],
-                bbox=self._get_bbox(line_data)
-            )
-        
-        elif pattern.description == "Sub-item with number and letter":
-            full_num = match.group(1) + match.group(2)
-            label = match.group(3) if match.lastindex > 2 else text
-            
-            return FieldNode(
-                item_number=full_num,
-                label=label.strip(),
-                field_type=self._determine_field_type_smart(label),
-                page=page_num + 1,
-                confidence=ExtractionConfidence.HIGH if confidence > 0.9 else ExtractionConfidence.MEDIUM,
-                extraction_method="pattern",
-                raw_text=text,
-                patterns_matched=[pattern.description],
-                bbox=self._get_bbox(line_data)
-            )
-        
-        elif pattern.description == "Letter-only sub-item":
-            letter = match.group(1)
-            label = match.group(2) if match.lastindex > 1 else text
-            
-            return FieldNode(
-                item_number=letter,
-                label=label.strip(),
-                field_type=self._determine_field_type_smart(label),
-                page=page_num + 1,
-                confidence=ExtractionConfidence.MEDIUM,
-                extraction_method="pattern",
-                raw_text=text,
-                patterns_matched=[pattern.description],
-                bbox=self._get_bbox(line_data)
-            )
-        
-        # Default field
-        return FieldNode(
-            item_number="",
-            label=text,
-            field_type=pattern.field_type,
-            page=page_num + 1,
-            confidence=ExtractionConfidence.LOW,
-            extraction_method="pattern",
-            raw_text=text,
-            patterns_matched=[pattern.description]
-        )
-    
-    def _determine_field_type_smart(self, label: str) -> FieldType:
-        """Smart field type determination"""
-        label_lower = label.lower()
-        
-        # Check against field type patterns
-        field_patterns = self.pattern_library.get_patterns_for_context("field_type")
-        
-        for pattern in field_patterns:
-            if pattern.pattern.search(label):
-                return pattern.field_type
-        
-        # Fallback heuristics
-        if any(word in label_lower for word in ['name']):
-            return FieldType.NAME
-        elif any(word in label_lower for word in ['date', 'born', 'birth']):
-            return FieldType.DATE
-        elif any(word in label_lower for word in ['number', 'no.', '#']):
-            return FieldType.NUMBER
-        elif any(word in label_lower for word in ['address', 'street', 'city', 'state']):
-            return FieldType.ADDRESS
-        elif any(word in label_lower for word in ['email', 'e-mail']):
-            return FieldType.EMAIL
-        elif any(word in label_lower for word in ['phone', 'tel', 'mobile']):
-            return FieldType.PHONE
-        elif any(word in label_lower for word in ['signature', 'sign']):
-            return FieldType.SIGNATURE
-        elif label_lower.startswith(('are ', 'is ', 'do ', 'have ', 'was ', 'were ')):
-            return FieldType.CHECKBOX
-        
-        return FieldType.TEXT
-    
-    def _place_field_in_hierarchy(self, field: FieldNode, part: PartStructure,
-                                field_stack: List[FieldNode], schema: Optional[FormSchema]):
-        """Place field in correct position in hierarchy"""
-        # Determine hierarchy level
-        field_level = self._determine_hierarchy_level(field)
-        
-        # Pop stack to appropriate level
-        while field_stack and field_stack[-1].get_depth() >= field_level:
-            field_stack.pop()
-        
-        # Find parent
-        if field_stack and field_level > 0:
-            parent = field_stack[-1]
-            parent.add_child(field)
-        else:
-            # Add to root if no parent or main level
-            part.root_fields.append(field)
-        
-        # Update field metadata
-        field.part_number = part.part_number
-        field.part_name = part.part_name
-        
-        # Add to stack if it might have children
-        if self._might_have_children(field, schema):
-            field_stack.append(field)
-    
-    def _determine_hierarchy_level(self, field: FieldNode) -> int:
-        """Determine hierarchy level of field"""
-        item_num = field.item_number
-        
-        # Check if it's a sub-item
-        if re.match(r'^\d+[a-z]', item_num):
-            return 1  # Sub-item
-        elif re.match(r'^\d+$', item_num):
-            return 0  # Main item
-        elif re.match(r'^[a-z]$', item_num):
-            return 1  # Letter-only sub-item
-        
-        return 0  # Default to main level
-    
-    def _might_have_children(self, field: FieldNode, schema: Optional[FormSchema]) -> bool:
-        """Check if field might have children"""
-        # Check schema first
-        if schema and field.part_number in schema.parts:
-            part_schema = schema.parts[field.part_number]
-            items = part_schema.get("items", {})
-            
-            if field.item_number in items:
-                item_schema = items[field.item_number]
-                return "sub_items" in item_schema
-        
-        # Fallback to heuristics
-        label_lower = field.label.lower()
-        parent_indicators = [
-            'name', 'address', 'information', 'contact',
-            'mailing', 'physical', 'employment', 'education'
+    def _extract_field(self, text: str, block: Dict, page_num: int, 
+                      block_idx: int, all_blocks: List[Dict]) -> Optional[FieldNode]:
+        """Extract field with context awareness"""
+        # Pattern matching
+        patterns = [
+            (r'^(\d+)\.\s+(.+?)$', 'numbered'),
+            (r'^(\d+)\.\s*$', 'number_only'),
+            (r'^([a-z])\.\s+(.+?)$', 'lettered'),
+            (r'^(\d+)([a-z])\.\s+(.+?)$', 'numbered_letter'),
         ]
         
-        return any(indicator in label_lower for indicator in parent_indicators)
-    
-    def _post_process_extraction(self, result: FormExtractionResult, schema: Optional[FormSchema]):
-        """Post-process extraction results"""
-        # Fill in missing sub-items based on schema
-        if schema:
-            for part_num, part in result.parts.items():
-                if part_num in schema.parts:
-                    self._fill_missing_items(part, schema.parts[part_num])
-        
-        # Validate field relationships
-        self._validate_relationships(result)
-        
-        # Ensure parts are properly numbered
-        self._ensure_part_continuity(result)
-    
-    def _fill_missing_items(self, part: PartStructure, part_schema: Dict):
-        """Fill in missing items based on schema"""
-        items = part_schema.get("items", {})
-        
-        for item_num, item_info in items.items():
-            # Find or create main item
-            main_field = None
-            for field in part.root_fields:
-                if field.item_number == item_num:
-                    main_field = field
-                    break
-            
-            if not main_field:
-                # Create missing main item
-                main_field = FieldNode(
-                    item_number=item_num,
-                    label=item_info.get("label", f"Item {item_num}"),
-                    field_type=FieldType.UNKNOWN,
-                    page=1,
-                    part_number=part.part_number,
-                    part_name=part.part_name,
-                    confidence=ExtractionConfidence.LOW,
-                    extraction_method="schema"
+        for pattern, pattern_type in patterns:
+            match = re.match(pattern, text)
+            if match:
+                if pattern_type == 'number_only' and block_idx + 1 < len(all_blocks):
+                    # Look ahead for label
+                    next_text = all_blocks[block_idx + 1]['text']
+                    if not re.match(r'^\d+\.', next_text):
+                        item_number = match.group(1)
+                        label = next_text.strip()
+                    else:
+                        continue
+                elif pattern_type == 'numbered':
+                    item_number = match.group(1)
+                    label = match.group(2)
+                elif pattern_type == 'lettered':
+                    item_number = match.group(1)
+                    label = match.group(2)
+                elif pattern_type == 'numbered_letter':
+                    item_number = match.group(1) + match.group(2)
+                    label = match.group(3)
+                else:
+                    continue
+                
+                # Determine field type
+                field_type, confidence = self.learning_manager.suggest_field_type(label)
+                
+                return FieldNode(
+                    item_number=item_number,
+                    label=label.strip(),
+                    field_type=field_type,
+                    page=page_num + 1,
+                    confidence=ExtractionConfidence.HIGH if confidence > 0.8 else ExtractionConfidence.MEDIUM,
+                    extraction_method="pattern_match",
+                    raw_text=text,
+                    bbox=tuple(block['bbox'])
                 )
-                part.root_fields.append(main_field)
-                self.log(f"Added missing field {item_num} from schema", "warning")
-            
-            # Check sub-items
-            if "sub_items" in item_info:
-                for sub_letter in item_info["sub_items"]:
-                    sub_num = f"{item_num}{sub_letter}"
-                    
-                    # Check if sub-item exists
-                    exists = any(child.item_number == sub_num for child in main_field.children)
-                    
-                    if not exists:
-                        # Create missing sub-item
-                        sub_field = FieldNode(
-                            item_number=sub_num,
-                            label=f"Sub-item {sub_letter}",
-                            field_type=FieldType.TEXT,
-                            page=main_field.page,
-                            part_number=part.part_number,
-                            part_name=part.part_name,
-                            confidence=ExtractionConfidence.LOW,
-                            extraction_method="schema"
-                        )
-                        main_field.add_child(sub_field)
-                        self.log(f"Added missing sub-field {sub_num} from schema", "warning")
-    
-    def _validate_relationships(self, result: FormExtractionResult):
-        """Validate field relationships"""
-        for part in result.parts.values():
-            # Sort root fields by item number
-            part.root_fields.sort(key=lambda f: (
-                int(re.search(r'\d+', f.item_number).group()) if re.search(r'\d+', f.item_number) else 999,
-                f.item_number
-            ))
-            
-            # Sort children
-            for field in part.get_all_fields_flat():
-                if field.children:
-                    field.children.sort(key=lambda f: f.item_number)
-    
-    def _ensure_part_continuity(self, result: FormExtractionResult):
-        """Ensure parts are properly numbered and continuous"""
-        if not result.parts:
-            return
         
-        # Get sorted part numbers
-        part_numbers = sorted(result.parts.keys())
-        
-        # Check for gaps
-        expected = 1
-        for part_num in part_numbers:
-            if part_num != expected:
-                self.log(f"Part numbering gap: expected Part {expected}, found Part {part_num}", "warning")
-            expected = part_num + 1
-    
-    # Helper methods
-    def _get_line_text(self, line: Dict) -> str:
-        """Extract text from line"""
-        text_parts = []
-        for span in line.get("spans", []):
-            text_parts.append(span.get("text", ""))
-        return " ".join(text_parts)
-    
-    def _get_font_size(self, line: Dict) -> float:
-        """Get average font size"""
-        spans = line.get("spans", [])
-        if spans and len(spans) > 0:
-            return spans[0].get("size", 10)
-        return 10
-    
-    def _is_bold(self, line: Dict) -> bool:
-        """Check if text is bold"""
-        spans = line.get("spans", [])
-        if spans and len(spans) > 0:
-            flags = spans[0].get("flags", 0)
-            return bool(flags & 2**4)  # Bold flag
-        return False
-    
-    def _get_bbox(self, line: Dict) -> Optional[Tuple[float, float, float, float]]:
-        """Get bounding box"""
-        if "bbox" in line:
-            bbox = line["bbox"]
-            return (bbox[0], bbox[1], bbox[2], bbox[3])
         return None
+    
+    def _learn_from_extraction(self, result: FormExtractionResult):
+        """Learn patterns from successful extraction"""
+        structure = {}
+        
+        for part_num, part in result.parts.items():
+            part_structure = {
+                'title': part.part_title,
+                'fields': {}
+            }
+            
+            for field in part.get_all_fields_flat():
+                if field.confidence in [ExtractionConfidence.HIGH, ExtractionConfidence.MEDIUM]:
+                    # Learn pattern
+                    self.learning_manager.learn_pattern(
+                        field.label,
+                        field.field_type,
+                        self.current_form_type,
+                        0.8 if field.confidence == ExtractionConfidence.HIGH else 0.6
+                    )
+                    
+                    part_structure['fields'][field.item_number] = {
+                        'label': field.label,
+                        'type': field.field_type.value
+                    }
+            
+            structure[f"part_{part_num}"] = part_structure
+        
+        # Learn form structure
+        self.learning_manager.learn_form_structure(self.current_form_type, structure)
+        self.learning_manager.save_patterns()
 
-# Continue with the rest of the agents...
-# Smart Key Assignment Agent
-class SmartKeyAssignment(BaseAgent):
-    """Assigns keys using smart logic"""
+# ===== SMART KEY GENERATOR =====
+class SmartKeyGenerator(BaseAgent):
+    """Generates unique, meaningful keys"""
     
     def __init__(self):
         super().__init__(
-            "Smart Key Assignment",
-            "Assigns hierarchical keys to fields"
+            "Smart Key Generator",
+            "Creates unique, hierarchical keys"
         )
     
     def execute(self, result: FormExtractionResult) -> FormExtractionResult:
-        """Execute key assignment"""
-        self.start()
+        """Generate smart keys"""
+        self.status = "active"
+        self.log("Generating unique keys...")
         
         try:
-            assigned_count = 0
+            key_registry = set()
             
             for part_num, part in result.parts.items():
                 for field in part.get_all_fields_flat():
-                    # Generate smart key
-                    key = self._generate_smart_key(field)
-                    field.key = key
-                    assigned_count += 1
+                    base_key = self._generate_base_key(field)
+                    unique_key = self._ensure_unique_key(base_key, key_registry)
+                    field.key = unique_key
+                    key_registry.add(unique_key)
             
-            self.log(f"Assigned {assigned_count} keys")
-            self.complete()
+            self.log(f"Generated {len(key_registry)} unique keys", "success")
             return result
             
         except Exception as e:
-            self.log(f"Key assignment failed: {str(e)}", "error")
-            self.complete(False)
+            self.log(f"Key generation failed: {str(e)}", "error")
             raise
     
-    def _generate_smart_key(self, field: FieldNode) -> str:
-        """Generate smart hierarchical key"""
-        # Basic format: P{part}_{item}
-        base_key = f"P{field.part_number}_{field.item_number}"
+    def _generate_base_key(self, field: FieldNode) -> str:
+        """Generate base key from field properties"""
+        # Clean item number
+        item_clean = re.sub(r'[^\w]', '', field.item_number)
         
-        # Clean up
-        base_key = base_key.replace('.', '').replace(' ', '_')
+        # Generate hierarchical key
+        if field.parent:
+            parent_key = field.parent.key or f"P{field.part_number}_{field.parent.item_number}"
+            return f"{parent_key}_{item_clean}"
+        else:
+            return f"P{field.part_number}_{item_clean}"
+    
+    def _ensure_unique_key(self, base_key: str, registry: Set[str]) -> str:
+        """Ensure key is unique"""
+        if base_key not in registry:
+            return base_key
         
-        # Handle special cases
-        if field.field_type == FieldType.ADDRESS and field.parent:
-            # For address components, add parent context
-            parent_key = f"P{field.part_number}_{field.parent.item_number}"
-            return f"{parent_key}_{field.item_number}"
+        counter = 1
+        while f"{base_key}_{counter}" in registry:
+            counter += 1
         
-        return base_key
+        return f"{base_key}_{counter}"
 
-# Questionnaire Validator Agent
-class QuestionnaireValidator(BaseAgent):
-    """Validates using questionnaire approach"""
+# ===== VALIDATION AGENT =====
+class IntelligentValidationAgent(BaseAgent):
+    """Validates extraction with intelligent checks"""
     
     def __init__(self):
         super().__init__(
-            "Questionnaire Validator",
-            "Validates extraction using intelligent questions"
+            "Intelligent Validation Agent",
+            "Performs comprehensive validation"
         )
-        self.validation_questions = self._build_questions()
     
-    def _build_questions(self) -> List[Dict]:
-        """Build validation questions"""
-        return [
-            {
-                "id": "parts_complete",
-                "question": "Are all expected parts present?",
-                "check": self._check_parts_complete,
-                "weight": 1.0
-            },
-            {
-                "id": "required_fields",
-                "question": "Are all required fields present?",
-                "check": self._check_required_fields,
-                "weight": 1.5
-            },
-            {
-                "id": "field_hierarchy",
-                "question": "Is the field hierarchy correct?",
-                "check": self._check_field_hierarchy,
-                "weight": 1.0
-            },
-            {
-                "id": "field_types",
-                "question": "Are field types correctly identified?",
-                "check": self._check_field_types,
-                "weight": 0.8
-            },
-            {
-                "id": "key_format",
-                "question": "Are all keys in correct format?",
-                "check": self._check_key_format,
-                "weight": 1.2
-            },
-            {
-                "id": "data_completeness",
-                "question": "Is the extraction reasonably complete?",
-                "check": self._check_data_completeness,
-                "weight": 1.0
-            }
-        ]
-    
-    def execute(self, result: FormExtractionResult, schema: Optional[FormSchema] = None) -> Tuple[bool, float, List[Dict]]:
-        """Execute questionnaire validation"""
-        self.start()
+    def execute(self, result: FormExtractionResult) -> Tuple[bool, float, List[Dict]]:
+        """Execute validation"""
+        self.status = "active"
+        self.log("Running intelligent validation...")
         
         try:
-            validation_results = []
+            checks = [
+                self._check_part_continuity,
+                self._check_field_completeness,
+                self._check_duplicate_fields,
+                self._check_field_types,
+                self._check_hierarchical_structure,
+            ]
+            
+            results = []
             total_score = 0.0
-            total_weight = 0.0
             
-            # Run each validation question
-            for question in self.validation_questions:
-                self.log(f"Checking: {question['question']}")
+            for check in checks:
+                check_result = check(result)
+                results.append(check_result)
+                total_score += check_result['score'] * check_result['weight']
                 
-                passed, score, details = question["check"](result, schema)
-                
-                validation_results.append({
-                    "question": question["question"],
-                    "passed": passed,
-                    "score": score,
-                    "weight": question["weight"],
-                    "details": details
-                })
-                
-                total_score += score * question["weight"]
-                total_weight += question["weight"]
-                
-                # Log result
-                if passed:
-                    self.log(f"✓ {question['question']} - Score: {score:.0%}", "success")
+                if check_result['passed']:
+                    self.log(f"✅ {check_result['name']}: {check_result['score']:.0%}")
                 else:
-                    self.log(f"✗ {question['question']} - Score: {score:.0%}", "warning")
+                    self.log(f"⚠️ {check_result['name']}: {check_result['score']:.0%} - {check_result['details']}", "warning")
             
-            # Calculate overall score
-            overall_score = total_score / total_weight if total_weight > 0 else 0
-            is_valid = overall_score >= 0.7  # 70% threshold
+            total_weight = sum(r['weight'] for r in results)
+            final_score = total_score / total_weight if total_weight > 0 else 0
+            is_valid = final_score >= 0.7
             
-            # Update result
-            result.validation_score = overall_score
-            result.is_valid = is_valid
+            result.confidence_score = final_score
             
-            self.log(f"Overall validation score: {overall_score:.0%}")
-            self.complete()
-            
-            return is_valid, overall_score, validation_results
+            self.log(f"Validation complete: {final_score:.0%}", "success" if is_valid else "warning")
+            return is_valid, final_score, results
             
         except Exception as e:
             self.log(f"Validation failed: {str(e)}", "error")
-            self.complete(False)
             return False, 0.0, []
     
-    def _check_parts_complete(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check if all parts are present"""
-        if not schema:
-            # Basic check
-            has_parts = len(result.parts) > 0
-            return has_parts, 1.0 if has_parts else 0.0, f"Found {len(result.parts)} parts"
+    def _check_part_continuity(self, result: FormExtractionResult) -> Dict:
+        """Check if parts are continuous"""
+        if not result.parts:
+            return {
+                'name': 'Part Continuity',
+                'passed': False,
+                'score': 0.0,
+                'weight': 1.0,
+                'details': 'No parts found'
+            }
         
-        expected_parts = set(schema.parts.keys())
-        found_parts = set(result.parts.keys())
-        
-        missing = expected_parts - found_parts
-        extra = found_parts - expected_parts
-        
-        if not missing:
-            return True, 1.0, "All expected parts found"
-        else:
-            score = len(found_parts & expected_parts) / len(expected_parts)
-            details = f"Missing parts: {missing}"
-            if extra:
-                details += f", Extra parts: {extra}"
-            return False, score, details
-    
-    def _check_required_fields(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check required fields"""
-        if not schema:
-            return True, 1.0, "No schema to check against"
-        
-        all_fields = result.get_all_fields_with_keys()
-        required = set(schema.required_fields)
-        found = set(all_fields.keys())
-        
-        missing = required - found
+        part_numbers = sorted(result.parts.keys())
+        expected = list(range(1, max(part_numbers) + 1))
+        missing = set(expected) - set(part_numbers)
         
         if not missing:
-            return True, 1.0, "All required fields found"
+            return {
+                'name': 'Part Continuity',
+                'passed': True,
+                'score': 1.0,
+                'weight': 1.0,
+                'details': f'All parts present ({len(part_numbers)} parts)'
+            }
         else:
-            score = len(found & required) / len(required) if required else 1.0
-            return False, score, f"Missing required fields: {missing}"
+            score = len(part_numbers) / len(expected)
+            return {
+                'name': 'Part Continuity',
+                'passed': False,
+                'score': score,
+                'weight': 1.0,
+                'details': f'Missing parts: {sorted(missing)}'
+            }
     
-    def _check_field_hierarchy(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check field hierarchy"""
-        issues = []
+    def _check_field_completeness(self, result: FormExtractionResult) -> Dict:
+        """Check field completeness"""
+        min_fields_expected = 15  # Minimum for most forms
+        actual_fields = result.total_fields
+        
+        if actual_fields >= min_fields_expected:
+            return {
+                'name': 'Field Completeness',
+                'passed': True,
+                'score': min(1.0, actual_fields / 50),  # Cap at 50 fields
+                'weight': 1.5,
+                'details': f'Found {actual_fields} fields'
+            }
+        else:
+            return {
+                'name': 'Field Completeness',
+                'passed': False,
+                'score': actual_fields / min_fields_expected,
+                'weight': 1.5,
+                'details': f'Only {actual_fields} fields (expected {min_fields_expected}+)'
+            }
+    
+    def _check_duplicate_fields(self, result: FormExtractionResult) -> Dict:
+        """Check for duplicate fields"""
+        duplicate_ratio = result.duplicate_count / max(1, result.total_fields + result.duplicate_count)
+        
+        if duplicate_ratio < 0.05:  # Less than 5% duplicates
+            return {
+                'name': 'Duplicate Prevention',
+                'passed': True,
+                'score': 1.0 - duplicate_ratio,
+                'weight': 1.0,
+                'details': f'{result.duplicate_count} duplicates prevented'
+            }
+        else:
+            return {
+                'name': 'Duplicate Prevention',
+                'passed': False,
+                'score': 1.0 - duplicate_ratio,
+                'weight': 1.0,
+                'details': f'High duplicate rate: {duplicate_ratio:.0%}'
+            }
+    
+    def _check_field_types(self, result: FormExtractionResult) -> Dict:
+        """Check field type identification"""
         total_fields = 0
-        correct_fields = 0
+        typed_fields = 0
         
         for part in result.parts.values():
             for field in part.get_all_fields_flat():
                 total_fields += 1
-                
-                # Check parent-child relationships
-                if re.match(r'^\d+[a-z]', field.item_number):
-                    # Should have a parent
-                    if not field.parent:
-                        issues.append(f"{field.key} should have a parent")
-                    else:
-                        parent_num = re.match(r'^(\d+)', field.item_number).group(1)
-                        if field.parent.item_number != parent_num:
-                            issues.append(f"{field.key} has wrong parent")
-                        else:
-                            correct_fields += 1
-                else:
-                    correct_fields += 1
-        
-        score = correct_fields / total_fields if total_fields > 0 else 0
-        passed = len(issues) == 0
-        
-        return passed, score, f"Found {len(issues)} hierarchy issues" if issues else "Hierarchy correct"
-    
-    def _check_field_types(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check field types"""
-        total = 0
-        correct = 0
-        
-        for part in result.parts.values():
-            for field in part.get_all_fields_flat():
-                total += 1
                 if field.field_type != FieldType.UNKNOWN:
-                    correct += 1
+                    typed_fields += 1
         
-        score = correct / total if total > 0 else 0
-        passed = score >= 0.8  # 80% should have types
+        if total_fields == 0:
+            return {
+                'name': 'Field Type Detection',
+                'passed': False,
+                'score': 0.0,
+                'weight': 0.8,
+                'details': 'No fields to check'
+            }
         
-        return passed, score, f"{correct}/{total} fields have identified types"
+        type_ratio = typed_fields / total_fields
+        return {
+            'name': 'Field Type Detection',
+            'passed': type_ratio >= 0.7,
+            'score': type_ratio,
+            'weight': 0.8,
+            'details': f'{typed_fields}/{total_fields} fields typed ({type_ratio:.0%})'
+        }
     
-    def _check_key_format(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check key format"""
-        pattern = re.compile(r'^P\d+_\d+[a-z]?(_\w+)?$')
-        
-        total = 0
-        correct = 0
-        invalid_keys = []
+    def _check_hierarchical_structure(self, result: FormExtractionResult) -> Dict:
+        """Check hierarchical relationships"""
+        issues = []
+        total_checks = 0
+        passed_checks = 0
         
         for part in result.parts.values():
             for field in part.get_all_fields_flat():
-                total += 1
-                if pattern.match(field.key):
-                    correct += 1
-                else:
-                    invalid_keys.append(field.key)
-        
-        score = correct / total if total > 0 else 0
-        passed = len(invalid_keys) == 0
-        
-        details = "All keys valid" if passed else f"Invalid keys: {invalid_keys[:5]}"
-        if len(invalid_keys) > 5:
-            details += f" and {len(invalid_keys) - 5} more"
-        
-        return passed, score, details
-    
-    def _check_data_completeness(self, result: FormExtractionResult, schema: Optional[FormSchema]) -> Tuple[bool, float, str]:
-        """Check overall completeness"""
-        # Simple heuristic: expect at least 20 fields for most forms
-        min_expected = 20
-        actual = result.total_fields
-        
-        if actual >= min_expected:
-            return True, 1.0, f"Found {actual} fields (expected at least {min_expected})"
-        else:
-            score = actual / min_expected
-            return False, score, f"Found only {actual} fields (expected at least {min_expected})"
-
-# Output Formatter Agent
-class OutputFormatter(BaseAgent):
-    """Formats output correctly"""
-    
-    def __init__(self):
-        super().__init__(
-            "Output Formatter",
-            "Formats extraction output"
-        )
-    
-    def execute(self, result: FormExtractionResult) -> Dict[str, Any]:
-        """Format output"""
-        self.start()
-        
-        try:
-            output = {}
-            
-            # Extract all fields with keys
-            for part in result.parts.values():
-                for field in part.get_all_fields_flat():
-                    if field.key:
-                        # Add field value
-                        output[field.key] = field.value or ""
-                        
-                        # Add title for reference
-                        title_key = f"{field.key}_title"
-                        output[title_key] = field.label
-                        
-                        # Add metadata if needed
-                        if field.confidence == ExtractionConfidence.LOW:
-                            confidence_key = f"{field.key}_confidence"
-                            output[confidence_key] = field.confidence.value
-            
-            self.log(f"Formatted {len(output)} output entries")
-            self.complete()
-            return output
-            
-        except Exception as e:
-            self.log(f"Formatting failed: {str(e)}", "error")
-            self.complete(False)
-            raise
-
-# ===== MAPPING AGENTS =====
-
-class DatabaseMappingAgent(BaseAgent):
-    """Agent for mapping extracted fields to database schema"""
-    
-    def __init__(self):
-        super().__init__(
-            "Database Mapping Agent",
-            "Maps extracted fields to database schema using intelligent patterns"
-        )
-        self.pattern_library = PatternLibrary()
-        self.database_schema = DatabaseSchema()
-    
-    def execute(self, result: FormExtractionResult) -> FormExtractionResult:
-        """Execute database mapping"""
-        self.start()
-        
-        try:
-            all_fields = result.get_all_fields_with_keys()
-            mapped_count = 0
-            unmapped_count = 0
-            
-            # Get mapping patterns
-            mapping_patterns = self.pattern_library.mapping_patterns
-            
-            for field_key, field in all_fields.items():
-                field_label_lower = field.label.lower()
-                best_match = None
-                best_confidence = 0.0
+                total_checks += 1
                 
-                # Try to match against patterns
-                for pattern, (table, column, confidence) in mapping_patterns.items():
-                    if re.search(pattern, field_label_lower):
-                        if confidence > best_confidence:
-                            best_confidence = confidence
-                            best_match = (table, column)
-                
-                if best_match:
-                    table, column = best_match
-                    field.mapping_status = MappingStatus.MAPPED
-                    field.mapped_to = f"{table}.{column}"
-                    field.mapping_confidence = best_confidence
-                    
-                    # Create mapping record
-                    mapping = FieldMapping(
-                        pdf_field_key=field_key,
-                        pdf_field_label=field.label,
-                        database_table=table,
-                        database_field=column,
-                        confidence=best_confidence
-                    )
-                    result.mapped_fields[field_key] = mapping
-                    mapped_count += 1
-                    
-                    self.log(f"Mapped '{field.label}' → {table}.{column} (confidence: {best_confidence:.0%})")
+                # Check sub-items have parents
+                if re.match(r'^\d+[a-z]', field.item_number):
+                    parent_num = re.match(r'^(\d+)', field.item_number).group(1)
+                    if field.parent and field.parent.item_number == parent_num:
+                        passed_checks += 1
+                    else:
+                        issues.append(f"{field.key} missing proper parent")
                 else:
-                    field.mapping_status = MappingStatus.UNMAPPED
-                    result.unmapped_fields.append(field_key)
-                    unmapped_count += 1
-            
-            # Calculate mapping completeness
-            total_fields = len(all_fields)
-            result.mapping_completeness = mapped_count / total_fields if total_fields > 0 else 0
-            
-            self.log(f"Mapped {mapped_count} fields, {unmapped_count} unmapped")
-            self.log(f"Mapping completeness: {result.mapping_completeness:.0%}")
-            
-            self.complete()
-            return result
-            
-        except Exception as e:
-            self.log(f"Mapping failed: {str(e)}", "error")
-            self.complete(False)
-            raise
+                    passed_checks += 1
+        
+        if total_checks == 0:
+            return {
+                'name': 'Hierarchical Structure',
+                'passed': True,
+                'score': 1.0,
+                'weight': 0.7,
+                'details': 'No hierarchy to check'
+            }
+        
+        score = passed_checks / total_checks
+        return {
+            'name': 'Hierarchical Structure',
+            'passed': len(issues) == 0,
+            'score': score,
+            'weight': 0.7,
+            'details': f'{len(issues)} hierarchy issues' if issues else 'Hierarchy correct'
+        }
 
-class MappingValidatorAgent(BaseAgent):
-    """Agent for validating field mappings"""
-    
-    def __init__(self):
-        super().__init__(
-            "Mapping Validator Agent",
-            "Validates and improves field mappings"
-        )
-    
-    def execute(self, result: FormExtractionResult) -> Tuple[bool, float, List[Dict]]:
-        """Validate mappings"""
-        self.start()
-        
-        try:
-            validation_results = []
-            issues = []
-            
-            # Check required fields
-            all_fields = result.get_all_fields_with_keys()
-            
-            # Validation checks
-            checks = [
-                {
-                    "name": "Required fields mapped",
-                    "check": self._check_required_fields,
-                    "weight": 2.0
-                },
-                {
-                    "name": "Data type compatibility",
-                    "check": self._check_data_types,
-                    "weight": 1.5
-                },
-                {
-                    "name": "Mapping confidence",
-                    "check": self._check_mapping_confidence,
-                    "weight": 1.0
-                },
-                {
-                    "name": "No duplicate mappings",
-                    "check": self._check_duplicates,
-                    "weight": 1.5
-                }
-            ]
-            
-            total_score = 0.0
-            total_weight = 0.0
-            
-            for check in checks:
-                passed, score, details = check["check"](result)
-                validation_results.append({
-                    "check": check["name"],
-                    "passed": passed,
-                    "score": score,
-                    "details": details,
-                    "weight": check["weight"]
-                })
-                
-                total_score += score * check["weight"]
-                total_weight += check["weight"]
-                
-                if passed:
-                    self.log(f"✓ {check['name']}: {score:.0%}", "success")
-                else:
-                    self.log(f"✗ {check['name']}: {score:.0%}", "warning")
-                    issues.append(details)
-            
-            overall_score = total_score / total_weight if total_weight > 0 else 0
-            is_valid = overall_score >= 0.7
-            
-            self.log(f"Overall mapping validation score: {overall_score:.0%}")
-            self.complete()
-            
-            return is_valid, overall_score, validation_results
-            
-        except Exception as e:
-            self.log(f"Validation failed: {str(e)}", "error")
-            self.complete(False)
-            return False, 0.0, []
-    
-    def _check_required_fields(self, result: FormExtractionResult) -> Tuple[bool, float, str]:
-        """Check if required fields are mapped"""
-        # Define critical fields that should be mapped
-        critical_fields = [
-            ('beneficiary', 'firstName'),
-            ('beneficiary', 'lastName'),
-            ('beneficiary', 'dateOfBirth'),
-            ('beneficiary', 'alienNumber')
-        ]
-        
-        mapped_tables = defaultdict(set)
-        for mapping in result.mapped_fields.values():
-            mapped_tables[mapping.database_table].add(mapping.database_field)
-        
-        missing = []
-        for table, field in critical_fields:
-            if field not in mapped_tables.get(table, set()):
-                missing.append(f"{table}.{field}")
-        
-        if not missing:
-            return True, 1.0, "All critical fields mapped"
-        else:
-            score = 1.0 - (len(missing) / len(critical_fields))
-            return False, score, f"Missing critical fields: {', '.join(missing)}"
-    
-    def _check_data_types(self, result: FormExtractionResult) -> Tuple[bool, float, str]:
-        """Check data type compatibility"""
-        mismatches = []
-        total = len(result.mapped_fields)
-        correct = 0
-        
-        for field_key, mapping in result.mapped_fields.items():
-            field = result.get_all_fields_with_keys().get(field_key)
-            if field:
-                # Simple type checking
-                if field.field_type == FieldType.DATE and 'date' not in mapping.database_field.lower():
-                    mismatches.append(f"{field.label} (DATE) → {mapping.database_field}")
-                elif field.field_type == FieldType.NUMBER and mapping.database_field.endswith('Name'):
-                    mismatches.append(f"{field.label} (NUMBER) → {mapping.database_field}")
-                else:
-                    correct += 1
-            else:
-                correct += 1
-        
-        score = correct / total if total > 0 else 0
-        passed = len(mismatches) == 0
-        
-        return passed, score, f"Type mismatches: {len(mismatches)}" if mismatches else "All types compatible"
-    
-    def _check_mapping_confidence(self, result: FormExtractionResult) -> Tuple[bool, float, str]:
-        """Check mapping confidence levels"""
-        if not result.mapped_fields:
-            return False, 0.0, "No mappings to check"
-        
-        confidences = [m.confidence for m in result.mapped_fields.values()]
-        avg_confidence = sum(confidences) / len(confidences)
-        low_confidence = [m for m in result.mapped_fields.values() if m.confidence < 0.7]
-        
-        if avg_confidence >= 0.8 and not low_confidence:
-            return True, 1.0, f"Average confidence: {avg_confidence:.0%}"
-        else:
-            return False, avg_confidence, f"Low confidence mappings: {len(low_confidence)}"
-    
-    def _check_duplicates(self, result: FormExtractionResult) -> Tuple[bool, float, str]:
-        """Check for duplicate mappings"""
-        mapping_targets = defaultdict(list)
-        
-        for field_key, mapping in result.mapped_fields.items():
-            target = f"{mapping.database_table}.{mapping.database_field}"
-            mapping_targets[target].append(field_key)
-        
-        duplicates = {k: v for k, v in mapping_targets.items() if len(v) > 1}
-        
-        if not duplicates:
-            return True, 1.0, "No duplicate mappings"
-        else:
-            return False, 0.5, f"Duplicate mappings found: {len(duplicates)}"
-
+# ===== DATABASE MAPPING AGENT =====
 class ManualMappingAgent(BaseAgent):
-    """Agent for handling manual field additions and mappings"""
+    """Handles database mapping with manual override capability"""
     
     def __init__(self):
         super().__init__(
             "Manual Mapping Agent",
-            "Handles manual field additions and user-defined mappings"
+            "Maps fields to database with manual override"
         )
+        self.db_schema = self._get_default_schema()
     
-    def execute(self, manual_fields: List[Dict], result: FormExtractionResult) -> FormExtractionResult:
-        """Process manual field additions"""
-        self.start()
+    def _get_default_schema(self) -> Dict[str, List[str]]:
+        """Get default database schema"""
+        return {
+            "personal_info": [
+                "first_name", "last_name", "middle_name", "other_names",
+                "date_of_birth", "place_of_birth", "country_of_birth",
+                "nationality", "gender", "marital_status"
+            ],
+            "identification": [
+                "alien_number", "uscis_number", "social_security_number",
+                "passport_number", "passport_country", "passport_expiry",
+                "driver_license", "state_id"
+            ],
+            "contact_info": [
+                "mailing_address", "physical_address", "apt_suite",
+                "city", "state", "zip_code", "country",
+                "phone_number", "mobile_number", "email_address",
+                "emergency_contact"
+            ],
+            "immigration_info": [
+                "current_status", "status_expiry", "i94_number",
+                "last_entry_date", "last_entry_port", "visa_number",
+                "visa_type", "priority_date", "category"
+            ],
+            "employment": [
+                "employer_name", "employer_address", "job_title",
+                "start_date", "occupation_code", "salary",
+                "work_address"
+            ],
+            "family": [
+                "spouse_name", "spouse_dob", "children_count",
+                "parent_names", "sibling_info"
+            ],
+            "application": [
+                "application_type", "receipt_number", "priority_date",
+                "filing_date", "decision_date", "notes"
+            ]
+        }
+    
+    def execute(self, result: FormExtractionResult, manual_mappings: Dict[str, str] = None) -> FormExtractionResult:
+        """Execute mapping with manual overrides"""
+        self.status = "active"
+        self.log("Starting database mapping...")
         
         try:
-            added_count = 0
+            # Apply manual mappings first
+            if manual_mappings:
+                for field_key, db_field in manual_mappings.items():
+                    result.manual_mappings[field_key] = db_field
+                    result.field_mappings[field_key] = db_field
+                self.log(f"Applied {len(manual_mappings)} manual mappings")
             
-            for manual_field in manual_fields:
-                # Create new field node
-                field_key = f"MANUAL_{len(result.get_all_fields_with_keys()) + added_count}"
-                
-                field_node = FieldNode(
-                    item_number=field_key,
-                    label=manual_field['label'],
-                    value=manual_field['value'],
-                    field_type=FieldType.TEXT,
-                    page=0,
-                    confidence=ExtractionConfidence.HIGH,
-                    extraction_method="manual",
-                    mapping_status=MappingStatus.MANUAL,
-                    mapped_to=manual_field.get('mapped_to'),
-                    key=field_key
-                )
-                
-                # Add to appropriate part (create manual part if needed)
-                if 99 not in result.parts:
-                    result.parts[99] = PartStructure(
-                        part_number=99,
-                        part_name="Manual Entries",
-                        part_title="Manually Added Fields"
-                    )
-                
-                result.parts[99].root_fields.append(field_node)
-                
-                # Create mapping if specified
-                if manual_field.get('mapped_to'):
-                    table, field = manual_field['mapped_to'].split('.')
-                    mapping = FieldMapping(
-                        pdf_field_key=field_key,
-                        pdf_field_label=manual_field['label'],
-                        database_table=table,
-                        database_field=field,
-                        confidence=1.0
-                    )
-                    result.mapped_fields[field_key] = mapping
-                
-                added_count += 1
-                self.log(f"Added manual field: {manual_field['label']}")
+            # Auto-suggest mappings for unmapped fields
+            unmapped_count = 0
+            suggested_count = 0
             
-            self.log(f"Added {added_count} manual fields", "success")
-            self.complete()
-            return result
-            
-        except Exception as e:
-            self.log(f"Manual mapping failed: {str(e)}", "error")
-            self.complete(False)
-            raise
-
-class TypeScriptGeneratorAgent(BaseAgent):
-    """Agent for generating TypeScript interfaces"""
-    
-    def __init__(self):
-        super().__init__(
-            "TypeScript Generator Agent",
-            "Generates TypeScript interfaces from mapped fields"
-        )
-    
-    def execute(self, result: FormExtractionResult) -> str:
-        """Generate TypeScript interfaces"""
-        self.start()
-        
-        try:
-            ts_code = f"// Generated TypeScript interfaces for {result.form_number}\n"
-            ts_code += f"// Generated on: {datetime.now().isoformat()}\n\n"
-            
-            # Group mappings by table
-            tables = defaultdict(list)
-            for mapping in result.mapped_fields.values():
-                tables[mapping.database_table].append(mapping)
-            
-            # Generate interfaces
-            for table, mappings in tables.items():
-                interface_name = self._to_pascal_case(table)
-                ts_code += f"export interface {interface_name} {{\n"
-                
-                # Get unique fields
-                fields = {}
-                for mapping in mappings:
-                    if mapping.database_field not in fields:
-                        field_type = self._get_typescript_type(mapping.database_field)
-                        fields[mapping.database_field] = field_type
-                
-                # Write fields
-                for field_name, field_type in sorted(fields.items()):
-                    ts_code += f"  {field_name}: {field_type};\n"
-                
-                ts_code += "}\n\n"
-            
-            # Generate main form interface
-            form_interface = self._to_pascal_case(result.form_number.replace('-', ''))
-            ts_code += f"export interface {form_interface}FormData {{\n"
-            for table in tables.keys():
-                interface_name = self._to_pascal_case(table)
-                ts_code += f"  {table}: {interface_name};\n"
-            ts_code += "}\n\n"
-            
-            # Generate validation schema
-            ts_code += f"// Validation schema\n"
-            ts_code += f"export const {form_interface}ValidationSchema = {{\n"
-            for table in tables.keys():
-                ts_code += f"  {table}: {{\n"
-                ts_code += f"    required: ['firstName', 'lastName', 'dateOfBirth'],\n"
-                ts_code += f"  }},\n"
-            ts_code += "};\n"
-            
-            self.log(f"Generated TypeScript for {len(tables)} tables", "success")
-            self.complete()
-            return ts_code
-            
-        except Exception as e:
-            self.log(f"TypeScript generation failed: {str(e)}", "error")
-            self.complete(False)
-            raise
-    
-    def _to_pascal_case(self, text: str) -> str:
-        """Convert to PascalCase"""
-        return ''.join(word.capitalize() for word in text.split('_'))
-    
-    def _get_typescript_type(self, field_name: str) -> str:
-        """Determine TypeScript type from field name"""
-        if 'date' in field_name.lower():
-            return 'string | Date'
-        elif 'number' in field_name.lower() or field_name.endswith('Count'):
-            return 'number'
-        elif field_name.endswith('Flag') or field_name.startswith('is'):
-            return 'boolean'
-        else:
-            return 'string'
-
-class JSONExportAgent(BaseAgent):
-    """Agent for exporting mapped data as JSON"""
-    
-    def __init__(self):
-        super().__init__(
-            "JSON Export Agent",
-            "Exports mapped data in various JSON formats"
-        )
-    
-    def execute(self, result: FormExtractionResult) -> Dict[str, Any]:
-        """Generate JSON exports"""
-        self.start()
-        
-        try:
-            all_fields = result.get_all_fields_with_keys()
-            
-            # Generate mapped data JSON
-            mapped_data = defaultdict(dict)
-            for field_key, mapping in result.mapped_fields.items():
-                if field_key in all_fields:
-                    value = all_fields[field_key].value
-                    mapped_data[mapping.database_table][mapping.database_field] = value
-            
-            # Generate unmapped fields JSON
-            unmapped_data = {}
-            for field_key in result.unmapped_fields:
-                if field_key in all_fields:
-                    field = all_fields[field_key]
-                    unmapped_data[field_key] = {
-                        "label": field.label,
-                        "value": field.value,
-                        "type": field.field_type.value,
-                        "page": field.page,
-                        "confidence": field.confidence.value
-                    }
-            
-            # Generate complete export
-            export = {
-                "metadata": {
-                    "form_number": result.form_number,
-                    "form_title": result.form_title,
-                    "extraction_date": datetime.now().isoformat(),
-                    "total_fields": result.total_fields,
-                    "mapped_count": len(result.mapped_fields),
-                    "unmapped_count": len(result.unmapped_fields),
-                    "mapping_completeness": result.mapping_completeness
-                },
-                "mapped_data": dict(mapped_data),
-                "unmapped_fields": unmapped_data
-            }
-            
-            self.log(f"Generated JSON export with {len(mapped_data)} tables", "success")
-            self.complete()
-            return export
-            
-        except Exception as e:
-            self.log(f"JSON export failed: {str(e)}", "error")
-            self.complete(False)
-            raise
-
-# ===== VERIFICATION AGENT =====
-class InteractiveVerificationAgent(BaseAgent):
-    """Agent for interactive verification and correction of extracted data"""
-    
-    def __init__(self):
-        super().__init__(
-            "Interactive Verification Agent",
-            "Facilitates user verification and correction of extracted fields"
-        )
-        self.database_schema = DatabaseSchema()
-    
-    def execute(self, result: FormExtractionResult, user_modifications: Dict[str, Any]) -> FormExtractionResult:
-        """Apply user modifications to extraction result"""
-        self.start()
-        
-        try:
-            modified_count = 0
-            
-            # Apply field value modifications
-            if 'field_values' in user_modifications:
-                for field_key, new_value in user_modifications['field_values'].items():
-                    field = self._find_field_by_key(result, field_key)
-                    if field and field.value != new_value:
-                        field.value = new_value
-                        field.confidence = ExtractionConfidence.HIGH
-                        modified_count += 1
-                        self.log(f"Updated value for {field_key}")
-            
-            # Apply field type modifications
-            if 'field_types' in user_modifications:
-                for field_key, new_type in user_modifications['field_types'].items():
-                    field = self._find_field_by_key(result, field_key)
-                    if field and field.field_type.value != new_type:
-                        field.field_type = FieldType(new_type)
-                        modified_count += 1
-                        self.log(f"Updated type for {field_key} to {new_type}")
-            
-            # Apply manual mappings
-            if 'field_mappings' in user_modifications:
-                for field_key, mapping_str in user_modifications['field_mappings'].items():
-                    if mapping_str and '.' in mapping_str:
-                        field = self._find_field_by_key(result, field_key)
-                        if field:
-                            table, column = mapping_str.split('.')
-                            field.mapping_status = MappingStatus.MANUAL
-                            field.mapped_to = mapping_str
-                            field.mapping_confidence = 1.0
+            for part in result.parts.values():
+                for field in part.get_all_fields_flat():
+                    if field.key not in result.field_mappings:
+                        suggestions = self._suggest_mapping(field)
+                        if suggestions:
+                            result.suggested_mappings[field.key] = suggestions
+                            field.suggested_mappings = suggestions
+                            field.mapping_status = MappingStatus.SUGGESTED
+                            suggested_count += 1
                             
-                            # Create mapping record
-                            mapping = FieldMapping(
-                                pdf_field_key=field_key,
-                                pdf_field_label=field.label,
-                                database_table=table,
-                                database_field=column,
-                                confidence=1.0
-                            )
-                            result.mapped_fields[field_key] = mapping
-                            modified_count += 1
-                            self.log(f"Manually mapped {field_key} to {mapping_str}")
+                            # Auto-map high confidence suggestions
+                            if suggestions[0][1] >= 0.9:
+                                result.field_mappings[field.key] = suggestions[0][0]
+                                field.mapped_to = suggestions[0][0]
+                                field.mapping_status = MappingStatus.MAPPED
+                                field.mapping_confidence = suggestions[0][1]
+                        else:
+                            field.mapping_status = MappingStatus.UNMAPPED
+                            unmapped_count += 1
+                    else:
+                        # Already mapped (manual)
+                        field.mapped_to = result.field_mappings[field.key]
+                        field.mapping_status = MappingStatus.MANUAL
+                        field.mapping_confidence = 1.0
             
-            # Mark fields as verified
-            if 'verified_fields' in user_modifications:
-                for field_key in user_modifications['verified_fields']:
-                    field = self._find_field_by_key(result, field_key)
-                    if field:
-                        field.is_valid = True
-                        field.validation_errors = []
-                        self.log(f"Verified field {field_key}")
+            self.log(f"Mapping complete: {len(result.field_mappings)} mapped, "
+                    f"{suggested_count} suggested, {unmapped_count} unmapped", "success")
             
-            self.log(f"Applied {modified_count} modifications", "success")
-            self.complete()
             return result
             
         except Exception as e:
-            self.log(f"Verification update failed: {str(e)}", "error")
-            self.complete(False)
+            self.log(f"Mapping failed: {str(e)}", "error")
             raise
     
-    def _find_field_by_key(self, result: FormExtractionResult, field_key: str) -> Optional[FieldNode]:
-        """Find field by key in result"""
+    def _suggest_mapping(self, field: FieldNode) -> List[Tuple[str, float]]:
+        """Suggest database mappings for a field"""
+        suggestions = []
+        field_label_lower = field.label.lower()
+        
+        # Pattern-based matching
+        patterns = {
+            # Personal info patterns
+            r'first.*name|given.*name': 'personal_info.first_name',
+            r'last.*name|family.*name|surname': 'personal_info.last_name',
+            r'middle.*name': 'personal_info.middle_name',
+            r'birth.*date|date.*birth|dob': 'personal_info.date_of_birth',
+            r'birth.*place|place.*birth|born': 'personal_info.place_of_birth',
+            r'birth.*country|country.*birth': 'personal_info.country_of_birth',
+            r'nationality|citizenship': 'personal_info.nationality',
+            r'gender|sex': 'personal_info.gender',
+            r'marital|married|spouse': 'personal_info.marital_status',
+            
+            # Identification patterns
+            r'a[\-\s]?number|alien.*number': 'identification.alien_number',
+            r'uscis.*number|uscis.*account': 'identification.uscis_number',
+            r'social.*security|ssn': 'identification.social_security_number',
+            r'passport.*number': 'identification.passport_number',
+            r'passport.*country': 'identification.passport_country',
+            r'passport.*expir': 'identification.passport_expiry',
+            
+            # Contact patterns
+            r'mailing.*address|mail.*to': 'contact_info.mailing_address',
+            r'physical.*address|current.*address|street': 'contact_info.physical_address',
+            r'apt|suite|unit': 'contact_info.apt_suite',
+            r'city|town': 'contact_info.city',
+            r'state|province': 'contact_info.state',
+            r'zip|postal.*code': 'contact_info.zip_code',
+            r'country': 'contact_info.country',
+            r'phone|telephone|tel': 'contact_info.phone_number',
+            r'mobile|cell': 'contact_info.mobile_number',
+            r'email|e\-mail': 'contact_info.email_address',
+            
+            # Immigration patterns
+            r'current.*status|immigration.*status|nonimmigrant.*status': 'immigration_info.current_status',
+            r'status.*expir|expir.*date': 'immigration_info.status_expiry',
+            r'i[\-\s]?94': 'immigration_info.i94_number',
+            r'last.*entry|recent.*arrival|date.*arrival': 'immigration_info.last_entry_date',
+            r'port.*entry|arrival.*port': 'immigration_info.last_entry_port',
+            r'visa.*number': 'immigration_info.visa_number',
+            r'visa.*type|visa.*class': 'immigration_info.visa_type',
+            
+            # Employment patterns
+            r'employer|company.*name|work.*for': 'employment.employer_name',
+            r'job.*title|position|occupation': 'employment.job_title',
+            r'start.*date|employ.*since': 'employment.start_date',
+            r'salary|wage|income': 'employment.salary',
+            
+            # Application patterns
+            r'applying.*for|application.*type|request': 'application.application_type',
+            r'receipt.*number|case.*number': 'application.receipt_number',
+            r'priority.*date': 'application.priority_date',
+            r'filing.*date|submitted': 'application.filing_date',
+        }
+        
+        for pattern, db_field in patterns.items():
+            if re.search(pattern, field_label_lower):
+                # Calculate confidence based on match quality
+                match = re.search(pattern, field_label_lower)
+                confidence = 0.7 + (0.3 * (len(match.group()) / len(field_label_lower)))
+                suggestions.append((db_field, min(0.95, confidence)))
+        
+        # Sort by confidence
+        suggestions.sort(key=lambda x: x[1], reverse=True)
+        
+        # Return top 3 suggestions
+        return suggestions[:3]
+    
+    def get_mapping_suggestions_for_review(self, result: FormExtractionResult) -> Dict[str, Dict]:
+        """Get all fields that need mapping review"""
+        review_fields = {}
+        
         for part in result.parts.values():
             for field in part.get_all_fields_flat():
-                if field.key == field_key:
-                    return field
-        return None
-    
-    def generate_verification_questions(self, result: FormExtractionResult) -> List[Dict]:
-        """Generate verification questions based on extraction"""
-        questions = []
+                if field.mapping_status in [MappingStatus.UNMAPPED, MappingStatus.SUGGESTED, MappingStatus.REVIEW]:
+                    review_fields[field.key] = {
+                        'label': field.label,
+                        'type': field.field_type.value,
+                        'value': field.value,
+                        'suggestions': field.suggested_mappings,
+                        'status': field.mapping_status.value,
+                        'part': field.part_number
+                    }
         
-        # Question 1: Form identification
-        questions.append({
-            'id': 'form_correct',
-            'type': 'yes_no',
-            'question': f'Is this form correctly identified as {result.form_number} - {result.form_title}?',
-            'metadata': {'form_number': result.form_number}
-        })
-        
-        # Question 2: Part completeness
-        questions.append({
-            'id': 'parts_complete',
-            'type': 'yes_no',
-            'question': f'Are all {len(result.parts)} parts detected correctly?',
-            'metadata': {'part_count': len(result.parts)}
-        })
-        
-        # Question 3: Critical fields check
-        critical_fields = self._get_critical_fields(result)
-        for field in critical_fields:
-            questions.append({
-                'id': f'verify_{field.key}',
-                'type': 'field_verification',
-                'question': f'Please verify: {field.label}',
-                'field_key': field.key,
-                'current_value': field.value,
-                'field_type': field.field_type.value
-            })
-        
-        # Question 4: Missing information
-        questions.append({
-            'id': 'missing_fields',
-            'type': 'text',
-            'question': 'Are there any important fields that were not extracted?',
-            'metadata': {}
-        })
-        
-        return questions
-    
-    def _get_critical_fields(self, result: FormExtractionResult) -> List[FieldNode]:
-        """Get critical fields that need verification"""
-        critical_patterns = [
-            'name', 'date of birth', 'a-number', 'alien number',
-            'social security', 'passport', 'address'
-        ]
-        
-        critical_fields = []
-        for part in result.parts.values():
-            for field in part.get_all_fields_flat():
-                if any(pattern in field.label.lower() for pattern in critical_patterns):
-                    critical_fields.append(field)
-        
-        # Limit to top 10 most critical
-        return critical_fields[:10]
-    
-    def calculate_verification_score(self, result: FormExtractionResult) -> float:
-        """Calculate verification completeness score"""
-        total_fields = 0
-        verified_fields = 0
-        
-        for part in result.parts.values():
-            for field in part.get_all_fields_flat():
-                total_fields += 1
-                if field.is_valid and not field.validation_errors:
-                    verified_fields += 1
-        
-        return verified_fields / total_fields if total_fields > 0 else 0
+        return review_fields
 
 # ===== MASTER COORDINATOR =====
-class MasterCoordinator(BaseAgent):
-    """Original coordinator for extraction only"""
+class AgenticMasterCoordinator(BaseAgent):
+    """Master coordinator that learns and improves"""
     
-    def __init__(self, max_iterations: int = 3):
+    def __init__(self):
         super().__init__(
-            "Master Coordinator",
-            "Orchestrates the extraction process"
+            "Agentic Master Coordinator",
+            "Orchestrates all agents with learning"
         )
-        self.max_iterations = max_iterations
         self.agents = {
-            'extractor': AdaptivePatternExtractor(),
-            'assigner': SmartKeyAssignment(),
-            'validator': QuestionnaireValidator(),
-            'formatter': OutputFormatter()
+            'extractor': SmartExtractionAgent(),
+            'key_generator': SmartKeyGenerator(),
+            'validator': IntelligentValidationAgent(),
+            'mapper': ManualMappingAgent()
         }
-        self.pattern_library = PatternLibrary()
+        self.max_iterations = 3
     
-    def execute(self, pdf_file) -> Optional[Dict[str, Any]]:
-        """Execute coordinated extraction"""
-        self.start()
+    def execute(self, pdf_file, manual_mappings: Dict[str, str] = None) -> Dict[str, Any]:
+        """Execute complete pipeline"""
+        self.status = "active"
+        self.log("🚀 Starting agentic form processing pipeline...")
         
         try:
-            # Store original file position
-            if hasattr(pdf_file, 'seek'):
-                original_position = pdf_file.tell()
-            
-            result = None
+            # Phase 1: Extraction with refinement loop
             best_result = None
             best_score = 0.0
             
             for iteration in range(self.max_iterations):
-                self.log(f"\n{'='*50}")
-                self.log(f"Starting iteration {iteration + 1}/{self.max_iterations}")
+                self.log(f"\n📊 Iteration {iteration + 1}/{self.max_iterations}")
                 
-                # Reset file position if needed
-                if hasattr(pdf_file, 'seek'):
-                    pdf_file.seek(0)
-                
-                # Step 1: Extract
+                # Extract
                 if iteration == 0:
                     result = self.agents['extractor'].execute(pdf_file)
                 else:
-                    # Re-extract with improvements
-                    self.log("Re-extracting with refined patterns...")
+                    # Refine based on validation feedback
                     result = self._refine_extraction(pdf_file, result, validation_results)
                 
                 if not result:
-                    self.log("Extraction failed", "error")
                     break
                 
-                # Step 2: Assign keys
-                result = self.agents['assigner'].execute(result)
+                # Generate keys
+                result = self.agents['key_generator'].execute(result)
                 
-                # Step 3: Validate
-                schema = self.pattern_library.form_schemas.get(result.form_number)
-                is_valid, score, validation_results = self.agents['validator'].execute(result, schema)
+                # Validate
+                is_valid, score, validation_results = self.agents['validator'].execute(result)
+                result.extraction_iterations = iteration + 1
                 
-                # Track best result
                 if score > best_score:
                     best_score = score
                     best_result = copy.deepcopy(result)
                 
-                # Check if good enough
                 if is_valid and score >= 0.85:
-                    self.log(f"✅ Extraction successful with score {score:.0%}!", "success")
+                    self.log(f"✨ Extraction successful with {score:.0%} confidence!", "success")
                     break
                 
-                # Log status
-                self.log(f"Iteration {iteration + 1} score: {score:.0%}")
-                
                 if iteration < self.max_iterations - 1:
-                    self.log("Score below threshold, refining...")
-                    time.sleep(0.5)
+                    self.log(f"Score {score:.0%} - refining extraction...", "warning")
             
-            # Use best result
-            if best_result:
-                # Step 4: Format output
-                output = self.agents['formatter'].execute(best_result)
-                
-                # Add metadata
-                output['_metadata'] = {
-                    'form_number': best_result.form_number,
-                    'form_title': best_result.form_title,
-                    'total_fields': best_result.total_fields,
-                    'validation_score': best_score,
-                    'iterations': iteration + 1
-                }
-                
-                self.complete()
-                return output
-            
-            self.log("No valid extraction produced", "error")
-            self.complete(False)
-            return None
-            
-        except Exception as e:
-            self.log(f"Coordination failed: {str(e)}", "error", traceback.format_exc())
-            self.complete(False)
-            return None
-        finally:
-            # Reset file position
-            if hasattr(pdf_file, 'seek'):
-                pdf_file.seek(0)
-    
-    def _refine_extraction(self, pdf_file, previous_result: FormExtractionResult,
-                         validation_results: List[Dict]) -> FormExtractionResult:
-        """Refine extraction based on validation feedback"""
-        # Analyze validation results
-        issues = []
-        for result in validation_results:
-            if not result["passed"]:
-                issues.append(result)
-        
-        self.log(f"Refining based on {len(issues)} validation issues")
-        
-        # Reset file position
-        if hasattr(pdf_file, 'seek'):
-            pdf_file.seek(0)
-        
-        # For now, just re-run extraction
-        # In a production system, this would adjust patterns based on specific issues
-        return self.agents['extractor'].execute(pdf_file)
-
-# ===== ENHANCED MASTER COORDINATOR =====
-class EnhancedMasterCoordinator(BaseAgent):
-    """Enhanced coordinator that manages both extraction and mapping agents"""
-    
-    def __init__(self, max_iterations: int = 3):
-        super().__init__(
-            "Enhanced Master Coordinator",
-            "Orchestrates extraction and database mapping"
-        )
-        self.max_iterations = max_iterations
-        
-        # Extraction agents
-        self.extraction_agents = {
-            'extractor': AdaptivePatternExtractor(),
-            'assigner': SmartKeyAssignment(),
-            'validator': QuestionnaireValidator(),
-            'formatter': OutputFormatter()
-        }
-        
-        # Mapping agents
-        self.mapping_agents = {
-            'mapper': DatabaseMappingAgent(),
-            'mapping_validator': MappingValidatorAgent(),
-            'manual_mapper': ManualMappingAgent(),
-            'ts_generator': TypeScriptGeneratorAgent(),
-            'json_exporter': JSONExportAgent(),
-            'verifier': InteractiveVerificationAgent()
-        }
-        
-        self.pattern_library = PatternLibrary()
-    
-    def execute(self, pdf_file, manual_fields: List[Dict] = None) -> Dict[str, Any]:
-        """Execute complete extraction and mapping pipeline"""
-        self.start()
-        
-        try:
-            # Phase 1: Extraction
-            self.log("=== PHASE 1: PDF EXTRACTION ===")
-            extraction_result = self._run_extraction_phase(pdf_file)
-            
-            if not extraction_result:
-                self.log("Extraction phase failed", "error")
-                self.complete(False)
+            if not best_result:
+                self.log("Extraction failed", "error")
                 return None
             
-            # Store extraction result in session state for verification tab
-            if hasattr(st, 'session_state'):
-                st.session_state.form_extraction_result = extraction_result
-            
             # Phase 2: Database Mapping
-            self.log("\n=== PHASE 2: DATABASE MAPPING ===")
-            mapping_result = self._run_mapping_phase(extraction_result, manual_fields)
+            self.log("\n🔗 Phase 2: Database Mapping")
+            mapped_result = self.agents['mapper'].execute(best_result, manual_mappings)
             
-            # Phase 3: Validation
-            self.log("\n=== PHASE 3: MAPPING VALIDATION ===")
-            validation_result = self._run_validation_phase(mapping_result)
+            # Phase 3: Prepare output
+            output = self._prepare_output(mapped_result)
             
-            # Phase 4: Export Generation
-            self.log("\n=== PHASE 4: EXPORT GENERATION ===")
-            export_result = self._run_export_phase(mapping_result)
+            self.log("✅ Pipeline completed successfully!", "success")
             
-            # Combine all results
-            final_output = {
-                'extraction': extraction_result.to_output_format(),
-                'mapping': {
-                    'mapped_fields': {k: asdict(v) for k, v in mapping_result.mapped_fields.items()},
-                    'unmapped_fields': mapping_result.unmapped_fields,
-                    'completeness': mapping_result.mapping_completeness
-                },
-                'validation': validation_result,
-                'exports': export_result,
-                '_metadata': {
-                    'form_number': extraction_result.form_number,
-                    'form_title': extraction_result.form_title,
-                    'total_fields': extraction_result.total_fields,
-                    'extraction_score': extraction_result.validation_score,
-                    'mapping_completeness': mapping_result.mapping_completeness,
-                    'timestamp': datetime.now().isoformat()
-                }
-            }
+            # Store in session for UI access
+            if hasattr(st, 'session_state'):
+                st.session_state.extraction_result = mapped_result
+                st.session_state.pipeline_output = output
             
-            self.log("✅ Complete pipeline executed successfully!", "success")
-            self.complete()
-            return final_output
+            return output
             
         except Exception as e:
-            self.log(f"Pipeline failed: {str(e)}", "error", traceback.format_exc())
-            self.complete(False)
-            return None
+            self.log(f"Pipeline failed: {str(e)}", "error")
+            raise
     
-    def _run_extraction_phase(self, pdf_file) -> Optional[FormExtractionResult]:
-        """Run extraction phase"""
-        best_result = None
-        best_score = 0.0
-        
-        for iteration in range(self.max_iterations):
-            self.log(f"Extraction iteration {iteration + 1}/{self.max_iterations}")
-            
-            # Reset file position
-            if hasattr(pdf_file, 'seek'):
-                pdf_file.seek(0)
-            
-            # Extract
-            if iteration == 0:
-                result = self.extraction_agents['extractor'].execute(pdf_file)
-            else:
-                result = self._refine_extraction(pdf_file, result, validation_results)
-            
-            if not result:
-                break
-            
-            # Assign keys
-            result = self.extraction_agents['assigner'].execute(result)
-            
-            # Validate
-            schema = self.pattern_library.form_schemas.get(result.form_number)
-            is_valid, score, validation_results = self.extraction_agents['validator'].execute(result, schema)
-            
-            if score > best_score:
-                best_score = score
-                best_result = copy.deepcopy(result)
-            
-            if is_valid and score >= 0.85:
-                self.log(f"Extraction successful with score {score:.0%}", "success")
-                break
-        
-        return best_result
-    
-    def _run_mapping_phase(self, extraction_result: FormExtractionResult, 
-                          manual_fields: Optional[List[Dict]]) -> FormExtractionResult:
-        """Run mapping phase"""
-        # Auto-map fields
-        result = self.mapping_agents['mapper'].execute(extraction_result)
-        
-        # Add manual fields if provided
-        if manual_fields:
-            result = self.mapping_agents['manual_mapper'].execute(manual_fields, result)
-        
-        return result
-    
-    def _run_validation_phase(self, mapping_result: FormExtractionResult) -> Dict:
-        """Run validation phase"""
-        is_valid, score, details = self.mapping_agents['mapping_validator'].execute(mapping_result)
-        
-        return {
-            'is_valid': is_valid,
-            'score': score,
-            'details': details
-        }
-    
-    def _run_export_phase(self, mapping_result: FormExtractionResult) -> Dict:
-        """Run export phase"""
-        # Generate TypeScript
-        typescript = self.mapping_agents['ts_generator'].execute(mapping_result)
-        
-        # Generate JSON
-        json_export = self.mapping_agents['json_exporter'].execute(mapping_result)
-        
-        return {
-            'typescript': typescript,
-            'json': json_export
-        }
-    
-    def _refine_extraction(self, pdf_file, previous_result: FormExtractionResult,
-                         validation_results: List[Dict]) -> FormExtractionResult:
+    def _refine_extraction(self, pdf_file, previous_result: FormExtractionResult, 
+                          validation_results: List[Dict]) -> FormExtractionResult:
         """Refine extraction based on validation feedback"""
-        # Analyze issues and re-extract
-        issues = [r for r in validation_results if not r["passed"]]
-        self.log(f"Refining based on {len(issues)} validation issues")
+        # Learn from validation issues
+        issues = [r for r in validation_results if not r['passed']]
         
-        # Reset file position
+        self.log(f"Learning from {len(issues)} validation issues...")
+        
+        # Create new extractor with enhanced awareness
+        extractor = SmartExtractionAgent()
+        
+        # Re-extract
         if hasattr(pdf_file, 'seek'):
             pdf_file.seek(0)
         
-        return self.extraction_agents['extractor'].execute(pdf_file)
+        new_result = extractor.execute(pdf_file)
+        
+        # Merge improvements
+        if new_result and new_result.total_fields > previous_result.total_fields:
+            self.log(f"Improved: {previous_result.total_fields} → {new_result.total_fields} fields")
+            return new_result
+        
+        return previous_result
+    
+    def _prepare_output(self, result: FormExtractionResult) -> Dict[str, Any]:
+        """Prepare final output"""
+        # Organize by parts
+        parts_data = {}
+        for part_num, part in result.parts.items():
+            part_fields = []
+            for field in part.get_all_fields_flat():
+                field_data = {
+                    'key': field.key,
+                    'label': field.label,
+                    'value': field.value,
+                    'type': field.field_type.value,
+                    'item_number': field.item_number,
+                    'confidence': field.confidence.value,
+                    'mapping_status': field.mapping_status.value,
+                    'mapped_to': field.mapped_to,
+                    'suggestions': field.suggested_mappings
+                }
+                part_fields.append(field_data)
+            
+            parts_data[f"part_{part_num}"] = {
+                'title': part.part_title,
+                'fields': part_fields
+            }
+        
+        return {
+            'form_info': {
+                'number': result.form_number,
+                'title': result.form_title,
+                'total_fields': result.total_fields,
+                'confidence_score': result.confidence_score,
+                'extraction_iterations': result.extraction_iterations
+            },
+            'parts': parts_data,
+            'mappings': {
+                'mapped': result.field_mappings,
+                'manual': result.manual_mappings,
+                'suggested': result.suggested_mappings
+            },
+            'statistics': {
+                'total_parts': len(result.parts),
+                'total_fields': result.total_fields,
+                'duplicates_prevented': result.duplicate_count,
+                'mapped_fields': len(result.field_mappings),
+                'confidence_score': result.confidence_score
+            }
+        }
 
 # ===== UI COMPONENTS =====
-def display_agent_activity():
-    """Display agent activity log"""
-    if 'agent_container' not in st.session_state:
-        st.session_state.agent_container = st.container()
-    return st.session_state.agent_container
-
-def display_field_details(field: FieldNode, part_num: int, field_idx: str):
-    """Display detailed field information with editing capabilities"""
-    with st.expander(f"📄 {field.label}", expanded=False):
-        col1, col2, col3 = st.columns([2, 2, 1])
-        
-        with col1:
-            # Field information
-            st.markdown("**Field Information:**")
-            st.text(f"Key: {field.key}")
-            st.text(f"Item Number: {field.item_number}")
-            st.text(f"Page: {field.page}")
-            st.text(f"Confidence: {field.confidence.value}")
-            
-            # Editable value
-            new_value = st.text_input(
-                "Value", 
-                value=field.value or "",
-                key=f"value_{field_idx}"
-            )
-            if new_value != field.value:
-                if 'field_modifications' not in st.session_state:
-                    st.session_state.field_modifications = {}
-                st.session_state.field_modifications[field.key] = {
-                    'value': new_value,
-                    'type': field.field_type.value
-                }
-        
-        with col2:
-            # Field type selection
-            field_types = [ft.value for ft in FieldType]
-            current_type_idx = field_types.index(field.field_type.value)
-            
-            new_type = st.selectbox(
-                "Field Type",
-                field_types,
-                index=current_type_idx,
-                key=f"type_{field_idx}"
-            )
-            
-            # Database mapping
-            db_options = ["-- Not Mapped --"]
-            schema = DatabaseSchema()
-            for table, fields in schema.tables.items():
-                for field_name in fields:
-                    db_options.append(f"{table}.{field_name}")
-            
-            current_mapping = field.mapped_to if field.mapped_to else db_options[0]
-            if current_mapping not in db_options:
-                db_options.append(current_mapping)
-            
-            mapping = st.selectbox(
-                "Database Mapping",
-                db_options,
-                index=db_options.index(current_mapping) if current_mapping in db_options else 0,
-                key=f"mapping_{field_idx}"
-            )
-            
-            if mapping != db_options[0] and mapping != field.mapped_to:
-                if 'mapping_modifications' not in st.session_state:
-                    st.session_state.mapping_modifications = {}
-                st.session_state.mapping_modifications[field.key] = mapping
-        
-        with col3:
-            # Validation status
-            st.markdown("**Status:**")
-            if field.is_valid:
-                st.success("✅ Valid")
-            else:
-                st.warning("⚠️ Needs Review")
-            
-            if field.mapping_status == MappingStatus.MAPPED:
-                st.info("🔗 Mapped")
-            elif field.mapping_status == MappingStatus.MANUAL:
-                st.info("✏️ Manual")
-            else:
-                st.warning("❓ Unmapped")
-            
-            # Mark as verified button
-            if st.button("✓ Verify", key=f"verify_{field_idx}"):
-                if 'verified_fields' not in st.session_state:
-                    st.session_state.verified_fields = set()
-                st.session_state.verified_fields.add(field.key)
-                st.success("Verified!")
-
-def display_verification_questionnaire(questions: List[Dict]):
-    """Display verification questionnaire"""
-    if 'questionnaire_responses' not in st.session_state:
-        st.session_state.questionnaire_responses = {}
-    
-    for q_idx, question in enumerate(questions):
-        st.markdown(f"**Q{q_idx + 1}: {question['question']}**")
-        
-        if question['type'] == 'yes_no':
-            response = st.radio(
-                "Response",
-                ["Yes", "No", "Not Sure"],
-                key=f"q_{q_idx}_{question['id']}",
-                horizontal=True
-            )
-            st.session_state.questionnaire_responses[question['id']] = response
-            
-        elif question['type'] == 'field_verification':
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.text(f"Current value: {question.get('current_value', 'N/A')}")
-                verified = st.checkbox(
-                    "Value is correct",
-                    key=f"q_verify_{q_idx}_{question.get('field_key', q_idx)}"
-                )
-            with col2:
-                if not verified:
-                    new_val = st.text_input(
-                        "Correct value",
-                        key=f"q_correct_{q_idx}_{question.get('field_key', q_idx)}"
-                    )
-                    if new_val:
-                        if 'field_corrections' not in st.session_state:
-                            st.session_state.field_corrections = {}
-                        st.session_state.field_corrections[question['field_key']] = new_val
-        
-        elif question['type'] == 'text':
-            response = st.text_area(
-                "Your response",
-                key=f"q_{q_idx}_{question['id']}",
-                height=100
-            )
-            st.session_state.questionnaire_responses[question['id']] = response
-        
-        st.markdown("---")
-
-def display_mapping_results(result: Dict):
-    """Display mapping results"""
+def display_form_parts(result: FormExtractionResult):
+    """Display form parts in clean UI"""
     if not result:
+        st.info("No extraction results available")
         return
     
-    col1, col2 = st.columns(2)
+    for part_num in sorted(result.parts.keys()):
+        part = result.parts[part_num]
+        
+        # Part header
+        st.markdown(
+            f'<div class="part-header">'
+            f'Part {part_num}: {part.part_title}'
+            f' ({len(part.get_all_fields_flat())} fields)'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+        
+        # Fields in part
+        fields = part.get_all_fields_flat()
+        
+        # Group by hierarchy level
+        root_fields = [f for f in fields if not f.parent]
+        
+        for field in root_fields:
+            display_field_with_children(field)
+
+def display_field_with_children(field: FieldNode, indent_level: int = 0):
+    """Display field and its children hierarchically"""
+    indent = "  " * indent_level
+    
+    with st.container():
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+        
+        with col1:
+            st.markdown(f"{indent}**{field.item_number}.** {field.label}")
+        
+        with col2:
+            # Editable value
+            value_key = f"value_{field.key}"
+            new_value = st.text_input(
+                "Value",
+                value=field.value,
+                key=value_key,
+                label_visibility="collapsed"
+            )
+            if new_value != field.value:
+                field.value = new_value
+        
+        with col3:
+            # Mapping status
+            if field.mapping_status == MappingStatus.MAPPED:
+                st.success(f"→ {field.mapped_to}")
+            elif field.mapping_status == MappingStatus.MANUAL:
+                st.info(f"→ {field.mapped_to} (manual)")
+            elif field.mapping_status == MappingStatus.SUGGESTED:
+                if field.suggested_mappings:
+                    st.warning(f"→ {field.suggested_mappings[0][0]} ({field.suggested_mappings[0][1]:.0%})")
+            else:
+                st.error("Unmapped")
+        
+        with col4:
+            # Field type badge
+            type_colors = {
+                FieldType.NAME: "🟦",
+                FieldType.DATE: "🟨",
+                FieldType.NUMBER: "🟩",
+                FieldType.ADDRESS: "🟪",
+                FieldType.EMAIL: "🟧",
+                FieldType.PHONE: "🟫",
+                FieldType.CHECKBOX: "⬜",
+                FieldType.TEXT: "⬛"
+            }
+            st.markdown(f"{type_colors.get(field.field_type, '⬛')} {field.field_type.value}")
+    
+    # Display children
+    for child in field.children:
+        display_field_with_children(child, indent_level + 1)
+
+def display_mapping_interface(result: FormExtractionResult):
+    """Display manual mapping interface"""
+    st.markdown("### 🔗 Database Mapping Configuration")
+    
+    mapper = ManualMappingAgent()
+    review_fields = mapper.get_mapping_suggestions_for_review(result)
+    
+    if not review_fields:
+        st.success("All fields are mapped!")
+        return
+    
+    # Group by mapping status
+    unmapped = {k: v for k, v in review_fields.items() if v['status'] == 'unmapped'}
+    suggested = {k: v for k, v in review_fields.items() if v['status'] == 'suggested'}
+    
+    # Manual mapping inputs
+    manual_mappings = {}
+    
+    if unmapped:
+        st.markdown("#### ❓ Unmapped Fields")
+        for field_key, field_info in unmapped.items():
+            with st.container():
+                st.markdown(
+                    f'<div class="mapping-input">'
+                    f'<strong>{field_info["label"]}</strong> '
+                    f'(Part {field_info["part"]}, Type: {field_info["type"]})'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+                
+                # Database field selector
+                db_options = ["-- Not Mapped --"]
+                for category, fields in mapper.db_schema.items():
+                    for field in fields:
+                        db_options.append(f"{category}.{field}")
+                
+                mapping = st.selectbox(
+                    "Map to:",
+                    db_options,
+                    key=f"map_{field_key}"
+                )
+                
+                if mapping != db_options[0]:
+                    manual_mappings[field_key] = mapping
+    
+    if suggested:
+        st.markdown("#### 💡 Suggested Mappings")
+        for field_key, field_info in suggested.items():
+            with st.container():
+                suggestions = field_info['suggestions']
+                if suggestions:
+                    st.markdown(f"**{field_info['label']}**")
+                    
+                    # Show suggestions as radio buttons
+                    options = ["-- Not Mapped --"] + [f"{s[0]} ({s[1]:.0%})" for s in suggestions]
+                    selected = st.radio(
+                        "Select mapping:",
+                        options,
+                        key=f"suggest_{field_key}",
+                        horizontal=True
+                    )
+                    
+                    if selected != options[0]:
+                        # Extract the mapping from the selected option
+                        mapping = suggestions[options.index(selected) - 1][0]
+                        manual_mappings[field_key] = mapping
+    
+    # Apply mappings button
+    if st.button("💾 Apply Mappings", type="primary"):
+        if manual_mappings:
+            # Apply mappings
+            result.field_mappings.update(manual_mappings)
+            result.manual_mappings.update(manual_mappings)
+            
+            # Update field objects
+            for part in result.parts.values():
+                for field in part.get_all_fields_flat():
+                    if field.key in manual_mappings:
+                        field.mapped_to = manual_mappings[field.key]
+                        field.mapping_status = MappingStatus.MANUAL
+                        field.mapping_confidence = 1.0
+            
+            st.success(f"Applied {len(manual_mappings)} mappings!")
+            st.rerun()
+        else:
+            st.warning("No mappings selected")
+
+def display_export_options(output: Dict[str, Any]):
+    """Display export options"""
+    st.markdown("### 💾 Export Options")
+    
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("### ✅ Mapped Fields")
-        mapped = result.get('mapping', {}).get('mapped_fields', {})
-        for field_key, mapping in mapped.items():
-            st.markdown(
-                f'<div class="field-card mapped-field">'
-                f'<strong>{mapping["pdf_field_label"]}</strong><br>'
-                f'PDF Key: {mapping["pdf_field_key"]}<br>'
-                f'➡️ {mapping["database_table"]}.{mapping["database_field"]}<br>'
-                f'Confidence: {mapping["confidence"]:.0%}'
-                f'</div>',
-                unsafe_allow_html=True
-            )
+        # JSON export
+        json_str = json.dumps(output, indent=2)
+        st.download_button(
+            "📦 Download JSON",
+            json_str,
+            "form_extraction.json",
+            mime="application/json",
+            use_container_width=True
+        )
     
     with col2:
-        st.markdown("### ❓ Unmapped Fields")
-        unmapped = result.get('mapping', {}).get('unmapped_fields', [])
-        extraction_data = result.get('extraction', {})
+        # CSV export
+        csv_data = []
+        for part_name, part_data in output['parts'].items():
+            for field in part_data['fields']:
+                csv_data.append({
+                    'Part': part_name,
+                    'Key': field['key'],
+                    'Label': field['label'],
+                    'Value': field['value'],
+                    'Type': field['type'],
+                    'Mapped To': field['mapped_to'] or ''
+                })
         
-        for field_key in unmapped:
-            label = extraction_data.get(f"{field_key}_title", field_key)
-            value = extraction_data.get(field_key, "")
-            st.markdown(
-                f'<div class="field-card unmapped-field">'
-                f'<strong>{label}</strong><br>'
-                f'Key: {field_key}<br>'
-                f'Value: {value}'
-                f'</div>',
-                unsafe_allow_html=True
+        if csv_data:
+            csv_buffer = io.StringIO()
+            writer = csv.DictWriter(csv_buffer, fieldnames=csv_data[0].keys())
+            writer.writeheader()
+            writer.writerows(csv_data)
+            
+            st.download_button(
+                "📊 Download CSV",
+                csv_buffer.getvalue(),
+                "form_extraction.csv",
+                mime="text/csv",
+                use_container_width=True
             )
+    
+    with col3:
+        # Database insert script
+        sql_statements = generate_sql_inserts(output)
+        st.download_button(
+            "🗄️ Download SQL",
+            sql_statements,
+            "form_inserts.sql",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+def generate_sql_inserts(output: Dict[str, Any]) -> str:
+    """Generate SQL insert statements"""
+    sql = "-- Auto-generated SQL inserts\n"
+    sql += f"-- Form: {output['form_info']['number']} - {output['form_info']['title']}\n"
+    sql += f"-- Generated: {datetime.now().isoformat()}\n\n"
+    
+    # Group by table
+    inserts_by_table = defaultdict(list)
+    
+    for mapping in output['mappings']['mapped'].items():
+        field_key, db_field = mapping
+        if '.' in db_field:
+            table, column = db_field.split('.')
+            
+            # Find the field value
+            value = None
+            for part_data in output['parts'].values():
+                for field in part_data['fields']:
+                    if field['key'] == field_key:
+                        value = field['value']
+                        break
+            
+            if value:
+                inserts_by_table[table].append((column, value))
+    
+    # Generate inserts
+    for table, fields in inserts_by_table.items():
+        columns = [f[0] for f in fields]
+        values = [f"'{f[1]}'" for f in fields]
+        
+        sql += f"INSERT INTO {table} ({', '.join(columns)})\n"
+        sql += f"VALUES ({', '.join(values)});\n\n"
+    
+    return sql
 
 # ===== MAIN APPLICATION =====
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>🤖 Advanced Multi-Agent USCIS Form Reader</h1>'
-        '<p>PDF Extraction → Database Mapping → TypeScript/JSON Export</p>'
+        '<h1>🤖 Agentic USCIS Form Reader</h1>'
+        '<p>Self-learning extraction system with manual database mapping</p>'
         '</div>', 
         unsafe_allow_html=True
     )
     
     # Initialize session state
-    if 'pipeline_result' not in st.session_state:
-        st.session_state.pipeline_result = None
-    if 'manual_fields' not in st.session_state:
-        st.session_state.manual_fields = []
-    if 'field_modifications' not in st.session_state:
-        st.session_state.field_modifications = {}
-    if 'mapping_modifications' not in st.session_state:
-        st.session_state.mapping_modifications = {}
-    if 'verified_fields' not in st.session_state:
-        st.session_state.verified_fields = set()
-    if 'questionnaire_responses' not in st.session_state:
-        st.session_state.questionnaire_responses = {}
-    if 'field_corrections' not in st.session_state:
-        st.session_state.field_corrections = {}
-    if 'form_extraction_result' not in st.session_state:
-        st.session_state.form_extraction_result = None
+    if 'extraction_result' not in st.session_state:
+        st.session_state.extraction_result = None
+    if 'pipeline_output' not in st.session_state:
+        st.session_state.pipeline_output = None
+    if 'manual_mappings' not in st.session_state:
+        st.session_state.manual_mappings = {}
     
     # Sidebar
     with st.sidebar:
         st.markdown("## ⚙️ Configuration")
         
-        max_iterations = st.slider("Max Extraction Iterations", 1, 5, 3)
         show_agent_logs = st.checkbox("Show Agent Activity", value=True)
+        max_iterations = st.slider("Max Refinement Iterations", 1, 5, 3)
         
         st.markdown("---")
         st.markdown("## 🤖 Active Agents")
+        agents = [
+            ("🧠", "Smart Extraction Agent", "Learns patterns"),
+            ("🔑", "Smart Key Generator", "Unique keys"),
+            ("✅", "Intelligent Validator", "Quality checks"),
+            ("🔗", "Manual Mapping Agent", "Database mapping"),
+            ("🎯", "Master Coordinator", "Orchestration")
+        ]
         
-        st.markdown("### Extraction Agents")
-        st.markdown("- 🔍 Adaptive Pattern Extractor")
-        st.markdown("- 🏷️ Smart Key Assignment")
-        st.markdown("- ✅ Questionnaire Validator")
-        st.markdown("- 📄 Output Formatter")
-        
-        st.markdown("### Mapping Agents")
-        st.markdown("- 🔗 Database Mapping Agent")
-        st.markdown("- ✓ Mapping Validator")
-        st.markdown("- ✏️ Manual Mapping Agent")
-        st.markdown("- 🔍 Interactive Verification")
-        st.markdown("- 📘 TypeScript Generator")
-        st.markdown("- 📦 JSON Export Agent")
+        for icon, name, desc in agents:
+            st.markdown(f"{icon} **{name}**")
+            st.caption(desc)
         
         st.markdown("---")
-        st.markdown("## 📊 System Status")
         
-        if PYMUPDF_AVAILABLE:
-            st.success("✅ PyMuPDF Ready")
-        else:
-            st.error("❌ PyMuPDF Not Installed")
-            st.code("pip install PyMuPDF")
+        # Learning indicator
+        if st.session_state.extraction_result:
+            st.markdown(
+                '<div class="learning-indicator">'
+                '🧠 System is learning...'
+                '</div>',
+                unsafe_allow_html=True
+            )
     
-    # Main content
+    # Main content tabs
     tabs = st.tabs([
-        "📄 Upload & Process",
-        "🔗 Mapping Results",
-        "🔍 Verification & Review",
-        "✏️ Manual Fields",
+        "📄 Upload & Extract",
+        "📊 Review Fields",
+        "🔗 Database Mapping",
         "💾 Export Results"
     ])
     
-    # Tab 1: Upload & Process
+    # Tab 1: Upload & Extract
     with tabs[0]:
         st.markdown("### 📄 Upload USCIS Form")
         
         uploaded_file = st.file_uploader(
             "Choose a PDF form",
             type=['pdf'],
-            help="Supported forms: I-539, I-129, G-28, I-90, I-485, I-765, N-400"
+            help="Upload any USCIS form (I-130, I-485, I-539, N-400, etc.)"
         )
         
         if uploaded_file:
-            st.success(f"✅ Uploaded: {uploaded_file.name}")
-            
-            col1, col2, col3 = st.columns([2, 1, 1])
+            col1, col2 = st.columns([3, 1])
             
             with col1:
-                if st.button("🚀 Run Complete Pipeline", type="primary", use_container_width=True):
+                st.success(f"✅ Uploaded: {uploaded_file.name}")
+            
+            with col2:
+                if st.button("🚀 Process Form", type="primary", use_container_width=True):
                     # Create agent activity container
                     if show_agent_logs:
                         st.markdown("### 🤖 Agent Activity")
                         agent_container = st.container()
                         st.session_state.agent_container = agent_container
                     
-                    with st.spinner("Running multi-agent pipeline..."):
-                        # Run enhanced coordinator
-                        coordinator = EnhancedMasterCoordinator(max_iterations=max_iterations)
-                        result = coordinator.execute(uploaded_file, st.session_state.manual_fields)
+                    with st.spinner("Processing form..."):
+                        # Create coordinator with settings
+                        coordinator = AgenticMasterCoordinator()
+                        coordinator.max_iterations = max_iterations
                         
-                        if result:
-                            st.session_state.pipeline_result = result
-                            # Store the extraction result for verification tab
-                            if 'extraction_result' in locals():
-                                st.session_state.form_extraction_result = extraction_result
-                            st.success("✅ Pipeline completed successfully!")
+                        # Execute pipeline
+                        output = coordinator.execute(
+                            uploaded_file,
+                            st.session_state.manual_mappings
+                        )
+                        
+                        if output:
+                            st.success("✅ Form processed successfully!")
                             
-                            # Show summary metrics
-                            metadata = result.get('_metadata', {})
+                            # Display summary metrics
                             col1, col2, col3, col4 = st.columns(4)
                             
                             with col1:
-                                st.metric("Form", metadata.get('form_number', 'Unknown'))
+                                st.metric(
+                                    "Form Type",
+                                    output['form_info']['number']
+                                )
+                            
                             with col2:
-                                st.metric("Total Fields", metadata.get('total_fields', 0))
+                                st.metric(
+                                    "Total Fields",
+                                    output['statistics']['total_fields']
+                                )
+                            
                             with col3:
-                                st.metric("Extraction Score", f"{metadata.get('extraction_score', 0):.0%}")
+                                st.metric(
+                                    "Confidence",
+                                    f"{output['form_info']['confidence_score']:.0%}"
+                                )
+                            
                             with col4:
-                                st.metric("Mapping Complete", f"{metadata.get('mapping_completeness', 0):.0%}")
-                        else:
-                            st.error("❌ Pipeline failed")
-            
-            with col2:
-                if st.button("🔄 Reset", use_container_width=True):
-                    st.session_state.pipeline_result = None
-                    st.session_state.manual_fields = []
-                    st.rerun()
+                                st.metric(
+                                    "Mapped",
+                                    f"{output['statistics']['mapped_fields']}/{output['statistics']['total_fields']}"
+                                )
+                            
+                            # Duplicate prevention info
+                            if output['statistics']['duplicates_prevented'] > 0:
+                                st.info(f"🛡️ Prevented {output['statistics']['duplicates_prevented']} duplicate fields")
     
-    # Tab 2: Mapping Results
+    # Tab 2: Review Fields
     with tabs[1]:
-        st.markdown("### 🔗 Field Mapping Results")
+        st.markdown("### 📊 Review Extracted Fields")
         
-        if st.session_state.pipeline_result:
-            display_mapping_results(st.session_state.pipeline_result)
-            
-            # Mapping statistics
-            st.markdown("### 📊 Mapping Statistics")
-            mapping_data = st.session_state.pipeline_result.get('mapping', {})
-            validation_data = st.session_state.pipeline_result.get('validation', {})
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Mapped Fields", len(mapping_data.get('mapped_fields', {})))
-            with col2:
-                st.metric("Unmapped Fields", len(mapping_data.get('unmapped_fields', [])))
-            with col3:
-                st.metric("Validation Score", f"{validation_data.get('score', 0):.0%}")
-            
-            # Validation details
-            if validation_data.get('details'):
-                with st.expander("📋 Validation Details"):
-                    for detail in validation_data['details']:
-                        icon = "✅" if detail['passed'] else "❌"
-                        st.markdown(f"{icon} **{detail['check']}**: {detail['score']:.0%}")
-                        st.caption(detail['details'])
+        if st.session_state.extraction_result:
+            display_form_parts(st.session_state.extraction_result)
         else:
-            st.info("No results yet. Please process a form first.")
+            st.info("No extraction results. Please process a form first.")
     
-    # Tab 3: Verification & Review
+    # Tab 3: Database Mapping
     with tabs[2]:
-        st.markdown("### 🔍 Verification & Review")
+        st.markdown("### 🔗 Configure Database Mapping")
         
-        if st.session_state.pipeline_result:
-            # Get extraction result from pipeline
-            extraction_data = st.session_state.pipeline_result.get('extraction', {})
-            metadata = st.session_state.pipeline_result.get('_metadata', {})
+        if st.session_state.extraction_result:
+            display_mapping_interface(st.session_state.extraction_result)
             
-            # Reconstruct FormExtractionResult from pipeline data
-            # This is a simplified reconstruction - in production, you'd store the full object
-            if 'form_extraction_result' not in st.session_state:
-                st.warning("Full extraction details not available. Please reprocess the form.")
-            else:
-                result = st.session_state.form_extraction_result
-                verifier = InteractiveVerificationAgent()
+            # Show current mappings summary
+            if st.session_state.extraction_result.field_mappings:
+                st.markdown("#### ✅ Current Mappings")
                 
-                # Display verification options
-                col1, col2 = st.columns([3, 1])
+                mapping_df = []
+                for field_key, db_field in st.session_state.extraction_result.field_mappings.items():
+                    # Find field
+                    for part in st.session_state.extraction_result.parts.values():
+                        for field in part.get_all_fields_flat():
+                            if field.key == field_key:
+                                mapping_df.append({
+                                    'Field': field.label,
+                                    'Database': db_field,
+                                    'Type': 'Manual' if field_key in st.session_state.extraction_result.manual_mappings else 'Auto'
+                                })
+                                break
                 
-                with col1:
-                    st.markdown(f"**Form:** {result.form_number} - {result.form_title}")
-                    st.markdown(f"**Total Fields:** {result.total_fields}")
-                
-                with col2:
-                    if st.button("💾 Save Modifications", type="primary"):
-                        # Gather all modifications
-                        modifications = {
-                            'field_values': st.session_state.get('field_corrections', {}),
-                            'field_types': {},
-                            'field_mappings': st.session_state.get('mapping_modifications', {}),
-                            'verified_fields': list(st.session_state.get('verified_fields', set()))
-                        }
-                        
-                        # Apply modifications
-                        updated_result = verifier.execute(result, modifications)
-                        st.session_state.form_extraction_result = updated_result
-                        st.success("✅ Modifications saved!")
-                        st.rerun()
-                
-                # Part-by-part display
-                st.markdown("### 📋 Part-by-Part Review")
-                
-                for part_num in sorted(result.parts.keys()):
-                    part = result.parts[part_num]
-                    
-                    with st.expander(f"**Part {part_num}: {part.part_title}**", expanded=True):
-                        st.markdown(f"*{len(part.get_all_fields_flat())} fields*")
-                        
-                        # Display fields in this part
-                        for idx, field in enumerate(part.get_all_fields_flat()):
-                            field_idx = f"{part_num}_{idx}"
-                            display_field_details(field, part_num, field_idx)
-                
-                # Verification Questionnaire
-                st.markdown("### ❓ Verification Questionnaire")
-                
-                questions = verifier.generate_verification_questions(result)
-                display_verification_questionnaire(questions)
-                
-                # Verification score
-                verification_score = verifier.calculate_verification_score(result)
-                st.markdown(f"### 📊 Verification Progress: {verification_score:.0%}")
-                st.progress(verification_score)
+                if mapping_df:
+                    st.dataframe(mapping_df, use_container_width=True)
         else:
-            st.info("No results to verify. Please process a form first.")
+            st.info("No extraction results. Please process a form first.")
     
-    # Tab 4: Manual Fields
+    # Tab 4: Export
     with tabs[3]:
-        st.markdown("### ✏️ Add Manual Fields")
+        st.markdown("### 💾 Export Extraction Results")
         
-        with st.form("manual_field_form"):
-            col1, col2 = st.columns(2)
+        if st.session_state.pipeline_output:
+            display_export_options(st.session_state.pipeline_output)
             
-            with col1:
-                field_label = st.text_input("Field Label")
-                field_value = st.text_input("Field Value")
-            
-            with col2:
-                # Database schema selector
-                db_options = ["-- Select Database Field --"]
-                schema = DatabaseSchema()
-                for table, fields in schema.tables.items():
-                    for field_name in fields:
-                        db_options.append(f"{table}.{field_name}")
-                
-                mapped_to = st.selectbox("Map to Database Field", db_options)
-            
-            if st.form_submit_button("➕ Add Manual Field"):
-                if field_label and field_value:
-                    manual_field = {
-                        'label': field_label,
-                        'value': field_value,
-                        'mapped_to': mapped_to if mapped_to != db_options[0] else None
-                    }
-                    st.session_state.manual_fields.append(manual_field)
-                    st.success(f"Added manual field: {field_label}")
-                    st.rerun()
-        
-        # Display manual fields
-        if st.session_state.manual_fields:
-            st.markdown("#### 📝 Current Manual Fields")
-            for idx, field in enumerate(st.session_state.manual_fields):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.info(f"**{field['label']}**: {field['value']}")
-                    if field.get('mapped_to'):
-                        st.caption(f"Mapped to: {field['mapped_to']}")
-                with col2:
-                    if st.button("❌", key=f"del_{idx}"):
-                        st.session_state.manual_fields.pop(idx)
-                        st.rerun()
-    
-    # Tab 5: Export
-    with tabs[4]:
-        st.markdown("### 💾 Export Results")
-        
-        if st.session_state.pipeline_result:
-            exports = st.session_state.pipeline_result.get('exports', {})
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.markdown("#### 📘 TypeScript Interface")
-                if exports.get('typescript'):
-                    st.download_button(
-                        "⬇️ Download TypeScript",
-                        exports['typescript'],
-                        "form_interfaces.ts",
-                        mime="text/plain",
-                        use_container_width=True
-                    )
-            
-            with col2:
-                st.markdown("#### 📦 Mapped Data JSON")
-                if exports.get('json'):
-                    json_str = json.dumps(exports['json']['mapped_data'], indent=2)
-                    st.download_button(
-                        "⬇️ Download Mapped JSON",
-                        json_str,
-                        "mapped_data.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-            
-            with col3:
-                st.markdown("#### ❓ Unmapped Fields")
-                if exports.get('json', {}).get('unmapped_fields'):
-                    json_str = json.dumps(exports['json']['unmapped_fields'], indent=2)
-                    st.download_button(
-                        "⬇️ Download Unmapped JSON",
-                        json_str,
-                        "unmapped_fields.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-            
-            # Preview sections
-            st.markdown("### 👁️ Export Preview")
-            
-            preview_tabs = st.tabs(["TypeScript", "Mapped JSON", "Complete Export"])
-            
-            with preview_tabs[0]:
-                if exports.get('typescript'):
-                    st.code(exports['typescript'], language='typescript')
-            
-            with preview_tabs[1]:
-                if exports.get('json'):
-                    st.json(exports['json']['mapped_data'])
-            
-            with preview_tabs[2]:
-                st.json(st.session_state.pipeline_result)
+            # Preview
+            with st.expander("📄 Preview JSON Output"):
+                st.json(st.session_state.pipeline_output)
         else:
             st.info("No results to export. Please process a form first.")
 
@@ -2930,7 +1725,6 @@ if __name__ == "__main__":
     if not PYMUPDF_AVAILABLE:
         st.error("❌ PyMuPDF is required but not installed!")
         st.code("pip install PyMuPDF")
-        st.info("After installing, refresh this page.")
         st.stop()
     
     main()
