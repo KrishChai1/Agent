@@ -1962,6 +1962,163 @@ class JSONExportAgent(BaseAgent):
             self.complete(False)
             raise
 
+# ===== VERIFICATION AGENT =====
+class InteractiveVerificationAgent(BaseAgent):
+    """Agent for interactive verification and correction of extracted data"""
+    
+    def __init__(self):
+        super().__init__(
+            "Interactive Verification Agent",
+            "Facilitates user verification and correction of extracted fields"
+        )
+        self.database_schema = DatabaseSchema()
+    
+    def execute(self, result: FormExtractionResult, user_modifications: Dict[str, Any]) -> FormExtractionResult:
+        """Apply user modifications to extraction result"""
+        self.start()
+        
+        try:
+            modified_count = 0
+            
+            # Apply field value modifications
+            if 'field_values' in user_modifications:
+                for field_key, new_value in user_modifications['field_values'].items():
+                    field = self._find_field_by_key(result, field_key)
+                    if field and field.value != new_value:
+                        field.value = new_value
+                        field.confidence = ExtractionConfidence.HIGH
+                        modified_count += 1
+                        self.log(f"Updated value for {field_key}")
+            
+            # Apply field type modifications
+            if 'field_types' in user_modifications:
+                for field_key, new_type in user_modifications['field_types'].items():
+                    field = self._find_field_by_key(result, field_key)
+                    if field and field.field_type.value != new_type:
+                        field.field_type = FieldType(new_type)
+                        modified_count += 1
+                        self.log(f"Updated type for {field_key} to {new_type}")
+            
+            # Apply manual mappings
+            if 'field_mappings' in user_modifications:
+                for field_key, mapping_str in user_modifications['field_mappings'].items():
+                    if mapping_str and '.' in mapping_str:
+                        field = self._find_field_by_key(result, field_key)
+                        if field:
+                            table, column = mapping_str.split('.')
+                            field.mapping_status = MappingStatus.MANUAL
+                            field.mapped_to = mapping_str
+                            field.mapping_confidence = 1.0
+                            
+                            # Create mapping record
+                            mapping = FieldMapping(
+                                pdf_field_key=field_key,
+                                pdf_field_label=field.label,
+                                database_table=table,
+                                database_field=column,
+                                confidence=1.0
+                            )
+                            result.mapped_fields[field_key] = mapping
+                            modified_count += 1
+                            self.log(f"Manually mapped {field_key} to {mapping_str}")
+            
+            # Mark fields as verified
+            if 'verified_fields' in user_modifications:
+                for field_key in user_modifications['verified_fields']:
+                    field = self._find_field_by_key(result, field_key)
+                    if field:
+                        field.is_valid = True
+                        field.validation_errors = []
+                        self.log(f"Verified field {field_key}")
+            
+            self.log(f"Applied {modified_count} modifications", "success")
+            self.complete()
+            return result
+            
+        except Exception as e:
+            self.log(f"Verification update failed: {str(e)}", "error")
+            self.complete(False)
+            raise
+    
+    def _find_field_by_key(self, result: FormExtractionResult, field_key: str) -> Optional[FieldNode]:
+        """Find field by key in result"""
+        for part in result.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key == field_key:
+                    return field
+        return None
+    
+    def generate_verification_questions(self, result: FormExtractionResult) -> List[Dict]:
+        """Generate verification questions based on extraction"""
+        questions = []
+        
+        # Question 1: Form identification
+        questions.append({
+            'id': 'form_correct',
+            'type': 'yes_no',
+            'question': f'Is this form correctly identified as {result.form_number} - {result.form_title}?',
+            'metadata': {'form_number': result.form_number}
+        })
+        
+        # Question 2: Part completeness
+        questions.append({
+            'id': 'parts_complete',
+            'type': 'yes_no',
+            'question': f'Are all {len(result.parts)} parts detected correctly?',
+            'metadata': {'part_count': len(result.parts)}
+        })
+        
+        # Question 3: Critical fields check
+        critical_fields = self._get_critical_fields(result)
+        for field in critical_fields:
+            questions.append({
+                'id': f'verify_{field.key}',
+                'type': 'field_verification',
+                'question': f'Please verify: {field.label}',
+                'field_key': field.key,
+                'current_value': field.value,
+                'field_type': field.field_type.value
+            })
+        
+        # Question 4: Missing information
+        questions.append({
+            'id': 'missing_fields',
+            'type': 'text',
+            'question': 'Are there any important fields that were not extracted?',
+            'metadata': {}
+        })
+        
+        return questions
+    
+    def _get_critical_fields(self, result: FormExtractionResult) -> List[FieldNode]:
+        """Get critical fields that need verification"""
+        critical_patterns = [
+            'name', 'date of birth', 'a-number', 'alien number',
+            'social security', 'passport', 'address'
+        ]
+        
+        critical_fields = []
+        for part in result.parts.values():
+            for field in part.get_all_fields_flat():
+                if any(pattern in field.label.lower() for pattern in critical_patterns):
+                    critical_fields.append(field)
+        
+        # Limit to top 10 most critical
+        return critical_fields[:10]
+    
+    def calculate_verification_score(self, result: FormExtractionResult) -> float:
+        """Calculate verification completeness score"""
+        total_fields = 0
+        verified_fields = 0
+        
+        for part in result.parts.values():
+            for field in part.get_all_fields_flat():
+                total_fields += 1
+                if field.is_valid and not field.validation_errors:
+                    verified_fields += 1
+        
+        return verified_fields / total_fields if total_fields > 0 else 0
+
 # ===== MASTER COORDINATOR =====
 class MasterCoordinator(BaseAgent):
     """Original coordinator for extraction only"""
@@ -2111,7 +2268,8 @@ class EnhancedMasterCoordinator(BaseAgent):
             'mapping_validator': MappingValidatorAgent(),
             'manual_mapper': ManualMappingAgent(),
             'ts_generator': TypeScriptGeneratorAgent(),
-            'json_exporter': JSONExportAgent()
+            'json_exporter': JSONExportAgent(),
+            'verifier': InteractiveVerificationAgent()
         }
         
         self.pattern_library = PatternLibrary()
@@ -2129,6 +2287,10 @@ class EnhancedMasterCoordinator(BaseAgent):
                 self.log("Extraction phase failed", "error")
                 self.complete(False)
                 return None
+            
+            # Store extraction result in session state for verification tab
+            if hasattr(st, 'session_state'):
+                st.session_state.form_extraction_result = extraction_result
             
             # Phase 2: Database Mapping
             self.log("\n=== PHASE 2: DATABASE MAPPING ===")
@@ -2264,6 +2426,136 @@ def display_agent_activity():
         st.session_state.agent_container = st.container()
     return st.session_state.agent_container
 
+def display_field_details(field: FieldNode, part_num: int, field_idx: str):
+    """Display detailed field information with editing capabilities"""
+    with st.expander(f"📄 {field.label}", expanded=False):
+        col1, col2, col3 = st.columns([2, 2, 1])
+        
+        with col1:
+            # Field information
+            st.markdown("**Field Information:**")
+            st.text(f"Key: {field.key}")
+            st.text(f"Item Number: {field.item_number}")
+            st.text(f"Page: {field.page}")
+            st.text(f"Confidence: {field.confidence.value}")
+            
+            # Editable value
+            new_value = st.text_input(
+                "Value", 
+                value=field.value or "",
+                key=f"value_{field_idx}"
+            )
+            if new_value != field.value:
+                if 'field_modifications' not in st.session_state:
+                    st.session_state.field_modifications = {}
+                st.session_state.field_modifications[field.key] = {
+                    'value': new_value,
+                    'type': field.field_type.value
+                }
+        
+        with col2:
+            # Field type selection
+            field_types = [ft.value for ft in FieldType]
+            current_type_idx = field_types.index(field.field_type.value)
+            
+            new_type = st.selectbox(
+                "Field Type",
+                field_types,
+                index=current_type_idx,
+                key=f"type_{field_idx}"
+            )
+            
+            # Database mapping
+            db_options = ["-- Not Mapped --"]
+            schema = DatabaseSchema()
+            for table, fields in schema.tables.items():
+                for field_name in fields:
+                    db_options.append(f"{table}.{field_name}")
+            
+            current_mapping = field.mapped_to if field.mapped_to else db_options[0]
+            if current_mapping not in db_options:
+                db_options.append(current_mapping)
+            
+            mapping = st.selectbox(
+                "Database Mapping",
+                db_options,
+                index=db_options.index(current_mapping) if current_mapping in db_options else 0,
+                key=f"mapping_{field_idx}"
+            )
+            
+            if mapping != db_options[0] and mapping != field.mapped_to:
+                if 'mapping_modifications' not in st.session_state:
+                    st.session_state.mapping_modifications = {}
+                st.session_state.mapping_modifications[field.key] = mapping
+        
+        with col3:
+            # Validation status
+            st.markdown("**Status:**")
+            if field.is_valid:
+                st.success("✅ Valid")
+            else:
+                st.warning("⚠️ Needs Review")
+            
+            if field.mapping_status == MappingStatus.MAPPED:
+                st.info("🔗 Mapped")
+            elif field.mapping_status == MappingStatus.MANUAL:
+                st.info("✏️ Manual")
+            else:
+                st.warning("❓ Unmapped")
+            
+            # Mark as verified button
+            if st.button("✓ Verify", key=f"verify_{field_idx}"):
+                if 'verified_fields' not in st.session_state:
+                    st.session_state.verified_fields = set()
+                st.session_state.verified_fields.add(field.key)
+                st.success("Verified!")
+
+def display_verification_questionnaire(questions: List[Dict]):
+    """Display verification questionnaire"""
+    if 'questionnaire_responses' not in st.session_state:
+        st.session_state.questionnaire_responses = {}
+    
+    for q_idx, question in enumerate(questions):
+        st.markdown(f"**Q{q_idx + 1}: {question['question']}**")
+        
+        if question['type'] == 'yes_no':
+            response = st.radio(
+                "Response",
+                ["Yes", "No", "Not Sure"],
+                key=f"q_{question['id']}",
+                horizontal=True
+            )
+            st.session_state.questionnaire_responses[question['id']] = response
+            
+        elif question['type'] == 'field_verification':
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.text(f"Current value: {question.get('current_value', 'N/A')}")
+                verified = st.checkbox(
+                    "Value is correct",
+                    key=f"q_verify_{question['field_key']}"
+                )
+            with col2:
+                if not verified:
+                    new_val = st.text_input(
+                        "Correct value",
+                        key=f"q_correct_{question['field_key']}"
+                    )
+                    if new_val:
+                        if 'field_corrections' not in st.session_state:
+                            st.session_state.field_corrections = {}
+                        st.session_state.field_corrections[question['field_key']] = new_val
+        
+        elif question['type'] == 'text':
+            response = st.text_area(
+                "Your response",
+                key=f"q_{question['id']}",
+                height=100
+            )
+            st.session_state.questionnaire_responses[question['id']] = response
+        
+        st.markdown("---")
+
 def display_mapping_results(result: Dict):
     """Display mapping results"""
     if not result:
@@ -2317,6 +2609,18 @@ def main():
         st.session_state.pipeline_result = None
     if 'manual_fields' not in st.session_state:
         st.session_state.manual_fields = []
+    if 'field_modifications' not in st.session_state:
+        st.session_state.field_modifications = {}
+    if 'mapping_modifications' not in st.session_state:
+        st.session_state.mapping_modifications = {}
+    if 'verified_fields' not in st.session_state:
+        st.session_state.verified_fields = set()
+    if 'questionnaire_responses' not in st.session_state:
+        st.session_state.questionnaire_responses = {}
+    if 'field_corrections' not in st.session_state:
+        st.session_state.field_corrections = {}
+    if 'form_extraction_result' not in st.session_state:
+        st.session_state.form_extraction_result = None
     
     # Sidebar
     with st.sidebar:
@@ -2338,6 +2642,7 @@ def main():
         st.markdown("- 🔗 Database Mapping Agent")
         st.markdown("- ✓ Mapping Validator")
         st.markdown("- ✏️ Manual Mapping Agent")
+        st.markdown("- 🔍 Interactive Verification")
         st.markdown("- 📘 TypeScript Generator")
         st.markdown("- 📦 JSON Export Agent")
         
@@ -2354,6 +2659,7 @@ def main():
     tabs = st.tabs([
         "📄 Upload & Process",
         "🔗 Mapping Results",
+        "🔍 Verification & Review",
         "✏️ Manual Fields",
         "💾 Export Results"
     ])
@@ -2388,6 +2694,9 @@ def main():
                         
                         if result:
                             st.session_state.pipeline_result = result
+                            # Store the extraction result for verification tab
+                            if 'extraction_result' in locals():
+                                st.session_state.form_extraction_result = extraction_result
                             st.success("✅ Pipeline completed successfully!")
                             
                             # Show summary metrics
@@ -2441,8 +2750,75 @@ def main():
         else:
             st.info("No results yet. Please process a form first.")
     
-    # Tab 3: Manual Fields
+    # Tab 3: Verification & Review
     with tabs[2]:
+        st.markdown("### 🔍 Verification & Review")
+        
+        if st.session_state.pipeline_result:
+            # Get extraction result from pipeline
+            extraction_data = st.session_state.pipeline_result.get('extraction', {})
+            metadata = st.session_state.pipeline_result.get('_metadata', {})
+            
+            # Reconstruct FormExtractionResult from pipeline data
+            # This is a simplified reconstruction - in production, you'd store the full object
+            if 'form_extraction_result' not in st.session_state:
+                st.warning("Full extraction details not available. Please reprocess the form.")
+            else:
+                result = st.session_state.form_extraction_result
+                verifier = InteractiveVerificationAgent()
+                
+                # Display verification options
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.markdown(f"**Form:** {result.form_number} - {result.form_title}")
+                    st.markdown(f"**Total Fields:** {result.total_fields}")
+                
+                with col2:
+                    if st.button("💾 Save Modifications", type="primary"):
+                        # Gather all modifications
+                        modifications = {
+                            'field_values': st.session_state.get('field_corrections', {}),
+                            'field_types': {},
+                            'field_mappings': st.session_state.get('mapping_modifications', {}),
+                            'verified_fields': list(st.session_state.get('verified_fields', set()))
+                        }
+                        
+                        # Apply modifications
+                        updated_result = verifier.execute(result, modifications)
+                        st.session_state.form_extraction_result = updated_result
+                        st.success("✅ Modifications saved!")
+                        st.rerun()
+                
+                # Part-by-part display
+                st.markdown("### 📋 Part-by-Part Review")
+                
+                for part_num in sorted(result.parts.keys()):
+                    part = result.parts[part_num]
+                    
+                    with st.expander(f"**Part {part_num}: {part.part_title}**", expanded=True):
+                        st.markdown(f"*{len(part.get_all_fields_flat())} fields*")
+                        
+                        # Display fields in this part
+                        for idx, field in enumerate(part.get_all_fields_flat()):
+                            field_idx = f"{part_num}_{idx}"
+                            display_field_details(field, part_num, field_idx)
+                
+                # Verification Questionnaire
+                st.markdown("### ❓ Verification Questionnaire")
+                
+                questions = verifier.generate_verification_questions(result)
+                display_verification_questionnaire(questions)
+                
+                # Verification score
+                verification_score = verifier.calculate_verification_score(result)
+                st.markdown(f"### 📊 Verification Progress: {verification_score:.0%}")
+                st.progress(verification_score)
+        else:
+            st.info("No results to verify. Please process a form first.")
+    
+    # Tab 4: Manual Fields
+    with tabs[3]:
         st.markdown("### ✏️ Add Manual Fields")
         
         with st.form("manual_field_form"):
@@ -2487,8 +2863,8 @@ def main():
                         st.session_state.manual_fields.pop(idx)
                         st.rerun()
     
-    # Tab 4: Export
-    with tabs[3]:
+    # Tab 5: Export
+    with tabs[4]:
         st.markdown("### 💾 Export Results")
         
         if st.session_state.pipeline_result:
