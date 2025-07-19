@@ -10,6 +10,8 @@ import re
 import time
 import hashlib
 import traceback
+import io
+import csv
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set, Union
 from dataclasses import dataclass, field, asdict
@@ -223,6 +225,75 @@ class FormSchema:
             "parts": self.parts,
             "required_fields": self.required_fields
         }
+
+# Data Structure Classes
+@dataclass
+class PartStructure:
+    """Represents a part with hierarchical fields"""
+    part_number: int
+    part_name: str
+    part_title: str = ""
+    root_fields: List[FieldNode] = field(default_factory=list)
+    
+    def get_all_fields_flat(self) -> List[FieldNode]:
+        """Get all fields in flat list"""
+        fields = []
+        
+        def collect_fields(node: FieldNode):
+            fields.append(node)
+            for child in node.children:
+                collect_fields(child)
+        
+        for root in self.root_fields:
+            collect_fields(root)
+        
+        return fields
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            "part_number": self.part_number,
+            "part_name": self.part_name,
+            "part_title": self.part_title,
+            "fields": [field.to_dict() for field in self.root_fields]
+        }
+
+@dataclass
+class FormExtractionResult:
+    """Complete extraction result"""
+    form_number: str  # e.g., "I-539"
+    form_title: str
+    parts: Dict[int, PartStructure] = field(default_factory=dict)
+    
+    # Validation status
+    is_valid: bool = False
+    validation_errors: List[str] = field(default_factory=list)
+    validation_score: float = 0.0
+    
+    # Extraction metadata
+    extraction_iterations: int = 0
+    total_fields: int = 0
+    
+    def get_all_fields_with_keys(self) -> Dict[str, FieldNode]:
+        """Get all fields indexed by key"""
+        fields = {}
+        for part in self.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    fields[field.key] = field
+        return fields
+    
+    def to_output_format(self) -> Dict[str, Any]:
+        """Convert to expected output format"""
+        output = {}
+        for part in self.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    output[field.key] = field.value
+                    # Add title fields
+                    if field.label:
+                        output[f"{field.key}_title"] = field.label
+        return output
 
 # Pattern Library
 class PatternLibrary:
