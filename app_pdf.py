@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Complete Working USCIS Form Reader with All Agents Implemented
+Fixed: Stream handling and part extraction sequencing
 """
 
 import os
@@ -689,9 +690,23 @@ class AdaptivePatternExtractor(BaseAgent):
         self.start()
         
         try:
-            # Open PDF
-            pdf_bytes = pdf_file.read() if hasattr(pdf_file, 'read') else pdf_file
+            # Handle PDF file properly
+            if hasattr(pdf_file, 'read'):
+                # If it's a file-like object, read bytes
+                pdf_file.seek(0)  # Reset file pointer to beginning
+                pdf_bytes = pdf_file.read()
+            else:
+                # Assume it's already bytes
+                pdf_bytes = pdf_file
+            
+            # Open PDF from bytes
+            if not pdf_bytes:
+                raise ValueError("Empty PDF file provided")
+            
             self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            if self.doc.page_count == 0:
+                raise ValueError("PDF has no pages")
             
             # Identify form
             form_info = self._identify_form()
@@ -702,9 +717,14 @@ class AdaptivePatternExtractor(BaseAgent):
                 form_title=form_info['title']
             )
             
-            # Extract with adaptive patterns
+            # Process all pages sequentially
+            all_text_blocks = []
             for page_num in range(len(self.doc)):
-                self._extract_page_adaptive(page_num, result, schema)
+                page_blocks = self._extract_page_blocks(page_num)
+                all_text_blocks.extend(page_blocks)
+            
+            # Process blocks in order to maintain part sequencing
+            self._process_blocks_sequentially(all_text_blocks, result, schema)
             
             # Post-process extraction
             self._post_process_extraction(result, schema)
@@ -727,6 +747,9 @@ class AdaptivePatternExtractor(BaseAgent):
     
     def _identify_form(self) -> Dict:
         """Identify form type with confidence"""
+        if not self.doc or self.doc.page_count == 0:
+            return {"number": "Unknown", "title": "Unknown Form"}
+        
         first_page_text = self.doc[0].get_text()
         
         # Check against known forms
@@ -737,43 +760,106 @@ class AdaptivePatternExtractor(BaseAgent):
                     self.log(f"Identified form: {form_num} - {schema.form_title}", "success")
                     return {"number": form_num, "title": schema.form_title}
         
+        # Extended form detection
+        form_patterns = {
+            "I-129": "Petition for a Nonimmigrant Worker",
+            "I-90": "Application to Replace Permanent Resident Card",
+            "I-485": "Application to Register Permanent Residence",
+            "I-765": "Application for Employment Authorization",
+            "N-400": "Application for Naturalization"
+        }
+        
+        for form_num, form_title in form_patterns.items():
+            if form_num in first_page_text:
+                self.log(f"Identified form: {form_num} - {form_title}", "success")
+                return {"number": form_num, "title": form_title}
+        
         # Fallback
         self.log("Could not identify form type", "warning")
         return {"number": "Unknown", "title": "Unknown Form"}
     
-    def _extract_page_adaptive(self, page_num: int, result: FormExtractionResult, 
-                              schema: Optional[FormSchema]):
-        """Extract page using adaptive patterns"""
+    def _extract_page_blocks(self, page_num: int) -> List[Dict]:
+        """Extract all text blocks from a page with metadata"""
         page = self.doc[page_num]
-        
-        # Get text with layout preservation
         blocks = page.get_text("dict")
         
-        # Extract hierarchical structure
-        current_part = None
-        field_stack = []  # Stack for maintaining hierarchy
-        
+        page_blocks = []
         for block in blocks["blocks"]:
             if block["type"] == 0:  # Text block
                 for line in block["lines"]:
                     text = self._get_line_text(line)
-                    if not text.strip():
-                        continue
-                    
-                    # Try to match patterns
-                    matched_field = self._match_patterns(text, line, page_num)
-                    
-                    if matched_field:
-                        # Handle part headers
-                        if matched_field.label.lower().startswith("part"):
-                            current_part = self._handle_part_header(matched_field, result)
-                            field_stack = []
+                    if text.strip():
+                        page_blocks.append({
+                            'text': text,
+                            'line': line,
+                            'page': page_num,
+                            'bbox': line.get("bbox"),
+                            'spans': line.get("spans", [])
+                        })
+        
+        return page_blocks
+    
+    def _process_blocks_sequentially(self, blocks: List[Dict], result: FormExtractionResult, 
+                                   schema: Optional[FormSchema]):
+        """Process blocks sequentially to maintain part order"""
+        current_part = None
+        field_stack = []
+        seen_parts = set()
+        
+        for block in blocks:
+            text = block['text']
+            
+            # Try to match patterns
+            matched_field = self._match_patterns(text, block['line'], block['page'])
+            
+            if matched_field:
+                # Handle part headers
+                if self._is_part_header(matched_field):
+                    part_info = self._extract_part_info(matched_field)
+                    if part_info:
+                        part_num = part_info['number']
                         
-                        # Handle fields
-                        elif current_part:
-                            self._place_field_in_hierarchy(
-                                matched_field, current_part, field_stack, schema
+                        # Create part if not exists
+                        if part_num not in result.parts:
+                            result.parts[part_num] = PartStructure(
+                                part_number=part_num,
+                                part_name=f"Part {part_num}",
+                                part_title=part_info['title']
                             )
+                            self.log(f"Found Part {part_num}: {part_info['title']}")
+                        
+                        current_part = result.parts[part_num]
+                        seen_parts.add(part_num)
+                        field_stack = []
+                
+                # Handle fields
+                elif current_part:
+                    self._place_field_in_hierarchy(
+                        matched_field, current_part, field_stack, schema
+                    )
+        
+        # Ensure we have at least Part 1 if no parts were found
+        if not result.parts:
+            result.parts[1] = PartStructure(
+                part_number=1,
+                part_name="Part 1",
+                part_title="Form Fields"
+            )
+            self.log("No parts found, creating default Part 1", "warning")
+    
+    def _is_part_header(self, field: FieldNode) -> bool:
+        """Check if field is a part header"""
+        return bool(re.match(r'^Part\s*\d+', field.label, re.IGNORECASE))
+    
+    def _extract_part_info(self, field: FieldNode) -> Optional[Dict]:
+        """Extract part information from field"""
+        match = re.match(r'^Part\s*(\d+)\.?\s*(.*)$', field.label, re.IGNORECASE)
+        if match:
+            return {
+                'number': int(match.group(1)),
+                'title': match.group(2).strip() if match.group(2) else ""
+            }
+        return None
     
     def _match_patterns(self, text: str, line_data: Dict, page_num: int) -> Optional[FieldNode]:
         """Match text against patterns"""
@@ -879,6 +965,22 @@ class AdaptivePatternExtractor(BaseAgent):
                 bbox=self._get_bbox(line_data)
             )
         
+        elif pattern.description == "Letter-only sub-item":
+            letter = match.group(1)
+            label = match.group(2) if match.lastindex > 1 else text
+            
+            return FieldNode(
+                item_number=letter,
+                label=label.strip(),
+                field_type=self._determine_field_type_smart(label),
+                page=page_num + 1,
+                confidence=ExtractionConfidence.MEDIUM,
+                extraction_method="pattern",
+                raw_text=text,
+                patterns_matched=[pattern.description],
+                bbox=self._get_bbox(line_data)
+            )
+        
         # Default field
         return FieldNode(
             item_number="",
@@ -922,25 +1024,6 @@ class AdaptivePatternExtractor(BaseAgent):
         
         return FieldType.TEXT
     
-    def _handle_part_header(self, field: FieldNode, result: FormExtractionResult) -> PartStructure:
-        """Handle part header"""
-        # Extract part number
-        match = re.search(r'Part\s*(\d+)', field.label, re.IGNORECASE)
-        if match:
-            part_num = int(match.group(1))
-            
-            if part_num not in result.parts:
-                result.parts[part_num] = PartStructure(
-                    part_number=part_num,
-                    part_name=f"Part {part_num}",
-                    part_title=field.label
-                )
-            
-            self.log(f"Processing {field.label}")
-            return result.parts[part_num]
-        
-        return None
-    
     def _place_field_in_hierarchy(self, field: FieldNode, part: PartStructure,
                                 field_stack: List[FieldNode], schema: Optional[FormSchema]):
         """Place field in correct position in hierarchy"""
@@ -952,10 +1035,11 @@ class AdaptivePatternExtractor(BaseAgent):
             field_stack.pop()
         
         # Find parent
-        if field_stack:
+        if field_stack and field_level > 0:
             parent = field_stack[-1]
             parent.add_child(field)
         else:
+            # Add to root if no parent or main level
             part.root_fields.append(field)
         
         # Update field metadata
@@ -1010,6 +1094,9 @@ class AdaptivePatternExtractor(BaseAgent):
         
         # Validate field relationships
         self._validate_relationships(result)
+        
+        # Ensure parts are properly numbered
+        self._ensure_part_continuity(result)
     
     def _fill_missing_items(self, part: PartStructure, part_schema: Dict):
         """Fill in missing items based on schema"""
@@ -1075,24 +1162,41 @@ class AdaptivePatternExtractor(BaseAgent):
                 if field.children:
                     field.children.sort(key=lambda f: f.item_number)
     
+    def _ensure_part_continuity(self, result: FormExtractionResult):
+        """Ensure parts are properly numbered and continuous"""
+        if not result.parts:
+            return
+        
+        # Get sorted part numbers
+        part_numbers = sorted(result.parts.keys())
+        
+        # Check for gaps
+        expected = 1
+        for part_num in part_numbers:
+            if part_num != expected:
+                self.log(f"Part numbering gap: expected Part {expected}, found Part {part_num}", "warning")
+            expected = part_num + 1
+    
     # Helper methods
     def _get_line_text(self, line: Dict) -> str:
         """Extract text from line"""
         text_parts = []
-        for span in line["spans"]:
-            text_parts.append(span["text"])
+        for span in line.get("spans", []):
+            text_parts.append(span.get("text", ""))
         return " ".join(text_parts)
     
     def _get_font_size(self, line: Dict) -> float:
         """Get average font size"""
-        if line["spans"]:
-            return line["spans"][0].get("size", 10)
+        spans = line.get("spans", [])
+        if spans and len(spans) > 0:
+            return spans[0].get("size", 10)
         return 10
     
     def _is_bold(self, line: Dict) -> bool:
         """Check if text is bold"""
-        if line["spans"]:
-            flags = line["spans"][0].get("flags", 0)
+        spans = line.get("spans", [])
+        if spans and len(spans) > 0:
+            flags = spans[0].get("flags", 0)
             return bool(flags & 2**4)  # Bold flag
         return False
     
@@ -1103,6 +1207,7 @@ class AdaptivePatternExtractor(BaseAgent):
             return (bbox[0], bbox[1], bbox[2], bbox[3])
         return None
 
+# Continue with the rest of the agents...
 # Smart Key Assignment Agent
 class SmartKeyAssignment(BaseAgent):
     """Assigns keys using smart logic"""
@@ -1880,6 +1985,10 @@ class MasterCoordinator(BaseAgent):
         self.start()
         
         try:
+            # Store original file position
+            if hasattr(pdf_file, 'seek'):
+                original_position = pdf_file.tell()
+            
             result = None
             best_result = None
             best_score = 0.0
@@ -1887,6 +1996,10 @@ class MasterCoordinator(BaseAgent):
             for iteration in range(self.max_iterations):
                 self.log(f"\n{'='*50}")
                 self.log(f"Starting iteration {iteration + 1}/{self.max_iterations}")
+                
+                # Reset file position if needed
+                if hasattr(pdf_file, 'seek'):
+                    pdf_file.seek(0)
                 
                 # Step 1: Extract
                 if iteration == 0:
@@ -1949,6 +2062,10 @@ class MasterCoordinator(BaseAgent):
             self.log(f"Coordination failed: {str(e)}", "error", traceback.format_exc())
             self.complete(False)
             return None
+        finally:
+            # Reset file position
+            if hasattr(pdf_file, 'seek'):
+                pdf_file.seek(0)
     
     def _refine_extraction(self, pdf_file, previous_result: FormExtractionResult,
                          validation_results: List[Dict]) -> FormExtractionResult:
@@ -1960,6 +2077,10 @@ class MasterCoordinator(BaseAgent):
                 issues.append(result)
         
         self.log(f"Refining based on {len(issues)} validation issues")
+        
+        # Reset file position
+        if hasattr(pdf_file, 'seek'):
+            pdf_file.seek(0)
         
         # For now, just re-run extraction
         # In a production system, this would adjust patterns based on specific issues
@@ -2058,6 +2179,10 @@ class EnhancedMasterCoordinator(BaseAgent):
         for iteration in range(self.max_iterations):
             self.log(f"Extraction iteration {iteration + 1}/{self.max_iterations}")
             
+            # Reset file position
+            if hasattr(pdf_file, 'seek'):
+                pdf_file.seek(0)
+            
             # Extract
             if iteration == 0:
                 result = self.extraction_agents['extractor'].execute(pdf_file)
@@ -2125,6 +2250,10 @@ class EnhancedMasterCoordinator(BaseAgent):
         # Analyze issues and re-extract
         issues = [r for r in validation_results if not r["passed"]]
         self.log(f"Refining based on {len(issues)} validation issues")
+        
+        # Reset file position
+        if hasattr(pdf_file, 'seek'):
+            pdf_file.seek(0)
         
         return self.extraction_agents['extractor'].execute(pdf_file)
 
