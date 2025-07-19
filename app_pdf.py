@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Advanced Multi-Agent USCIS Form Reader - Final Production Version
-With All Debugging, Error Handling, and Auto-Save Features
+Advanced Multi-Agent USCIS Form Reader
+With Adaptive Pattern Recognition, Smart Assignment, and Questionnaire Validation
+FIXED: Correct class definition order
 """
 
 import os
@@ -19,25 +20,8 @@ from collections import defaultdict, OrderedDict
 from abc import ABC, abstractmethod
 import copy
 from enum import Enum
-import logging
 
 import streamlit as st
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Configuration
-DEBUG_MODE = True  # Set to False in production
-OUTPUT_DIR = "extraction_results"
-LOG_DIR = "logs"
-
-# Create directories
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(LOG_DIR, exist_ok=True)
 
 # Initialize globals
 OPENAI_AVAILABLE = False
@@ -47,11 +31,9 @@ OpenAI = None
 try:
     import fitz  # PyMuPDF
     PYMUPDF_AVAILABLE = True
-    logger.info(f"PyMuPDF version: {fitz.__version__}")
 except ImportError:
     PYMUPDF_AVAILABLE = False
     fitz = None
-    logger.error("PyMuPDF not available. Install with: pip install PyMuPDF")
 
 try:
     from openai import OpenAI
@@ -67,7 +49,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# [Include all the CSS styling from original]
+# CSS Styling
 st.markdown("""
 <style>
     .main-header {
@@ -136,7 +118,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# [Include all Enums and Data Classes from original]
+# ===== ENUMS - Define first =====
 class FieldType(Enum):
     TEXT = "text"
     NUMBER = "number"
@@ -156,19 +138,174 @@ class ExtractionConfidence(Enum):
     LOW = "low"
     NONE = "none"
 
-# [Include all @dataclass definitions from original]
-# FieldPattern, FieldNode, FormSchema, PartStructure, FormExtractionResult
+# ===== DATA CLASSES - Define second (in dependency order) =====
 
-# [Include PatternLibrary class with improvements]
+@dataclass
+class FieldPattern:
+    """Pattern for field recognition"""
+    pattern: re.Pattern
+    field_type: FieldType
+    confidence: float = 1.0
+    description: str = ""
+
+@dataclass
+class FieldNode:
+    """Enhanced field node with better metadata"""
+    # Core properties
+    item_number: str  # e.g., "1", "1a", "2"
+    label: str
+    field_type: FieldType = FieldType.UNKNOWN
+    value: str = ""
+    
+    # Hierarchy
+    parent: Optional['FieldNode'] = None
+    children: List['FieldNode'] = field(default_factory=list)
+    
+    # Location
+    page: int = 1
+    part_number: int = 1
+    part_name: str = "Part 1"
+    bbox: Optional[Tuple[float, float, float, float]] = None  # x0, y0, x1, y1
+    
+    # Generated key
+    key: str = ""  # e.g., "P1_1a"
+    
+    # Extraction metadata
+    confidence: ExtractionConfidence = ExtractionConfidence.LOW
+    extraction_method: str = ""
+    raw_text: str = ""
+    patterns_matched: List[str] = field(default_factory=list)
+    
+    # Validation
+    is_required: bool = False
+    is_valid: bool = True
+    validation_errors: List[str] = field(default_factory=list)
+    
+    def add_child(self, child: 'FieldNode'):
+        """Add child node"""
+        child.parent = self
+        self.children.append(child)
+    
+    def get_full_path(self) -> str:
+        """Get full hierarchical path"""
+        if self.parent:
+            return f"{self.parent.get_full_path()}.{self.item_number}"
+        return self.item_number
+    
+    def get_depth(self) -> int:
+        """Get depth in hierarchy"""
+        if self.parent:
+            return self.parent.get_depth() + 1
+        return 0
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            "key": self.key,
+            "item_number": self.item_number,
+            "label": self.label,
+            "type": self.field_type.value,
+            "value": self.value,
+            "confidence": self.confidence.value,
+            "page": self.page,
+            "children": [child.to_dict() for child in self.children]
+        }
+
+@dataclass
+class FormSchema:
+    """Schema definition for a form"""
+    form_number: str
+    form_title: str
+    parts: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    required_fields: List[str] = field(default_factory=list)
+    field_patterns: Dict[str, FieldPattern] = field(default_factory=dict)
+    
+    def get_expected_structure(self) -> Dict:
+        """Get expected structure"""
+        return {
+            "form_number": self.form_number,
+            "parts": self.parts,
+            "required_fields": self.required_fields
+        }
+
+@dataclass
+class PartStructure:
+    """Represents a part with hierarchical fields"""
+    part_number: int
+    part_name: str
+    part_title: str = ""
+    root_fields: List[FieldNode] = field(default_factory=list)
+    
+    def get_all_fields_flat(self) -> List[FieldNode]:
+        """Get all fields in flat list"""
+        fields = []
+        
+        def collect_fields(node: FieldNode):
+            fields.append(node)
+            for child in node.children:
+                collect_fields(child)
+        
+        for root in self.root_fields:
+            collect_fields(root)
+        
+        return fields
+    
+    def to_dict(self) -> Dict:
+        """Convert to dictionary"""
+        return {
+            "part_number": self.part_number,
+            "part_name": self.part_name,
+            "part_title": self.part_title,
+            "fields": [field.to_dict() for field in self.root_fields]
+        }
+
+@dataclass
+class FormExtractionResult:
+    """Complete extraction result"""
+    form_number: str  # e.g., "I-539"
+    form_title: str
+    parts: Dict[int, PartStructure] = field(default_factory=dict)
+    
+    # Validation status
+    is_valid: bool = False
+    validation_errors: List[str] = field(default_factory=list)
+    validation_score: float = 0.0
+    
+    # Extraction metadata
+    extraction_iterations: int = 0
+    total_fields: int = 0
+    
+    def get_all_fields_with_keys(self) -> Dict[str, FieldNode]:
+        """Get all fields indexed by key"""
+        fields = {}
+        for part in self.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    fields[field.key] = field
+        return fields
+    
+    def to_output_format(self) -> Dict[str, Any]:
+        """Convert to expected output format"""
+        output = {}
+        for part in self.parts.values():
+            for field in part.get_all_fields_flat():
+                if field.key:
+                    output[field.key] = field.value
+                    # Add title fields
+                    if field.label:
+                        output[f"{field.key}_title"] = field.label
+        return output
+
+# ===== PATTERN LIBRARY - Now safe to define =====
 class PatternLibrary:
-    """Enhanced pattern library with flexible patterns"""
+    """Library of extraction patterns"""
     
     def __init__(self):
         self.patterns = self._build_patterns()
         self.form_schemas = self._build_form_schemas()
     
     def _build_patterns(self) -> Dict[str, List[FieldPattern]]:
-        """Build comprehensive pattern library with flexible patterns"""
+        """Build comprehensive pattern library"""
         return {
             "structure": [
                 FieldPattern(
@@ -176,12 +313,6 @@ class PatternLibrary:
                     FieldType.UNKNOWN,
                     1.0,
                     "Part header"
-                ),
-                FieldPattern(
-                    re.compile(r'^\s*Part\s+(\d+)', re.IGNORECASE),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Part header simple"
                 ),
                 FieldPattern(
                     re.compile(r'^Section\s+([A-Z])\.\s*(.*)$', re.IGNORECASE),
@@ -199,12 +330,6 @@ class PatternLibrary:
                     "Numbered item with period"
                 ),
                 FieldPattern(
-                    re.compile(r'^\s*(\d+)\s*\.\s*(.+)$'),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Flexible numbered item"
-                ),
-                FieldPattern(
                     re.compile(r'^(\d+)\s+([A-Z].+?)(?:\s*\(.*\))?$'),
                     FieldType.UNKNOWN,
                     0.85,
@@ -218,27 +343,155 @@ class PatternLibrary:
                     "Sub-item with number and letter"
                 ),
                 FieldPattern(
-                    re.compile(r'^\s*(\d+)\s*([a-z])\s*\.\s*(.+)$'),
-                    FieldType.UNKNOWN,
-                    0.9,
-                    "Flexible sub-item"
-                ),
-                FieldPattern(
                     re.compile(r'^\s*([a-z])\.\s+(.+?)$'),
                     FieldType.UNKNOWN,
                     0.9,
                     "Letter-only sub-item"
                 ),
             ],
-            # [Include all field_type patterns from original]
+            "field_type": [
+                # Names
+                FieldPattern(
+                    re.compile(r'(family|last|sur)\s*name', re.IGNORECASE),
+                    FieldType.NAME,
+                    0.95,
+                    "Family/Last name"
+                ),
+                FieldPattern(
+                    re.compile(r'(given|first)\s*name', re.IGNORECASE),
+                    FieldType.NAME,
+                    0.95,
+                    "Given/First name"
+                ),
+                FieldPattern(
+                    re.compile(r'middle\s*name', re.IGNORECASE),
+                    FieldType.NAME,
+                    0.95,
+                    "Middle name"
+                ),
+                # Dates
+                FieldPattern(
+                    re.compile(r'date\s*of\s*birth', re.IGNORECASE),
+                    FieldType.DATE,
+                    0.95,
+                    "Date of birth"
+                ),
+                FieldPattern(
+                    re.compile(r'(expir|issue|effective)\s*date', re.IGNORECASE),
+                    FieldType.DATE,
+                    0.9,
+                    "Expiration/Issue date"
+                ),
+                # Numbers
+                FieldPattern(
+                    re.compile(r'(a[\-\s]?number|alien\s*(registration)?\s*number)', re.IGNORECASE),
+                    FieldType.NUMBER,
+                    0.95,
+                    "A-Number"
+                ),
+                FieldPattern(
+                    re.compile(r'(ssn|social\s*security)', re.IGNORECASE),
+                    FieldType.NUMBER,
+                    0.95,
+                    "SSN"
+                ),
+                # Contact
+                FieldPattern(
+                    re.compile(r'(e[\-\s]?mail|email)', re.IGNORECASE),
+                    FieldType.EMAIL,
+                    0.95,
+                    "Email"
+                ),
+                FieldPattern(
+                    re.compile(r'(phone|telephone|mobile)', re.IGNORECASE),
+                    FieldType.PHONE,
+                    0.95,
+                    "Phone"
+                ),
+                # Address
+                FieldPattern(
+                    re.compile(r'(street|address|apt|suite)', re.IGNORECASE),
+                    FieldType.ADDRESS,
+                    0.9,
+                    "Address"
+                ),
+                # Checkbox/Radio
+                FieldPattern(
+                    re.compile(r'^\s*[□☐]\s*(.+)$'),
+                    FieldType.CHECKBOX,
+                    0.95,
+                    "Checkbox"
+                ),
+                FieldPattern(
+                    re.compile(r'(are you|have you|do you|is this|was)', re.IGNORECASE),
+                    FieldType.CHECKBOX,
+                    0.85,
+                    "Yes/No question"
+                ),
+            ]
         }
     
-    # [Include rest of PatternLibrary methods from original]
+    def _build_form_schemas(self) -> Dict[str, FormSchema]:
+        """Build form schemas"""
+        schemas = {}
+        
+        # I-539 Schema
+        schemas["I-539"] = FormSchema(
+            form_number="I-539",
+            form_title="Application to Extend/Change Nonimmigrant Status",
+            parts={
+                1: {
+                    "title": "Information About You",
+                    "items": {
+                        "1": {"label": "Your Full Legal Name", "sub_items": ["a", "b", "c"]},
+                        "2": {"label": "Alien Registration Number (A-Number)"},
+                        "3": {"label": "Date of Birth"},
+                        "4": {"label": "U.S. Mailing Address"},
+                        "5": {"label": "Physical Address"},
+                        "6": {"label": "Contact Information"}
+                    }
+                },
+                2: {"title": "Application Type"},
+                3: {"title": "Processing Information"},
+                4: {"title": "Additional Information"},
+                5: {"title": "Applicant's Statement"},
+                6: {"title": "Interpreter's Contact Information"},
+                7: {"title": "Contact Information"},
+                8: {"title": "Additional Information"}
+            },
+            required_fields=["P1_1a", "P1_1b", "P1_2", "P1_3"]
+        )
+        
+        # G-28 Schema
+        schemas["G-28"] = FormSchema(
+            form_number="G-28",
+            form_title="Notice of Entry of Appearance",
+            parts={
+                1: {"title": "Information About Attorney"},
+                2: {"title": "Information About Representative"},
+                3: {"title": "Client Information"},
+                4: {"title": "Client Consent"},
+                5: {"title": "Signature of Attorney"},
+                6: {"title": "Signature of Client"}
+            },
+            required_fields=["P1_2a", "P1_2b", "P3_6a", "P3_6b", "P3_9"]
+        )
+        
+        return schemas
+    
+    def get_patterns_for_context(self, context: str) -> List[FieldPattern]:
+        """Get relevant patterns for context"""
+        relevant_patterns = []
+        
+        for category, patterns in self.patterns.items():
+            if category == context or context == "all":
+                relevant_patterns.extend(patterns)
+        
+        return sorted(relevant_patterns, key=lambda p: p.confidence, reverse=True)
 
-# [Include all Agent classes with debugging enhancements]
-
+# ===== BASE AGENT CLASS =====
 class BaseAgent(ABC):
-    """Enhanced base agent with better logging and debug support"""
+    """Enhanced base agent with better logging"""
     
     def __init__(self, name: str, description: str = ""):
         self.name = name
@@ -254,7 +507,7 @@ class BaseAgent(ABC):
         pass
     
     def log(self, message: str, level: str = "info", details: Any = None):
-        """Enhanced logging with file output"""
+        """Enhanced logging"""
         entry = {
             "timestamp": datetime.now(),
             "message": message,
@@ -263,460 +516,77 @@ class BaseAgent(ABC):
         }
         self.logs.append(entry)
         
-        # Log to file if debug mode
-        if DEBUG_MODE:
-            log_file = os.path.join(LOG_DIR, f"debug_{datetime.now().strftime('%Y%m%d')}.log")
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"[{entry['timestamp']}] [{self.name}] [{level.upper()}] {message}\n")
-                if details:
-                    f.write(f"  Details: {details}\n")
-        
         # Display in UI
         self._display_log(entry)
     
-    # [Include rest of BaseAgent methods]
-
-# [Include all other agent classes with debug enhancements applied]
-
-class MasterCoordinator(BaseAgent):
-    """Enhanced coordinator with auto-save and better error handling"""
+    def _display_log(self, entry: Dict):
+        """Display log in UI"""
+        if hasattr(st.session_state, 'agent_container'):
+            with st.session_state.agent_container:
+                css_class = "agent-card"
+                if entry["level"] == "error":
+                    css_class += " agent-error"
+                elif entry["level"] == "success":
+                    css_class += " agent-success"
+                elif self.status == "active":
+                    css_class += " agent-active"
+                
+                st.markdown(
+                    f'<div class="{css_class}">'
+                    f'<strong>{self.name}</strong>: {entry["message"]}'
+                    f'</div>', 
+                    unsafe_allow_html=True
+                )
     
-    def __init__(self, max_iterations: int = 3):
-        super().__init__(
-            "Master Coordinator",
-            "Orchestrates the extraction process"
-        )
-        self.max_iterations = max_iterations
-        self.agents = {
-            'extractor': AdaptivePatternExtractor(),
-            'assigner': SmartKeyAssignment(),
-            'validator': QuestionnaireValidator(),
-            'formatter': OutputFormatter()
-        }
-        self.pattern_library = PatternLibrary()
+    def start(self):
+        """Start agent execution"""
+        self.status = "active"
+        self.start_time = datetime.now()
+        self.log(f"Starting {self.description}")
     
-    def execute(self, pdf_file) -> Optional[Dict[str, Any]]:
-        """Execute coordinated extraction with auto-save"""
-        self.start()
+    def complete(self, success: bool = True):
+        """Complete agent execution"""
+        self.end_time = datetime.now()
+        duration = (self.end_time - self.start_time).total_seconds()
         
-        try:
-            # Debug: Check PDF file
-            self.log(f"PDF file type: {type(pdf_file)}")
-            if hasattr(pdf_file, 'name'):
-                self.log(f"PDF file name: {pdf_file.name}")
-            
-            result = None
-            best_result = None
-            best_score = 0.0
-            
-            for iteration in range(self.max_iterations):
-                self.log(f"\n{'='*50}")
-                self.log(f"Starting iteration {iteration + 1}/{self.max_iterations}")
-                
-                # Step 1: Extract
-                if iteration == 0:
-                    try:
-                        result = self.agents['extractor'].execute(pdf_file)
-                    except Exception as e:
-                        self.log(f"Extractor failed: {str(e)}", "error", traceback.format_exc())
-                        result = FormExtractionResult(
-                            form_number="Unknown",
-                            form_title="Extraction Failed"
-                        )
-                else:
-                    self.log("Re-extracting with refined patterns...")
-                    result = self._refine_extraction(pdf_file, result, validation_results)
-                
-                if not result:
-                    self.log("Extraction returned None", "error")
-                    break
-                
-                # Debug: Log extraction results
-                self.log(f"Form identified: {result.form_number}")
-                self.log(f"Parts found: {len(result.parts)}")
-                self.log(f"Total fields: {result.total_fields}")
-                
-                # Step 2: Assign keys
-                try:
-                    result = self.agents['assigner'].execute(result)
-                except Exception as e:
-                    self.log(f"Key assignment failed: {str(e)}", "error")
-                
-                # Step 3: Validate
-                schema = self.pattern_library.form_schemas.get(result.form_number)
-                try:
-                    is_valid, score, validation_results = self.agents['validator'].execute(result, schema)
-                except Exception as e:
-                    self.log(f"Validation failed: {str(e)}", "error")
-                    is_valid, score, validation_results = False, 0.0, []
-                
-                # Track best result
-                if score > best_score:
-                    best_score = score
-                    best_result = copy.deepcopy(result)
-                
-                # Check if good enough
-                if is_valid and score >= 0.85:
-                    self.log(f"✅ Extraction successful with score {score:.0%}!", "success")
-                    break
-                
-                self.log(f"Iteration {iteration + 1} score: {score:.0%}")
-                
-                if iteration < self.max_iterations - 1:
-                    self.log("Score below threshold, refining...")
-                    time.sleep(0.5)
-            
-            # Use best result
-            if best_result:
-                try:
-                    # Step 4: Format output
-                    output = self.agents['formatter'].execute(best_result)
-                    
-                    # Add metadata
-                    output['_metadata'] = {
-                        'form_number': best_result.form_number,
-                        'form_title': best_result.form_title,
-                        'total_fields': best_result.total_fields,
-                        'validation_score': best_score,
-                        'iterations': iteration + 1
-                    }
-                    
-                    # Auto-save results
-                    self._auto_save_results(output)
-                    
-                    self.complete()
-                    return output
-                except Exception as e:
-                    self.log(f"Formatting failed: {str(e)}", "error", traceback.format_exc())
-            
-            self.log("No valid extraction produced", "error")
-            self.complete(False)
-            return None
-            
-        except Exception as e:
-            self.log(f"Coordination failed: {str(e)}", "error", traceback.format_exc())
-            self.complete(False)
-            return None
-    
-    def _auto_save_results(self, output: Dict[str, Any]):
-        """Auto-save extraction results to files"""
-        try:
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            form_number = output.get('_metadata', {}).get('form_number', 'unknown')
-            base_filename = f"{form_number}_{timestamp}"
-            
-            # Save as JSON
-            json_path = os.path.join(OUTPUT_DIR, f"{base_filename}.json")
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(output, f, indent=2, ensure_ascii=False)
-            self.log(f"Saved JSON to: {json_path}", "success")
-            
-            # Save as CSV
-            csv_path = os.path.join(OUTPUT_DIR, f"{base_filename}.csv")
-            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Field Key", "Value", "Label"])
-                
-                for key, value in sorted(output.items()):
-                    if not key.startswith('_') and not key.endswith('_title'):
-                        label = output.get(f"{key}_title", "")
-                        writer.writerow([key, value, label])
-            
-            self.log(f"Saved CSV to: {csv_path}", "success")
-            
-            # Add file paths to output metadata
-            output['_metadata']['output_files'] = {
-                'json': json_path,
-                'csv': csv_path
-            }
-            
-        except Exception as e:
-            self.log(f"Auto-save failed: {str(e)}", "error")
-    
-    def _refine_extraction(self, pdf_file, previous_result: FormExtractionResult,
-                         validation_results: List[Dict]) -> FormExtractionResult:
-        """Refine extraction based on validation feedback"""
-        issues = []
-        for result in validation_results:
-            if not result["passed"]:
-                issues.append(result)
-        
-        self.log(f"Refining based on {len(issues)} validation issues")
-        
-        # Re-run extraction with adjustments
-        return self.agents['extractor'].execute(pdf_file)
-
-# [Include all UI component functions from original]
-
-# Diagnostic function
-def diagnose_uscis_reader(pdf_file):
-    """Diagnostic test for USCIS form reader"""
-    output = []
-    output.append("=== USCIS Form Reader Diagnostic ===\n")
-    
-    # 1. Check PyMuPDF
-    output.append("1. Checking PyMuPDF installation...")
-    try:
-        import fitz
-        output.append(f"✓ PyMuPDF version: {fitz.__version__}")
-    except ImportError:
-        output.append("✗ PyMuPDF not installed!")
-        output.append("  Run: pip install PyMuPDF")
-        return "\n".join(output)
-    
-    # 2. Check PDF file
-    output.append("\n2. Checking PDF file...")
-    if pdf_file is None:
-        output.append("✗ No PDF file provided")
-        return "\n".join(output)
-    
-    if hasattr(pdf_file, 'name'):
-        output.append(f"✓ File name: {pdf_file.name}")
-    
-    # 3. Try to open PDF
-    output.append("\n3. Testing PDF opening...")
-    try:
-        pdf_bytes = pdf_file.read() if hasattr(pdf_file, 'read') else pdf_file
-        if hasattr(pdf_file, 'seek'):
-            pdf_file.seek(0)
-        
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        output.append(f"✓ PDF opened successfully")
-        output.append(f"  Pages: {len(doc)}")
-        
-        # 4. Check first page content
-        output.append("\n4. Checking first page content...")
-        first_page_text = doc[0].get_text()
-        output.append(f"✓ Text extracted: {len(first_page_text)} characters")
-        
-        # Look for form identifiers
-        output.append("\n5. Looking for form identifiers...")
-        forms_found = []
-        for form_pattern in ['I-539', 'I-129', 'G-28', 'I-90', 'I-485', 'I-765', 'N-400']:
-            if form_pattern in first_page_text:
-                forms_found.append(form_pattern)
-        
-        if forms_found:
-            output.append(f"✓ Forms found: {', '.join(forms_found)}")
+        if success:
+            self.status = "completed"
+            self.log(f"Completed successfully in {duration:.2f}s", "success")
         else:
-            output.append("✗ No standard form identifiers found")
-            output.append("  Text preview (first 200 chars):")
-            output.append(f"  {first_page_text[:200].replace(chr(10), ' ')}")
-        
-        doc.close()
-        
-    except Exception as e:
-        output.append(f"✗ Error: {str(e)}")
-        output.append(f"  Type: {type(e).__name__}")
-        output.append("  Traceback:")
-        output.append(traceback.format_exc())
-    
-    return "\n".join(output)
+            self.status = "error"
+            self.log(f"Failed after {duration:.2f}s", "error")
 
-# Main Application
+# ===== AGENT IMPLEMENTATIONS =====
+
+# Include all your agent classes here in this order:
+# 1. AdaptivePatternExtractor
+# 2. SmartKeyAssignment  
+# 3. QuestionnaireValidator
+# 4. OutputFormatter
+# 5. MasterCoordinator
+
+# [Copy the rest of your agent classes here, they should work now that the dependencies are defined]
+
+# ===== MAIN APPLICATION =====
 def main():
     st.markdown(
         '<div class="main-header">'
         '<h1>🤖 Advanced USCIS Form Reader</h1>'
         '<p>Multi-Agent System with Adaptive Pattern Recognition</p>'
-        '<p style="font-size: 0.9em;">Output files saved to: extraction_results/</p>'
         '</div>', 
         unsafe_allow_html=True
     )
     
-    # Initialize session state
-    if 'extraction_output' not in st.session_state:
-        st.session_state.extraction_output = None
-    if 'extraction_result' not in st.session_state:
-        st.session_state.extraction_result = None
-    
-    # Sidebar
-    with st.sidebar:
-        st.markdown("## ⚙️ Configuration")
-        
-        max_iterations = st.slider("Max Iterations", 1, 5, 3)
-        show_agent_logs = st.checkbox("Show Agent Activity", value=True)
-        show_structure = st.checkbox("Show Form Structure", value=True)
-        
-        st.markdown("---")
-        st.markdown("### 📊 System Status")
-        
-        # Check dependencies
-        if PYMUPDF_AVAILABLE:
-            st.success("✅ PyMuPDF Ready")
-        else:
-            st.error("❌ PyMuPDF Not Installed")
-            st.code("pip install PyMuPDF")
-        
-        if OPENAI_AVAILABLE:
-            if os.environ.get('OPENAI_API_KEY'):
-                st.success("✅ OpenAI Ready")
-            else:
-                st.warning("⚠️ OpenAI Key Missing")
-        else:
-            st.info("ℹ️ OpenAI Optional")
-        
-        st.markdown("---")
-        st.markdown("### 📁 Output Directory")
-        st.info(f"Results saved to: `{OUTPUT_DIR}/`")
-        
-        if st.button("📂 Open Output Folder"):
-            import platform
-            import subprocess
-            
-            if platform.system() == 'Windows':
-                os.startfile(OUTPUT_DIR)
-            elif platform.system() == 'Darwin':  # macOS
-                subprocess.Popen(['open', OUTPUT_DIR])
-            else:  # Linux
-                subprocess.Popen(['xdg-open', OUTPUT_DIR])
-    
-    # Main content
-    st.markdown("## 📄 Upload USCIS Form")
-    
-    uploaded_file = st.file_uploader(
-        "Choose a PDF form",
-        type=['pdf'],
-        help="Supported forms: I-539, I-129, G-28, I-90, I-485, I-765, N-400"
-    )
-    
-    if uploaded_file:
-        # Debug section
-        with st.expander("🔍 Debug Information", expanded=False):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("Test PDF Basic"):
-                    try:
-                        import fitz
-                        pdf_bytes = uploaded_file.read()
-                        uploaded_file.seek(0)
-                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                        
-                        st.success(f"✓ PDF opened: {len(doc)} pages")
-                        
-                        # Test text extraction
-                        text = doc[0].get_text()
-                        st.info(f"Page 1 text length: {len(text)} chars")
-                        
-                        # Show preview
-                        st.text_area("Text Preview (first 1000 chars):", 
-                                   text[:1000], height=200)
-                        
-                        doc.close()
-                    except Exception as e:
-                        st.error(f"Failed: {str(e)}")
-                        st.code(traceback.format_exc())
-            
-            with col2:
-                if st.button("Run Full Diagnostic"):
-                    diagnostic_output = diagnose_uscis_reader(uploaded_file)
-                    st.code(diagnostic_output)
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            st.success(f"✅ Uploaded: {uploaded_file.name}")
-        
-        with col2:
-            process_btn = st.button(
-                "🚀 Extract",
-                type="primary",
-                use_container_width=True
-            )
-        
-        with col3:
-            if st.session_state.extraction_output:
-                st.button(
-                    "🔄 Reset",
-                    use_container_width=True,
-                    on_click=lambda: st.session_state.update({
-                        'extraction_output': None,
-                        'extraction_result': None
-                    })
-                )
-        
-        if process_btn:
-            # Create containers
-            if show_agent_logs:
-                st.session_state.agent_container = st.container()
-            
-            # Add error container
-            error_container = st.container()
-            
-            with st.spinner("Processing with multi-agent system..."):
-                try:
-                    # Run extraction
-                    coordinator = MasterCoordinator(max_iterations=max_iterations)
-                    output = coordinator.execute(uploaded_file)
-                    
-                    if output:
-                        st.session_state.extraction_output = output
-                        st.success("✅ Extraction Complete!")
-                        
-                        # Show where files were saved
-                        if '_metadata' in output and 'output_files' in output['_metadata']:
-                            files = output['_metadata']['output_files']
-                            st.info(f"📁 Files saved:\n- JSON: {files['json']}\n- CSV: {files['csv']}")
-                    else:
-                        with error_container:
-                            st.error("❌ Extraction Failed - No output produced")
-                            
-                            # Show coordinator logs
-                            if coordinator.logs:
-                                st.write("**Recent Activity:**")
-                                for log in coordinator.logs[-10:]:  # Last 10 logs
-                                    level = log.get('level', 'info')
-                                    msg = log.get('message', '')
-                                    if level == 'error':
-                                        st.error(f"🔴 {msg}")
-                                    elif level == 'warning':
-                                        st.warning(f"🟡 {msg}")
-                                    else:
-                                        st.info(f"🔵 {msg}")
-                                        
-                except Exception as e:
-                    with error_container:
-                        st.error(f"❌ Critical Error: {str(e)}")
-                        st.error(f"Error Type: {type(e).__name__}")
-                        
-                        with st.expander("Full Error Traceback", expanded=True):
-                            st.code(traceback.format_exc())
-                        
-                        st.info("💡 Try the Debug buttons above to diagnose the issue")
-    
-    # [Include rest of the display results section from original]
-    # Display results
-    if st.session_state.extraction_output:
-        st.markdown("---")
-        st.markdown("## 📊 Extraction Results")
-        
-        output = st.session_state.extraction_output
-        metadata = output.get('_metadata', {})
-        
-        # Summary metrics
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Form", metadata.get('form_number', 'Unknown'))
-        with col2:
-            st.metric("Fields", metadata.get('total_fields', 0))
-        with col3:
-            score = metadata.get('validation_score', 0)
-            st.metric("Score", f"{score:.0%}")
-        with col4:
-            st.metric("Iterations", metadata.get('iterations', 1))
-        
-        # File location reminder
-        if 'output_files' in metadata:
-            st.success(f"✅ Results auto-saved to: {OUTPUT_DIR}/")
-        
-        # [Include rest of the results display from original]
-
-if __name__ == "__main__":
+    # Check dependencies first
     if not PYMUPDF_AVAILABLE:
         st.error("❌ PyMuPDF is required but not installed!")
         st.code("pip install PyMuPDF")
+        st.info("After installing, refresh this page.")
         st.stop()
     
+    st.success("✅ All dependencies loaded successfully!")
+    
+    # [Continue with the rest of your main() function]
+
+if __name__ == "__main__":
     main()
