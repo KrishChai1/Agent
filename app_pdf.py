@@ -2522,7 +2522,7 @@ def display_verification_questionnaire(questions: List[Dict]):
             response = st.radio(
                 "Response",
                 ["Yes", "No", "Not Sure"],
-                key=f"q_{question['id']}",
+                key=f"q_{q_idx}_{question['id']}",
                 horizontal=True
             )
             st.session_state.questionnaire_responses[question['id']] = response
@@ -2533,13 +2533,13 @@ def display_verification_questionnaire(questions: List[Dict]):
                 st.text(f"Current value: {question.get('current_value', 'N/A')}")
                 verified = st.checkbox(
                     "Value is correct",
-                    key=f"q_verify_{question['field_key']}"
+                    key=f"q_verify_{q_idx}_{question.get('field_key', q_idx)}"
                 )
             with col2:
                 if not verified:
                     new_val = st.text_input(
                         "Correct value",
-                        key=f"q_correct_{question['field_key']}"
+                        key=f"q_correct_{q_idx}_{question.get('field_key', q_idx)}"
                     )
                     if new_val:
                         if 'field_corrections' not in st.session_state:
@@ -2549,7 +2549,7 @@ def display_verification_questionnaire(questions: List[Dict]):
         elif question['type'] == 'text':
             response = st.text_area(
                 "Your response",
-                key=f"q_{question['id']}",
+                key=f"q_{q_idx}_{question['id']}",
                 height=100
             )
             st.session_state.questionnaire_responses[question['id']] = response
