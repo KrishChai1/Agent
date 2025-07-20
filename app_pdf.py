@@ -244,9 +244,9 @@ class FieldNode:
         if not self.content_hash:
             content = f"{self.label}_{self.item_number}_{self.page}_{self.part_number}"
             self.content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
-        # Generate key
+        # Generate unique key including content hash to ensure uniqueness
         if not self.key:
-            self.key = f"P{self.part_number}_{self.item_number}"
+            self.key = f"P{self.part_number}_{self.item_number}_{self.content_hash}"
     
     def is_duplicate_of(self, other: 'FieldNode') -> bool:
         """Check if this is a duplicate of another field"""
@@ -274,6 +274,10 @@ class PartStructure:
     
     def add_field(self, field: FieldNode) -> bool:
         """Add field with duplicate check"""
+        # Generate unique key if not already set
+        if not field.key:
+            field.key = f"P{self.part_number}_{field.item_number}_{field.content_hash}"
+        
         if field.content_hash in self.field_hashes:
             return False  # Duplicate detected
         
@@ -1198,6 +1202,7 @@ class ImprovedMasterCoordinator(BaseAgent):
         )
         self.agents = {
             'extractor': ImprovedSmartExtractionAgent(),
+            'key_generator': SmartKeyGenerator(),
             'validator': ValidationAgent(),
             'mapper': DatabaseMappingAgent()
         }
@@ -1221,6 +1226,9 @@ class ImprovedMasterCoordinator(BaseAgent):
                 
                 if not result:
                     break
+                
+                # Generate unique keys
+                result = self.agents['key_generator'].execute(result)
                 
                 # Validate
                 is_valid, score, validation_results = self.agents['validator'].execute(result)
@@ -1385,12 +1393,15 @@ def display_form_parts(result: FormExtractionResult):
         )
         
         # Display root fields with hierarchy
-        for root_field in sorted(part.root_fields, key=lambda f: int(f.item_number) if f.item_number.isdigit() else 999):
-            display_field_hierarchical(root_field, level=0)
+        for i, root_field in enumerate(sorted(part.root_fields, key=lambda f: int(f.item_number) if f.item_number.isdigit() else 999)):
+            display_field_hierarchical(root_field, level=0, parent_path=f"part{part_num}_field{i}")
 
-def display_field_hierarchical(field: FieldNode, level: int = 0):
+def display_field_hierarchical(field: FieldNode, level: int = 0, parent_path: str = ""):
     """Display field with its hierarchy"""
     indent = "  " * level
+    
+    # Create unique path for this field instance
+    field_path = f"{parent_path}_{field.key}" if parent_path else field.key
     
     with st.container():
         cols = st.columns([4, 2, 2, 1])
@@ -1402,22 +1413,26 @@ def display_field_hierarchical(field: FieldNode, level: int = 0):
             # Show checkbox options if any
             if field.checkbox_options:
                 option_html = ""
-                for opt in field.checkbox_options:
+                for i, opt in enumerate(field.checkbox_options):
                     css_class = "checkbox-selected" if opt.is_selected else ""
                     option_html += f'<span class="checkbox-option {css_class}">{opt.text}</span>'
                 st.markdown(option_html, unsafe_allow_html=True)
         
         with cols[1]:
-            # Value input
-            value_key = f"value_{field.key}"
-            new_value = st.text_input(
-                "Value",
-                value=field.value,
-                key=value_key,
-                label_visibility="collapsed"
-            )
-            if new_value != field.value:
-                field.value = new_value
+            # Value input with unique key based on field path
+            value_key = f"value_{field_path}_{id(field)}"  # Added id(field) for absolute uniqueness
+            try:
+                new_value = st.text_input(
+                    "Value",
+                    value=field.value,
+                    key=value_key,
+                    label_visibility="collapsed"
+                )
+                if new_value != field.value:
+                    field.value = new_value
+            except Exception as e:
+                # Fallback if still duplicate
+                st.text(f"Value: {field.value}")
         
         with cols[2]:
             # Mapping status
@@ -1446,7 +1461,7 @@ def display_field_hierarchical(field: FieldNode, level: int = 0):
     
     # Display children
     for child in field.children:
-        display_field_hierarchical(child, level + 1)
+        display_field_hierarchical(child, level + 1, field_path)
 
 def display_questionnaire_mode():
     """Display questionnaire for manual entry"""
@@ -1612,7 +1627,7 @@ def main():
                         selected = st.selectbox(
                             "Map to:",
                             db_options,
-                            key=f"map_{field.key}"
+                            key=f"map_{field.key}_{id(field)}"  # Added id() for uniqueness
                         )
                         
                         if selected != "-- Select --":
