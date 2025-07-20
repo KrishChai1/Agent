@@ -47,7 +47,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Agentic USCIS Form Reader",
+    page_title="Agentic KRISH USCIS Form Reader",
     page_icon="🤖",
     layout="wide"
 )
