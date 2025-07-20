@@ -795,7 +795,7 @@ class ImprovedSmartExtractionAgent(BaseAgent):
                 
                 return field
         
-        return None
+                        return None
     
     def _extract_checkbox_options(self, blocks: List[Dict], start_idx: int) -> List[CheckboxOption]:
         """Extract checkbox options from subsequent blocks"""
@@ -843,6 +843,57 @@ class ImprovedSmartExtractionAgent(BaseAgent):
                     ))
         
         return options
+
+# ===== SMART KEY GENERATOR =====
+class SmartKeyGenerator(BaseAgent):
+    """Generates unique, meaningful keys"""
+    
+    def __init__(self):
+        super().__init__(
+            "Smart Key Generator",
+            "Creates unique, hierarchical keys"
+        )
+    
+    def execute(self, result: FormExtractionResult) -> FormExtractionResult:
+        """Generate smart keys"""
+        self.status = "active"
+        self.log("Generating unique keys...")
+        
+        try:
+            key_registry = set()
+            
+            for part_num, part in result.parts.items():
+                for field in part.get_all_fields_flat():
+                    # Generate base key
+                    base_key = f"P{part_num}_{field.item_number}"
+                    
+                    # Ensure uniqueness
+                    if base_key in key_registry:
+                        # Add content hash for uniqueness
+                        base_key = f"{base_key}_{field.content_hash}"
+                    
+                    # Still not unique? Add counter
+                    unique_key = self._ensure_unique_key(base_key, key_registry)
+                    field.key = unique_key
+                    key_registry.add(unique_key)
+            
+            self.log(f"Generated {len(key_registry)} unique keys", "success")
+            return result
+            
+        except Exception as e:
+            self.log(f"Key generation failed: {str(e)}", "error")
+            raise
+    
+    def _ensure_unique_key(self, base_key: str, registry: Set[str]) -> str:
+        """Ensure key is unique"""
+        if base_key not in registry:
+            return base_key
+        
+        counter = 1
+        while f"{base_key}_{counter}" in registry:
+            counter += 1
+        
+        return f"{base_key}_{counter}"
 
 # ===== VALIDATION AGENT =====
 class ValidationAgent(BaseAgent):
