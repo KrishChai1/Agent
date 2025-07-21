@@ -795,7 +795,7 @@ class ImprovedSmartExtractionAgent(BaseAgent):
                 
                 return field
         
-                        return None
+        return None
     
     def _extract_checkbox_options(self, blocks: List[Dict], start_idx: int) -> List[CheckboxOption]:
         """Extract checkbox options from subsequent blocks"""
