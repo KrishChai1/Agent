@@ -14,3 +14,6 @@ mammoth
 openai 
 python-dotenv
 plotly
+python-dotenv
+pypdf
+requests
