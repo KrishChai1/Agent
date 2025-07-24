@@ -821,7 +821,7 @@ def main():
         if st.session_state.resume_text and st.session_state.job_description:
             st.markdown("---")
             
-            if st.button("🚀 Start Resume Agent", type="primary", use_container_width=True):
+            if st.button("Start Resume Agent", type="primary", use_container_width=True):
                 st.session_state.current_agent_state = AgentState.ANALYZING
                 st.session_state.current_iteration = 0
                 st.session_state.resume_iterations = []
