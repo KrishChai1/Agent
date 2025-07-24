@@ -894,40 +894,40 @@ def main():
                                 st.error("Please provide a complete job description.")
                             else:
                                 try:
-                                # Reset state
-                                st.session_state.current_iteration = 0
-                                st.session_state.resume_iterations = []
-                                st.session_state.agent_feedback = {}
-                                
-                                # Initial analysis
-                                with st.spinner("Analyzing your resume against the job requirements..."):
-                                    quality_score, improvements, full_analysis = resume_agent.analyze_resume_quality(
-                                        st.session_state.resume_text,
-                                        st.session_state.job_description
-                                    )
-                                
-                                st.markdown(f"### Initial Analysis Complete")
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    st.metric("Initial Quality Score", f"{quality_score:.0%}")
-                                with col2:
-                                    st.metric("Target Score", f"{st.session_state.quality_threshold:.0%}")
-                                
-                                if quality_score >= st.session_state.quality_threshold:
-                                    st.success("Your resume already meets the quality threshold!")
-                                    st.session_state.tailored_resume = st.session_state.resume_text
-                                    st.session_state.final_resume = st.session_state.resume_text
-                                    st.session_state.analysis_complete = True
-                                    st.session_state.current_agent_state = AgentState.COMPLETE
-                                else:
-                                    # Store initial state
-                                    st.session_state['initial_analysis'] = {
-                                        'score': quality_score,
-                                        'improvements': improvements,
-                                        'analysis': full_analysis
-                                    }
-                                    st.session_state.current_agent_state = AgentState.AWAITING_FEEDBACK
-                                    st.rerun()
+                                    # Reset state
+                                    st.session_state.current_iteration = 0
+                                    st.session_state.resume_iterations = []
+                                    st.session_state.agent_feedback = {}
+                                    
+                                    # Initial analysis
+                                    with st.spinner("Analyzing your resume against the job requirements..."):
+                                        quality_score, improvements, full_analysis = resume_agent.analyze_resume_quality(
+                                            st.session_state.resume_text,
+                                            st.session_state.job_description
+                                        )
+                                    
+                                    st.markdown(f"### Initial Analysis Complete")
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.metric("Initial Quality Score", f"{quality_score:.0%}")
+                                    with col2:
+                                        st.metric("Target Score", f"{st.session_state.quality_threshold:.0%}")
+                                    
+                                    if quality_score >= st.session_state.quality_threshold:
+                                        st.success("Your resume already meets the quality threshold!")
+                                        st.session_state.tailored_resume = st.session_state.resume_text
+                                        st.session_state.final_resume = st.session_state.resume_text
+                                        st.session_state.analysis_complete = True
+                                        st.session_state.current_agent_state = AgentState.COMPLETE
+                                    else:
+                                        # Store initial state
+                                        st.session_state['initial_analysis'] = {
+                                            'score': quality_score,
+                                            'improvements': improvements,
+                                            'analysis': full_analysis
+                                        }
+                                        st.session_state.current_agent_state = AgentState.AWAITING_FEEDBACK
+                                        st.rerun()
                                     
                             except Exception as e:
                                 st.error(f"Error starting agent: {str(e)}")
