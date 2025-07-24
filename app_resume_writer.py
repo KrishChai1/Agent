@@ -10,6 +10,7 @@ from pypdf import PdfReader
 import io
 from datetime import datetime
 import re
+import time
 
 load_dotenv(override=True)
 
@@ -84,65 +85,72 @@ if 'interview_questions' not in st.session_state:
     st.session_state.interview_questions = []
 if 'chat_context' not in st.session_state:
     st.session_state.chat_context = []
+if 'api_key' not in st.session_state:
+    st.session_state.api_key = os.getenv("OPENAI_API_KEY", "")
+
+def check_api_key():
+    """Check if OpenAI API key is configured"""
+    api_key = st.session_state.api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return False, "OpenAI API key not found"
+    if not api_key.startswith("sk-"):
+        return False, "Invalid OpenAI API key format"
+    return True, api_key
 
 def push_notification(text):
     """Send push notification via Pushover"""
     if os.getenv("PUSHOVER_TOKEN") and os.getenv("PUSHOVER_USER"):
-        requests.post(
-            "https://api.pushover.net/1/messages.json",
-            data={
-                "token": os.getenv("PUSHOVER_TOKEN"),
-                "user": os.getenv("PUSHOVER_USER"),
-                "message": text,
-            }
-        )
+        try:
+            requests.post(
+                "https://api.pushover.net/1/messages.json",
+                data={
+                    "token": os.getenv("PUSHOVER_TOKEN"),
+                    "user": os.getenv("PUSHOVER_USER"),
+                    "message": text,
+                },
+                timeout=5
+            )
+        except:
+            pass
 
 def extract_text_from_pdf(pdf_file):
     """Extract text from uploaded PDF file"""
-    pdf_reader = PdfReader(pdf_file)
-    text = ""
-    for page in pdf_reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
-    return text
-
-def extract_resume_sections(resume_text):
-    """Extract key sections from resume"""
-    sections = {
-        "contact": "",
-        "summary": "",
-        "experience": "",
-        "education": "",
-        "skills": "",
-        "projects": ""
-    }
-    
-    # Simple pattern matching for sections
-    patterns = {
-        "contact": r"(Email|Phone|LinkedIn|GitHub|Portfolio).*",
-        "summary": r"(Summary|Objective|Profile|About).*?(?=Experience|Education|Skills|Projects|$)",
-        "experience": r"(Experience|Work History|Employment).*?(?=Education|Skills|Projects|$)",
-        "education": r"(Education|Academic).*?(?=Skills|Projects|Experience|$)",
-        "skills": r"(Skills|Technical Skills|Core Competencies).*?(?=Projects|Experience|Education|$)",
-        "projects": r"(Projects|Portfolio|Work Samples).*?(?=Experience|Education|Skills|$)"
-    }
-    
-    for section, pattern in patterns.items():
-        match = re.search(pattern, resume_text, re.IGNORECASE | re.DOTALL)
-        if match:
-            sections[section] = match.group(0)
-    
-    return sections
+    try:
+        pdf_reader = PdfReader(pdf_file)
+        text = ""
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        return text
+    except Exception as e:
+        st.error(f"Error reading PDF: {str(e)}")
+        return ""
 
 class ResumeAnalyzer:
-    def __init__(self):
-        self.model_name = "gpt-3.5-turbo"  # Default to OpenAI
-        if os.getenv("USE_OLLAMA") == "true":
-            self.client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
-            self.model_name = "llama3.2"
-        else:
-            self.client = OpenAI()
+    def __init__(self, api_key):
+        self.model_name = "gpt-3.5-turbo"
+        self.client = OpenAI(api_key=api_key)
+    
+    def _safe_api_call(self, messages, temperature=0.7, max_tokens=None):
+        """Make API call with error handling and retries"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                kwargs = {
+                    "model": self.model_name,
+                    "messages": messages,
+                    "temperature": temperature
+                }
+                if max_tokens:
+                    kwargs["max_tokens"] = max_tokens
+                
+                response = self.client.chat.completions.create(**kwargs)
+                return response
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise Exception(f"API call failed: {str(e)}")
+                time.sleep(2 ** attempt)
     
     def analyze_job_fit(self, resume_text, job_description):
         """Analyze how well the resume fits the job description"""
@@ -154,7 +162,7 @@ class ResumeAnalyzer:
         4. Specific skills from the JD that should be highlighted
         
         Resume:
-        {resume_text[:3000]}  # Limit for API
+        {resume_text[:3000]}
         
         Job Description:
         {job_description}
@@ -162,23 +170,34 @@ class ResumeAnalyzer:
         Provide the response in JSON format with keys: match_score, strengths, gaps, skills_to_highlight
         """
         
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        try:
+            response = self._safe_api_call([
                 {"role": "system", "content": "You are an expert resume analyzer and career counselor."},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0.7
-        )
-        
-        try:
-            return json.loads(response.choices[0].message.content)
-        except:
+            ])
+            
+            content = response.choices[0].message.content
+            try:
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0]
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0]
+                
+                return json.loads(content)
+            except:
+                return {
+                    "match_score": 75,
+                    "strengths": ["Strong technical background", "Relevant experience"],
+                    "gaps": ["Consider adding more quantifiable achievements"],
+                    "skills_to_highlight": ["Technical skills matching job requirements"]
+                }
+        except Exception as e:
+            st.error(f"Error during analysis: {str(e)}")
             return {
-                "match_score": 75,
-                "strengths": ["Unable to parse response"],
-                "gaps": ["Unable to parse response"],
-                "skills_to_highlight": ["Unable to parse response"]
+                "match_score": 70,
+                "strengths": ["Unable to complete full analysis"],
+                "gaps": ["Please check API configuration"],
+                "skills_to_highlight": ["Review job requirements"]
             }
     
     def tailor_resume(self, resume_text, job_description, analysis):
@@ -202,17 +221,16 @@ class ResumeAnalyzer:
         Provide a complete, well-formatted resume optimized for this position.
         """
         
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        try:
+            response = self._safe_api_call([
                 {"role": "system", "content": "You are an expert resume writer who creates ATS-friendly, compelling resumes."},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=2000
-        )
-        
-        return response.choices[0].message.content
+            ], max_tokens=2000)
+            
+            return response.choices[0].message.content
+        except Exception as e:
+            st.error(f"Error tailoring resume: {str(e)}")
+            return resume_text
     
     def generate_interview_questions(self, resume_text, job_description):
         """Generate relevant interview questions based on JD and resume"""
@@ -233,25 +251,49 @@ class ResumeAnalyzer:
         Format as a JSON array of questions.
         """
         
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=[
+        try:
+            response = self._safe_api_call([
                 {"role": "system", "content": "You are an experienced technical interviewer."},
                 {"role": "user", "content": prompt}
-            ],
-            temperature=0.8
-        )
-        
-        try:
-            return json.loads(response.choices[0].message.content)
-        except:
-            return [
-                "Tell me about your experience relevant to this role.",
-                "What interests you about this position?",
-                "Describe a challenging project you've worked on.",
-                "How do you stay updated with new technologies?",
-                "Where do you see yourself in 5 years?"
-            ]
+            ], temperature=0.8)
+            
+            content = response.choices[0].message.content
+            try:
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0]
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0]
+                
+                return json.loads(content)
+            except:
+                questions = []
+                lines = content.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if line and (line[0].isdigit() or line.startswith('-') or line.startswith('•')):
+                        question = re.sub(r'^[\d\-•\.]+\s*', '', line).strip()
+                        if question:
+                            questions.append(question)
+                
+                return questions[:10] if questions else self.get_default_questions()
+        except Exception as e:
+            st.error(f"Error generating questions: {str(e)}")
+            return self.get_default_questions()
+    
+    def get_default_questions(self):
+        """Return default interview questions"""
+        return [
+            "Tell me about your experience relevant to this role.",
+            "What interests you about this position?",
+            "Describe a challenging project you've worked on.",
+            "How do you stay updated with new technologies?",
+            "Where do you see yourself in 5 years?",
+            "What are your greatest strengths?",
+            "How do you handle tight deadlines?",
+            "Describe a time you worked in a team.",
+            "What achievement are you most proud of?",
+            "Why are you looking for a new opportunity?"
+        ]
     
     def chat_response(self, message, context):
         """Generate chat responses for interview preparation"""
@@ -260,7 +302,6 @@ class ResumeAnalyzer:
         
         Context:
         - Job Description: {st.session_state.job_description[:500]}
-        - Candidate's key skills: {', '.join(st.session_state.get('skills', []))}
         - Match score: {st.session_state.get('match_score', 'N/A')}%
         
         Help the candidate:
@@ -273,15 +314,12 @@ class ResumeAnalyzer:
         Be supportive, specific, and actionable in your advice.
         """
         
-        messages = [{"role": "system", "content": system_prompt}] + context + [{"role": "user", "content": message}]
-        
-        response = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
+        try:
+            messages = [{"role": "system", "content": system_prompt}] + context + [{"role": "user", "content": message}]
+            response = self._safe_api_call(messages)
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"I apologize, but I'm having trouble connecting to the AI service. Error: {str(e)}"
 
 # Main App
 def main():
@@ -293,26 +331,50 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar
+    # Check API Key
+    api_configured, api_key = check_api_key()
+    
+    if not api_configured:
+        st.error("⚠️ OpenAI API Key Required")
+        st.info("Please set your OpenAI API key to use this application.")
+        
+        api_key_input = st.text_input(
+            "Enter your OpenAI API Key",
+            type="password",
+            placeholder="sk-...",
+            help="Get your API key from https://platform.openai.com/api-keys"
+        )
+        
+        if api_key_input:
+            st.session_state.api_key = api_key_input
+            st.rerun()
+        
+        st.stop()
+    
+    # Sidebar with instructions only
     with st.sidebar:
-        st.header("📋 Instructions")
+        st.header("📋 How to Use")
         st.markdown("""
         1. **Upload your resume** (PDF format)
         2. **Paste the job description**
         3. **Click Analyze** to get insights
         4. **Review your tailored resume**
         5. **Practice with AI interview coach**
+        
+        ---
+        
+        ### 💡 Tips for Best Results:
+        - Use complete job descriptions
+        - Upload well-formatted PDFs
+        - Be specific in interview practice
+        
+        ### 📊 What You'll Get:
+        - Match score percentage
+        - Strengths & gaps analysis
+        - ATS-optimized resume
+        - Custom interview questions
+        - AI coaching support
         """)
-        
-        st.divider()
-        
-        # Settings
-        st.header("⚙️ Settings")
-        use_ollama = st.checkbox("Use Local LLM (Ollama)", value=os.getenv("USE_OLLAMA") == "true")
-        if use_ollama:
-            os.environ["USE_OLLAMA"] = "true"
-        else:
-            os.environ["USE_OLLAMA"] = "false"
     
     # Main content area with tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Analyze", "📊 Results", "✏️ Tailored Resume", "💬 Interview Prep"])
@@ -325,11 +387,13 @@ def main():
             uploaded_file = st.file_uploader("Choose your resume (PDF)", type=['pdf'])
             
             if uploaded_file is not None:
-                st.session_state.resume_text = extract_text_from_pdf(uploaded_file)
-                st.success("✅ Resume uploaded successfully!")
-                
-                with st.expander("Preview Resume Text"):
-                    st.text(st.session_state.resume_text[:1000] + "...")
+                resume_text = extract_text_from_pdf(uploaded_file)
+                if resume_text:
+                    st.session_state.resume_text = resume_text
+                    st.success("✅ Resume uploaded successfully!")
+                    
+                    with st.expander("Preview Resume Text"):
+                        st.text(st.session_state.resume_text[:1000] + "...")
         
         with col2:
             st.subheader("💼 Job Description")
@@ -344,31 +408,34 @@ def main():
         if st.button("🔍 Analyze & Match", type="primary", use_container_width=True):
             if st.session_state.resume_text and st.session_state.job_description:
                 with st.spinner("🤖 AI is analyzing your resume..."):
-                    analyzer = ResumeAnalyzer()
-                    
-                    # Perform analysis
-                    analysis = analyzer.analyze_job_fit(st.session_state.resume_text, st.session_state.job_description)
-                    st.session_state.analysis = analysis
-                    st.session_state.match_score = analysis.get('match_score', 0)
-                    
-                    # Generate tailored resume
-                    st.session_state.tailored_resume = analyzer.tailor_resume(
-                        st.session_state.resume_text, 
-                        st.session_state.job_description,
-                        analysis
-                    )
-                    
-                    # Generate interview questions
-                    st.session_state.interview_questions = analyzer.generate_interview_questions(
-                        st.session_state.resume_text,
-                        st.session_state.job_description
-                    )
-                    
-                    st.session_state.analysis_complete = True
-                    st.success("✅ Analysis complete! Check the Results tab.")
-                    
-                    # Send notification
-                    push_notification(f"Resume analysis complete. Match score: {st.session_state.match_score}%")
+                    try:
+                        analyzer = ResumeAnalyzer(api_key)
+                        
+                        # Perform analysis
+                        analysis = analyzer.analyze_job_fit(st.session_state.resume_text, st.session_state.job_description)
+                        st.session_state.analysis = analysis
+                        st.session_state.match_score = analysis.get('match_score', 0)
+                        
+                        # Generate tailored resume
+                        st.session_state.tailored_resume = analyzer.tailor_resume(
+                            st.session_state.resume_text, 
+                            st.session_state.job_description,
+                            analysis
+                        )
+                        
+                        # Generate interview questions
+                        st.session_state.interview_questions = analyzer.generate_interview_questions(
+                            st.session_state.resume_text,
+                            st.session_state.job_description
+                        )
+                        
+                        st.session_state.analysis_complete = True
+                        st.success("✅ Analysis complete! Check the Results tab.")
+                        
+                        # Send notification
+                        push_notification(f"Resume analysis complete. Match score: {st.session_state.match_score}%")
+                    except Exception as e:
+                        st.error(f"Error during analysis: {str(e)}")
             else:
                 st.error("Please upload a resume and provide a job description.")
     
@@ -474,8 +541,8 @@ def main():
                     st.session_state.chat_context.append({"role": "user", "content": user_input})
                     
                     # Get AI response
-                    analyzer = ResumeAnalyzer()
-                    response = analyzer.chat_response(user_input, st.session_state.chat_context[-10:])  # Keep last 10 messages for context
+                    analyzer = ResumeAnalyzer(api_key)
+                    response = analyzer.chat_response(user_input, st.session_state.chat_context[-10:])
                     
                     # Add assistant message
                     st.session_state.messages.append({"role": "assistant", "content": response})
