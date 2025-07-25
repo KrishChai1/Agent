@@ -14,10 +14,10 @@ mammoth
 openai 
 python-dotenv
 plotly
-python-dotenv
 pypdf
 requests
 openpyxl
 xlrd
 pyyaml
 tabulate
+openpyxl
