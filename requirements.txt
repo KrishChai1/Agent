@@ -21,3 +21,4 @@ xlrd
 pyyaml
 tabulate
 openpyxl
+xlsxwriter
