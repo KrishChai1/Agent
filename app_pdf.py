@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-Enhanced Agentic USCIS Form Reader - Fixed Version
-- Fixed Part 1 extraction
-- Improved mapping dropdown
-- Better knowledge base integration
-- Added missing dependency handling
+Enhanced Agentic USCIS Form Reader - Final Complete Version
+- Fixed Part detection (all parts)
+- Fixed Field extraction (1, 1a, 1b, 1c, etc.)
+- Complete Knowledge Base integration
+- Smart validation with self-correction
+- Enhanced mapping with dropdowns
+- Questionnaire support
+- Full export capabilities
 """
 
 import os
@@ -16,6 +19,7 @@ import traceback
 import io
 import csv
 import pickle
+import contextlib
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set, Union
 from dataclasses import dataclass, field, asdict
@@ -212,6 +216,16 @@ st.markdown("""
         padding: 0.5rem;
         width: 100%;
     }
+    
+    /* Debug Info */
+    .debug-info {
+        background: #f0f0f0;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        padding: 1rem;
+        font-family: monospace;
+        font-size: 0.9em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -356,7 +370,7 @@ class FormKnowledgeBase:
                 'confidence': 0.9
             },
             {
-                'pattern': r'^Part\s+(\d+)\s+[-–]\s*(.+)$',
+                'pattern': r'^Part\s+(\d+)\s+[-–—]\s*(.+)$',
                 'type': 'dash',
                 'confidence': 0.9
             },
@@ -364,6 +378,11 @@ class FormKnowledgeBase:
                 'pattern': r'^Part\s+(\d+)\s*$',
                 'type': 'number_only',
                 'confidence': 0.7
+            },
+            {
+                'pattern': r'^PART\s+(\d+)[.:]\s*(.+)$',
+                'type': 'uppercase',
+                'confidence': 0.9
             },
             {
                 'pattern': r'^Section\s+([A-Z])[.:]\s*(.+)$',
@@ -579,7 +598,7 @@ class FieldNode:
     confidence: ExtractionConfidence = ExtractionConfidence.LOW
     extraction_method: str = ""
     raw_text: str = ""
-    context: str = ""  # Surrounding text for better understanding
+    context: str = ""
     
     # Mapping
     mapping_status: MappingStatus = MappingStatus.UNMAPPED
@@ -863,15 +882,15 @@ class BaseAgent(ABC):
                     unsafe_allow_html=True
                 )
 
-# ===== ENHANCED EXTRACTION AGENT =====
-class EnhancedExtractionAgent(BaseAgent):
-    """Enhanced extraction with knowledge base integration and better Part 1 detection"""
+# ===== FIXED ENHANCED EXTRACTION AGENT =====
+class FixedEnhancedExtractionAgent(BaseAgent):
+    """Fixed extraction with better field and part detection"""
     
     def __init__(self):
         super().__init__(
-            "Enhanced Extraction Agent",
+            "Fixed Enhanced Extraction Agent",
             AgentRole.EXTRACTOR,
-            "Advanced extraction with context awareness"
+            "Advanced extraction with better pattern matching"
         )
         self.doc = None
         self.current_form_type = ""
@@ -883,7 +902,7 @@ class EnhancedExtractionAgent(BaseAgent):
         self.metrics['executions'] += 1
         start_time = time.time()
         
-        self.log("🚀 Starting enhanced extraction with knowledge base...", "info")
+        self.log("🚀 Starting fixed enhanced extraction...", "info")
         
         try:
             # Open PDF
@@ -914,10 +933,20 @@ class EnhancedExtractionAgent(BaseAgent):
             if expected_structure:
                 result.kb_matches['form_structure'] = expected_structure
             
-            # Phase 2: Extract with context awareness
-            self._extract_with_context(result, expected_structure)
+            # Phase 2: Extract all text blocks from all pages first
+            all_pages_blocks = []
+            for page_num in range(len(self.doc)):
+                page = self.doc[page_num]
+                page_blocks = self._extract_all_page_blocks(page, page_num + 1)
+                all_pages_blocks.extend(page_blocks)
             
-            # Phase 3: Post-processing
+            # Phase 3: Find all parts first
+            parts_info = self._find_all_parts(all_pages_blocks, expected_structure)
+            
+            # Phase 4: Extract fields for each part
+            self._extract_fields_by_parts(all_pages_blocks, parts_info, result)
+            
+            # Phase 5: Post-processing
             self._post_process_extraction(result)
             
             # Calculate metrics
@@ -926,7 +955,7 @@ class EnhancedExtractionAgent(BaseAgent):
             result.total_fields = sum(len(part.get_all_fields_flat()) for part in result.parts.values())
             
             self.metrics['successes'] += 1
-            self.log(f"✅ Extraction complete: {result.total_fields} fields in {result.extraction_time:.2f}s", "success")
+            self.log(f"✅ Extraction complete: {result.total_fields} fields in {len(result.parts)} parts in {result.extraction_time:.2f}s", "success")
             
             return result
             
@@ -937,6 +966,482 @@ class EnhancedExtractionAgent(BaseAgent):
         finally:
             if self.doc:
                 self.doc.close()
+    
+    def _extract_all_page_blocks(self, page, page_num: int) -> List[Dict]:
+        """Extract all text blocks from a page with position info"""
+        blocks = []
+        page_dict = page.get_text("dict")
+        
+        for block in page_dict["blocks"]:
+            if block["type"] == 0:  # Text block
+                for line in block["lines"]:
+                    text = " ".join(span["text"] for span in line["spans"])
+                    if text.strip():
+                        # Get font information
+                        fonts = [span.get("font", "") for span in line["spans"]]
+                        sizes = [span.get("size", 10) for span in line["spans"]]
+                        
+                        blocks.append({
+                            'text': text.strip(),
+                            'raw_text': text,
+                            'bbox': line.get("bbox", [0, 0, 0, 0]),
+                            'page': page_num,
+                            'spans': line["spans"],
+                            'is_bold': any(span.get("flags", 0) & 2**4 for span in line["spans"]),
+                            'font_size': max(sizes) if sizes else 10,
+                            'fonts': list(set(fonts)),
+                            'y_pos': line.get("bbox", [0, 0, 0, 0])[1],
+                            'x_pos': line.get("bbox", [0, 0, 0, 0])[0]
+                        })
+        
+        # Sort blocks by page, then Y position, then X position
+        blocks.sort(key=lambda b: (b['page'], b['y_pos'], b['x_pos']))
+        
+        return blocks
+    
+    def _find_all_parts(self, all_blocks: List[Dict], expected_structure: Optional[Dict]) -> Dict[int, Dict]:
+        """Find all parts in the document"""
+        parts_info = {}
+        current_part_num = 0
+        
+        # Enhanced part patterns
+        part_patterns = [
+            (r'^Part\s+(\d+)[.:]\s*(.*)$', 'standard'),
+            (r'^Part\s+(\d+)\s+[-–—]\s*(.*)$', 'dash'),
+            (r'^Part\s+(\d+)\s*$', 'number_only'),
+            (r'^PART\s+(\d+)[.:]\s*(.*)$', 'uppercase'),
+            (r'^Section\s+([A-Z]|[IVX]+)[.:]\s*(.*)$', 'section'),
+        ]
+        
+        # First pass: find explicit part headers
+        for i, block in enumerate(all_blocks):
+            text = block['text']
+            
+            for pattern, pattern_type in part_patterns:
+                match = re.match(pattern, text, re.IGNORECASE)
+                if match:
+                    if pattern_type in ['standard', 'dash', 'uppercase']:
+                        part_num = int(match.group(1))
+                        title = match.group(2).strip() if match.lastindex >= 2 else ""
+                        
+                        # Look for title in next line if empty
+                        if not title and i + 1 < len(all_blocks):
+                            next_block = all_blocks[i + 1]
+                            # Check if next line is likely a title (not a field)
+                            if not re.match(r'^\d+[a-z]?\.|^[A-Z]\.|^\([a-z]\)', next_block['text']):
+                                title = next_block['text']
+                        
+                        parts_info[part_num] = {
+                            'number': part_num,
+                            'title': title,
+                            'start_block': i,
+                            'page': block['page']
+                        }
+                        current_part_num = part_num
+                        self.log(f"📋 Found Part {part_num}: {title or '(title on next line)'}", "success")
+                        break
+                    
+                    elif pattern_type == 'number_only':
+                        part_num = int(match.group(1))
+                        # Look for title in next line
+                        title = ""
+                        if i + 1 < len(all_blocks):
+                            next_block = all_blocks[i + 1]
+                            if not re.match(r'^\d+[a-z]?\.|^[A-Z]\.|^\([a-z]\)', next_block['text']):
+                                title = next_block['text']
+                        
+                        parts_info[part_num] = {
+                            'number': part_num,
+                            'title': title,
+                            'start_block': i,
+                            'page': block['page']
+                        }
+                        current_part_num = part_num
+                        self.log(f"📋 Found Part {part_num}: {title}", "success")
+                        break
+        
+        # If no parts found or Part 1 is missing, check if form starts with fields
+        if 1 not in parts_info:
+            # Look for fields at the beginning
+            for i, block in enumerate(all_blocks[:50]):  # Check first 50 blocks
+                if self._is_field_start(block['text']):
+                    # Found fields before any part header - create Part 1
+                    title = "Information About You"  # Default title
+                    if expected_structure and 'parts' in expected_structure:
+                        title = expected_structure['parts'].get(1, title)
+                    
+                    parts_info[1] = {
+                        'number': 1,
+                        'title': title,
+                        'start_block': 0,
+                        'page': 1
+                    }
+                    self.log(f"📋 Created implicit Part 1: {title} (fields found before part header)", "info")
+                    break
+        
+        # Fill in missing parts from expected structure
+        if expected_structure and 'parts' in expected_structure:
+            for part_num, part_title in expected_structure['parts'].items():
+                if part_num not in parts_info:
+                    self.log(f"⚠️ Part {part_num}: {part_title} not found in document", "warning")
+        
+        # Set end blocks for each part
+        part_numbers = sorted(parts_info.keys())
+        for i, part_num in enumerate(part_numbers):
+            if i + 1 < len(part_numbers):
+                next_part_num = part_numbers[i + 1]
+                parts_info[part_num]['end_block'] = parts_info[next_part_num]['start_block'] - 1
+            else:
+                parts_info[part_num]['end_block'] = len(all_blocks) - 1
+        
+        return parts_info
+    
+    def _is_field_start(self, text: str) -> bool:
+        """Check if text looks like a field start"""
+        field_patterns = [
+            r'^\d+\.\s+\w+',  # 1. Something
+            r'^\d+[a-z]\.\s+\w+',  # 1a. Something
+            r'^[A-Z]\.\s+\w+',  # A. Something
+            r'^\(\d+\)\s+\w+',  # (1) Something
+            r'^(Family Name|Given Name|Middle Name|Date of Birth)',  # Common field names
+            r'^(A-Number|USCIS|Alien Registration)',  # Common USCIS fields
+        ]
+        
+        return any(re.match(pattern, text, re.IGNORECASE) for pattern in field_patterns)
+    
+    def _extract_fields_by_parts(self, all_blocks: List[Dict], parts_info: Dict[int, Dict], 
+                                 result: FormExtractionResult):
+        """Extract fields for each part"""
+        
+        # Process each part
+        for part_num in sorted(parts_info.keys()):
+            part_info = parts_info[part_num]
+            
+            # Create part structure
+            part = PartStructure(
+                part_number=part_num,
+                part_name=f"Part {part_num}",
+                part_title=part_info['title'],
+                start_page=part_info['page']
+            )
+            
+            # Extract fields for this part
+            start_block = part_info['start_block']
+            end_block = part_info['end_block']
+            
+            self.log(f"📝 Extracting fields for Part {part_num} (blocks {start_block}-{end_block})", "info")
+            
+            # Track what we've processed
+            processed_indices = set()
+            
+            # Process blocks in this part
+            i = start_block
+            while i <= end_block:
+                if i in processed_indices:
+                    i += 1
+                    continue
+                
+                block = all_blocks[i]
+                
+                # Skip part headers
+                if re.match(r'^Part\s+\d+', block['text'], re.IGNORECASE):
+                    i += 1
+                    continue
+                
+                # Try to extract field
+                field, next_index = self._extract_field_from_block(all_blocks, i, end_block)
+                
+                if field:
+                    field.part_number = part_num
+                    field.part_name = part.part_name
+                    
+                    if part.add_field(field):
+                        self.log(f"  Found field {field.item_number}: {field.label[:50]}...", "info")
+                    
+                    # Mark blocks as processed
+                    for j in range(i, next_index):
+                        processed_indices.add(j)
+                    
+                    i = next_index
+                else:
+                    i += 1
+            
+            # Reorganize hierarchy
+            part.reorganize_hierarchy()
+            
+            # Add part to result
+            result.parts[part_num] = part
+            
+            self.log(f"✅ Part {part_num} complete: {len(part.get_all_fields_flat())} fields", "success")
+    
+    def _extract_field_from_block(self, all_blocks: List[Dict], start_idx: int, 
+                                  end_idx: int) -> Tuple[Optional[FieldNode], int]:
+        """Extract a field starting from a block index"""
+        if start_idx >= len(all_blocks):
+            return None, start_idx + 1
+            
+        block = all_blocks[start_idx]
+        text = block['text']
+        
+        # Enhanced field patterns - ordered by specificity
+        field_patterns = [
+            # Nested sub-fields (most specific)
+            (r'^(\d+)\.([a-z])\.(\d+)\.\s+(.+?)(?:\s*\(|:|$)', 'nested_field_dots'),
+            (r'^(\d+)([a-z])(\d+)\.\s+(.+?)(?:\s*\(|:|$)', 'nested_field_no_dots'),
+            
+            # Sub-fields with letters
+            (r'^(\d+)\.([a-z])\.\s+(.+?)(?:\s*\(|:|$)', 'sub_field_dot'),
+            (r'^(\d+)([a-z])\.\s+(.+?)(?:\s*\(|:|$)', 'sub_field_no_dot'),
+            (r'^(\d+)\.([a-z])\.\s*$', 'sub_number_only_dot'),
+            (r'^(\d+)([a-z])\.\s*$', 'sub_number_only_no_dot'),
+            
+            # Main numbered fields
+            (r'^(\d+)\.\s+(.+?)(?:\s*\(|:|$)', 'main_field'),
+            (r'^(\d+)\.\s*$', 'main_number_only'),
+            
+            # Fields in parentheses
+            (r'^\(([a-z])\)\s+(.+?)(?:\s*\(|:|$)', 'paren_letter'),
+            (r'^\((\d+)\)\s+(.+?)(?:\s*\(|:|$)', 'paren_number'),
+            
+            # Letter fields
+            (r'^([A-Z])\.\s+(.+?)(?:\s*\(|:|$)', 'letter_field'),
+            (r'^([A-Z])\.\s*$', 'letter_only'),
+            
+            # Special USCIS fields
+            (r'^(A-Number|Alien Registration Number)\s*[:\.]?\s*$', 'special_field'),
+            (r'^(USCIS Online Account Number)\s*[:\.]?\s*$', 'special_field'),
+            (r'^(Date of Birth|Country of Birth|Family Name|Given Name|Middle Name)\s*[:\.]?\s*$', 'special_field'),
+        ]
+        
+        # Try each pattern
+        for pattern, pattern_type in field_patterns:
+            match = re.match(pattern, text)
+            if match:
+                # Extract field info based on pattern type
+                field_info = self._parse_field_match(match, pattern_type, all_blocks, 
+                                                    start_idx, end_idx)
+                
+                if field_info:
+                    # Create field node
+                    field = FieldNode(
+                        item_number=field_info['item_number'],
+                        label=field_info['label'],
+                        page=block['page'],
+                        extraction_method=f"pattern_{pattern_type}",
+                        raw_text=text,
+                        bbox=tuple(block['bbox'])
+                    )
+                    
+                    # Check for value on same line
+                    if field_info.get('value'):
+                        field.value = field_info['value']
+                    
+                    # Extract additional info (checkboxes, etc.)
+                    next_idx = self._extract_field_details(field, all_blocks, 
+                                                          field_info['next_index'], end_idx)
+                    
+                    return field, next_idx
+        
+        return None, start_idx + 1
+    
+    def _parse_field_match(self, match, pattern_type: str, all_blocks: List[Dict], 
+                          start_idx: int, end_idx: int) -> Optional[Dict]:
+        """Parse field match based on pattern type"""
+        
+        if pattern_type == 'main_field':
+            return {
+                'item_number': match.group(1),
+                'label': match.group(2).strip(),
+                'next_index': start_idx + 1
+            }
+        
+        elif pattern_type == 'main_number_only':
+            # Look for label on next line
+            if start_idx + 1 <= end_idx and start_idx + 1 < len(all_blocks):
+                next_text = all_blocks[start_idx + 1]['text']
+                # Make sure next line is not another field
+                if not self._is_field_start(next_text):
+                    return {
+                        'item_number': match.group(1),
+                        'label': next_text,
+                        'next_index': start_idx + 2
+                    }
+            return None
+        
+        elif pattern_type in ['sub_field_dot', 'sub_field_no_dot']:
+            item_number = match.group(1) + match.group(2)
+            label = match.group(3).strip() if match.lastindex >= 3 else ""
+            
+            if not label and start_idx + 1 <= end_idx and start_idx + 1 < len(all_blocks):
+                next_text = all_blocks[start_idx + 1]['text']
+                if not self._is_field_start(next_text):
+                    label = next_text
+                    return {
+                        'item_number': item_number,
+                        'label': label,
+                        'next_index': start_idx + 2
+                    }
+            
+            return {
+                'item_number': item_number,
+                'label': label,
+                'next_index': start_idx + 1
+            }
+        
+        elif pattern_type in ['sub_number_only_dot', 'sub_number_only_no_dot']:
+            item_number = match.group(1) + match.group(2)
+            
+            # Look for label on next line
+            if start_idx + 1 <= end_idx and start_idx + 1 < len(all_blocks):
+                next_text = all_blocks[start_idx + 1]['text']
+                if not self._is_field_start(next_text):
+                    return {
+                        'item_number': item_number,
+                        'label': next_text,
+                        'next_index': start_idx + 2
+                    }
+            return None
+        
+        elif pattern_type in ['nested_field_dots', 'nested_field_no_dots']:
+            item_number = match.group(1) + match.group(2) + match.group(3)
+            label = match.group(4).strip() if match.lastindex >= 4 else ""
+            
+            if not label and start_idx + 1 <= end_idx and start_idx + 1 < len(all_blocks):
+                next_text = all_blocks[start_idx + 1]['text']
+                if not self._is_field_start(next_text):
+                    label = next_text
+                    return {
+                        'item_number': item_number,
+                        'label': label,
+                        'next_index': start_idx + 2
+                    }
+            
+            return {
+                'item_number': item_number,
+                'label': label,
+                'next_index': start_idx + 1
+            }
+        
+        elif pattern_type in ['paren_letter', 'paren_number']:
+            return {
+                'item_number': match.group(1),
+                'label': match.group(2).strip(),
+                'next_index': start_idx + 1
+            }
+        
+        elif pattern_type == 'letter_field':
+            return {
+                'item_number': match.group(1),
+                'label': match.group(2).strip(),
+                'next_index': start_idx + 1
+            }
+        
+        elif pattern_type == 'letter_only':
+            # Look for label on next line
+            if start_idx + 1 <= end_idx and start_idx + 1 < len(all_blocks):
+                next_text = all_blocks[start_idx + 1]['text']
+                if not self._is_field_start(next_text):
+                    return {
+                        'item_number': match.group(1),
+                        'label': next_text,
+                        'next_index': start_idx + 2
+                    }
+            return None
+        
+        elif pattern_type == 'special_field':
+            # Generate unique item number for special fields
+            field_name = match.group(1)
+            item_number = f"S{abs(hash(field_name)) % 1000}"
+            
+            return {
+                'item_number': item_number,
+                'label': field_name,
+                'next_index': start_idx + 1
+            }
+        
+        return None
+    
+    def _extract_field_details(self, field: FieldNode, all_blocks: List[Dict], 
+                              start_idx: int, end_idx: int) -> int:
+        """Extract additional field details like checkboxes, additional text"""
+        
+        # Get field type suggestion from KB
+        suggested_type, confidence = self.knowledge_base.suggest_field_type(field.label)
+        if confidence > 0.7:
+            field.field_type = suggested_type
+            field.confidence = ExtractionConfidence.HIGH if confidence > 0.85 else ExtractionConfidence.MEDIUM
+        
+        # Look for checkboxes or options
+        if field.field_type == FieldType.CHECKBOX or any(word in field.label.lower() 
+                                                         for word in ["check", "select", "mark", "choose"]):
+            options = []
+            current_idx = start_idx
+            
+            # Checkbox patterns
+            checkbox_patterns = [
+                (r'^[□☐]\s*(.+)', False),
+                (r'^[☑☒]\s*(.+)', True),
+                (r'^\[\s*\]\s*(.+)', False),
+                (r'^\[X\]\s*(.+)', True),
+                (r'^○\s*(.+)', False),
+                (r'^●\s*(.+)', True),
+                (r'^\(\s*\)\s*(.+)', False),
+                (r'^\(X\)\s*(.+)', True),
+            ]
+            
+            # Look for checkbox options
+            while current_idx <= min(end_idx, start_idx + 20):  # Limit search
+                if current_idx >= len(all_blocks):
+                    break
+                
+                block = all_blocks[current_idx]
+                text = block['text']
+                
+                # Stop if we hit another field
+                if self._is_field_start(text) and current_idx != start_idx:
+                    break
+                
+                # Check for checkbox patterns
+                found_checkbox = False
+                for pattern, is_selected in checkbox_patterns:
+                    match = re.match(pattern, text)
+                    if match:
+                        options.append(CheckboxOption(
+                            text=match.group(1).strip(),
+                            is_selected=is_selected,
+                            position=(block['x_pos'], block['y_pos']),
+                            confidence=0.9
+                        ))
+                        found_checkbox = True
+                        break
+                
+                # Check for indented text that might be options
+                if not found_checkbox and current_idx > start_idx:
+                    if block['x_pos'] > all_blocks[start_idx]['x_pos'] + 20:
+                        if len(text) < 100 and not text.endswith(':'):
+                            options.append(CheckboxOption(
+                                text=text,
+                                is_selected=False,
+                                position=(block['x_pos'], block['y_pos']),
+                                confidence=0.7
+                            ))
+                
+                current_idx += 1
+            
+            if options:
+                field.checkbox_options = options
+                return current_idx
+        
+        # For other field types, check if there's additional descriptive text
+        if start_idx <= end_idx and start_idx < len(all_blocks):
+            next_block = all_blocks[start_idx]
+            # If next line is indented and not a field, it might be help text
+            if (next_block['x_pos'] > field.bbox[0] + 20 and 
+                not self._is_field_start(next_block['text'])):
+                field.context = next_block['text']
+                return start_idx + 1
+        
+        return start_idx
     
     def _identify_form_with_kb(self) -> Dict[str, str]:
         """Identify form using knowledge base"""
@@ -969,442 +1474,6 @@ class EnhancedExtractionAgent(BaseAgent):
                 return {"number": form_number, "title": form_title}
         
         return {"number": "Unknown", "title": "Unknown Form"}
-    
-    def _extract_with_context(self, result: FormExtractionResult, expected_structure: Optional[Dict]):
-        """Extract with context awareness and expected structure"""
-        all_pages_data = []
-        
-        # Extract data from all pages
-        for page_num in range(len(self.doc)):
-            page = self.doc[page_num]
-            page_data = self._extract_enhanced_page_data(page, page_num)
-            all_pages_data.append(page_data)
-        
-        # Build extraction context
-        self._build_extraction_context(all_pages_data)
-        
-        # Process pages with expected structure
-        current_part = None
-        expected_parts = expected_structure.get('parts', {}) if expected_structure else {}
-        
-        # Special handling for forms that start with fields before Part headers
-        first_page_has_fields = self._check_first_page_has_fields(all_pages_data[0], expected_structure)
-        
-        if first_page_has_fields and not self._has_explicit_part_header(all_pages_data[0]):
-            # Create Part 1 for fields that appear before any part header
-            self.log("📋 Creating implicit Part 1 for initial fields", "info")
-            current_part = PartStructure(
-                part_number=1,
-                part_name="Part 1",
-                part_title=expected_parts.get(1, "Information About You"),
-                start_page=1,
-                expected_fields=20  # Reasonable default
-            )
-            result.parts[1] = current_part
-        
-        for page_num, page_data in enumerate(all_pages_data):
-            self.log(f"📄 Processing page {page_num + 1}/{len(all_pages_data)}", "info")
-            
-            # Look for part headers
-            part_headers = self._find_part_headers_enhanced(page_data, expected_parts)
-            
-            if part_headers:
-                for part_info in part_headers:
-                    if current_part:
-                        current_part.reorganize_hierarchy()
-                    
-                    part_num = part_info['number']
-                    
-                    # Don't create Part 1 again if we already have it
-                    if part_num == 1 and 1 in result.parts:
-                        current_part = result.parts[1]
-                        continue
-                    
-                    current_part = PartStructure(
-                        part_number=part_num,
-                        part_name=f"Part {part_num}",
-                        part_title=part_info['title'],
-                        start_page=page_num + 1,
-                        expected_fields=part_info.get('expected_fields', 0)
-                    )
-                    result.parts[part_num] = current_part
-                    self.log(f"📋 Found Part {part_num}: {part_info['title']}", "success")
-            
-            # Extract fields from this page
-            if current_part:
-                self._extract_fields_enhanced(page_data, current_part, page_num + 1)
-            else:
-                # Create default part if none found
-                if 1 not in result.parts:
-                    current_part = PartStructure(
-                        part_number=1,
-                        part_name="Part 1",
-                        part_title=expected_parts.get(1, "Form Fields"),
-                        start_page=1
-                    )
-                    result.parts[1] = current_part
-                else:
-                    current_part = result.parts[1]
-                
-                self._extract_fields_enhanced(page_data, current_part, page_num + 1)
-        
-        # Final reorganization
-        if current_part:
-            current_part.reorganize_hierarchy()
-    
-    def _check_first_page_has_fields(self, page_data: Dict, expected_structure: Optional[Dict]) -> bool:
-        """Check if first page has fields (common in USCIS forms)"""
-        if not expected_structure:
-            return False
-        
-        # Look for expected first fields from KB
-        first_fields = expected_structure.get('first_fields', [])
-        if not first_fields:
-            return False
-        
-        page_text = " ".join(block['text'] for block in page_data['blocks'])
-        
-        # Check if any expected fields are present
-        for field_name in first_fields:
-            if re.search(rf"\b{re.escape(field_name)}\b", page_text, re.IGNORECASE):
-                return True
-        
-        # Also check for numbered fields
-        if re.search(r'^\s*1\.\s+\w+', page_text, re.MULTILINE):
-            return True
-        
-        return False
-    
-    def _has_explicit_part_header(self, page_data: Dict) -> bool:
-        """Check if page has explicit part header"""
-        for block in page_data['blocks']:
-            text = block['text'].strip()
-            for pattern_info in self.knowledge_base.part_detection_patterns:
-                if re.match(pattern_info['pattern'], text, re.IGNORECASE):
-                    return True
-        return False
-    
-    def _extract_enhanced_page_data(self, page, page_num: int) -> Dict:
-        """Extract enhanced page data with layout analysis"""
-        page_dict = page.get_text("dict")
-        
-        # Extract blocks with enhanced information
-        blocks = []
-        for block in page_dict["blocks"]:
-            if block["type"] == 0:  # Text block
-                for line in block["lines"]:
-                    text = " ".join(span["text"] for span in line["spans"])
-                    if text.strip():
-                        # Get font information
-                        fonts = [span.get("font", "") for span in line["spans"]]
-                        sizes = [span.get("size", 10) for span in line["spans"]]
-                        
-                        blocks.append({
-                            'text': text,
-                            'bbox': line.get("bbox", [0, 0, 0, 0]),
-                            'page': page_num,
-                            'spans': line["spans"],
-                            'is_bold': any(span.get("flags", 0) & 2**4 for span in line["spans"]),
-                            'font_size': max(sizes) if sizes else 10,
-                            'fonts': list(set(fonts)),
-                            'line_height': line.get("bbox", [0, 0, 0, 0])[3] - line.get("bbox", [0, 0, 0, 0])[1]
-                        })
-        
-        # Sort blocks by position
-        blocks.sort(key=lambda b: (b['bbox'][1], b['bbox'][0]))
-        
-        # Group blocks into columns if multi-column layout
-        columns = self._detect_columns(blocks)
-        
-        return {
-            'text': page.get_text(),
-            'blocks': blocks,
-            'columns': columns,
-            'page_num': page_num,
-            'page_size': (page.rect.width, page.rect.height)
-        }
-    
-    def _detect_columns(self, blocks: List[Dict]) -> List[List[Dict]]:
-        """Detect column layout in blocks"""
-        if not blocks:
-            return [blocks]
-        
-        # Simple column detection based on x-coordinates
-        x_positions = [b['bbox'][0] for b in blocks]
-        
-        # If all blocks start at similar x position, it's single column
-        if max(x_positions) - min(x_positions) < 50:
-            return [blocks]
-        
-        # Otherwise, group by x position
-        columns = defaultdict(list)
-        for block in blocks:
-            col_index = int(block['bbox'][0] / 300)  # Rough column width
-            columns[col_index].append(block)
-        
-        return [columns[i] for i in sorted(columns.keys())]
-    
-    def _build_extraction_context(self, all_pages_data: List[Dict]):
-        """Build context for better extraction"""
-        self.extraction_context = {
-            'total_pages': len(all_pages_data),
-            'text_density': [],
-            'part_locations': {},
-            'field_patterns': defaultdict(int)
-        }
-        
-        for page_data in all_pages_data:
-            # Calculate text density
-            text_count = len(page_data['blocks'])
-            self.extraction_context['text_density'].append(text_count)
-            
-            # Find patterns
-            for block in page_data['blocks']:
-                text = block['text']
-                # Look for field patterns
-                if re.match(r'^\d+[a-z]?\.\s+', text):
-                    self.extraction_context['field_patterns']['numbered'] += 1
-                elif re.match(r'^Part\s+\d+', text, re.IGNORECASE):
-                    self.extraction_context['field_patterns']['parts'] += 1
-    
-    def _find_part_headers_enhanced(self, page_data: Dict, expected_parts: Dict) -> List[Dict]:
-        """Enhanced part header detection using KB"""
-        part_headers = []
-        
-        for block in page_data['blocks']:
-            text = block['text'].strip()
-            
-            # Try each pattern from KB
-            for pattern_info in self.knowledge_base.part_detection_patterns:
-                match = re.match(pattern_info['pattern'], text, re.IGNORECASE)
-                if match:
-                    if pattern_info['type'] == 'standard' or pattern_info['type'] == 'dash':
-                        part_num = int(match.group(1))
-                        title = match.group(2).strip() if match.lastindex >= 2 else ""
-                        
-                        # Use expected title if available
-                        if part_num in expected_parts and not title:
-                            title = expected_parts[part_num]
-                        
-                        part_headers.append({
-                            'number': part_num,
-                            'title': title,
-                            'expected_title': expected_parts.get(part_num, title),
-                            'bbox': block['bbox'],
-                            'confidence': pattern_info['confidence']
-                        })
-                        break
-                    elif pattern_info['type'] == 'number_only':
-                        part_num = int(match.group(1))
-                        # Look ahead for title
-                        title = expected_parts.get(part_num, f"Part {part_num}")
-                        
-                        part_headers.append({
-                            'number': part_num,
-                            'title': title,
-                            'expected_title': expected_parts.get(part_num, title),
-                            'bbox': block['bbox'],
-                            'confidence': pattern_info['confidence']
-                        })
-                        break
-        
-        return part_headers
-    
-    def _extract_fields_enhanced(self, page_data: Dict, current_part: PartStructure, page_num: int):
-        """Enhanced field extraction with better pattern matching"""
-        blocks = page_data['blocks']
-        
-        i = 0
-        while i < len(blocks):
-            block = blocks[i]
-            text = block['text'].strip()
-            
-            if not text:
-                i += 1
-                continue
-            
-            # Try to extract field with enhanced patterns
-            field = self._extract_field_enhanced(block, blocks, i, page_num)
-            
-            if field:
-                # Get field type suggestion from KB
-                suggested_type, confidence = self.knowledge_base.suggest_field_type(field.label)
-                if confidence > 0.7:
-                    field.field_type = suggested_type
-                    field.confidence = ExtractionConfidence.HIGH if confidence > 0.85 else ExtractionConfidence.MEDIUM
-                
-                # Check for checkbox options
-                if field.field_type == FieldType.CHECKBOX or any(pattern in field.label.lower() 
-                                                                  for pattern in ["check", "select", "mark"]):
-                    checkbox_options = self._extract_checkbox_options_enhanced(blocks, i + 1)
-                    field.checkbox_options = checkbox_options
-                
-                # Add field to part
-                if current_part.add_field(field):
-                    self.log(f"📝 Found field {field.item_number}: {field.label[:50]}...", "info")
-            
-            i += 1
-    
-    def _extract_field_enhanced(self, block: Dict, all_blocks: List[Dict], 
-                               block_idx: int, page_num: int) -> Optional[FieldNode]:
-        """Enhanced field extraction with multiple patterns"""
-        text = block['text'].strip()
-        
-        # Enhanced patterns for USCIS forms
-        patterns = [
-            # Standard numbered items
-            (r'^(\d+)\.\s+(.+?)(?:\s*\(|$)', 'main'),
-            # Sub-items with various formats
-            (r'^(\d+)\.([a-z])\.\s+(.+?)(?:\s*\(|$)', 'sub_dot'),
-            (r'^(\d+)([a-z])\.\s+(.+?)(?:\s*\(|$)', 'sub_no_dot'),
-            # Nested items
-            (r'^(\d+)\.?([a-z])\.?(\d+)\.\s+(.+?)(?:\s*\(|$)', 'nested'),
-            # Items in parentheses
-            (r'^\((\d+)\)\s+(.+?)(?:\s*\(|$)', 'paren'),
-            # Letter items
-            (r'^([A-Z])\.\s+(.+?)(?:\s*\(|$)', 'letter'),
-            # Items with just numbers
-            (r'^(\d+)\.\s*$', 'number_only'),
-            (r'^(\d+)([a-z])\.\s*$', 'sub_number_only'),
-            # Special patterns for certain fields
-            (r'^(A-Number|USCIS.*Number|I-94.*Number)\s*[:\.]?\s*(.*)$', 'special_field'),
-        ]
-        
-        for pattern, pattern_type in patterns:
-            match = re.match(pattern, text)
-            if match:
-                item_number, label = self._parse_pattern_match(match, pattern_type, all_blocks, block_idx)
-                
-                if item_number and label:
-                    # Extract context
-                    context = self._extract_field_context(all_blocks, block_idx)
-                    
-                    field = FieldNode(
-                        item_number=item_number,
-                        label=label,
-                        page=page_num,
-                        extraction_method=f"pattern_{pattern_type}",
-                        raw_text=text,
-                        context=context,
-                        bbox=tuple(block['bbox'])
-                    )
-                    
-                    return field
-        
-        return None
-    
-    def _parse_pattern_match(self, match, pattern_type: str, all_blocks: List[Dict], 
-                           block_idx: int) -> Tuple[str, str]:
-        """Parse pattern match to extract item number and label"""
-        if pattern_type == 'main':
-            return match.group(1), match.group(2).strip()
-        
-        elif pattern_type in ['sub_dot', 'sub_no_dot']:
-            item_number = match.group(1) + match.group(2)
-            label = match.group(3).strip() if match.lastindex >= 3 else ""
-            
-            # Look ahead for label if not found
-            if not label and block_idx + 1 < len(all_blocks):
-                next_text = all_blocks[block_idx + 1]['text'].strip()
-                if not re.match(r'^\d+[a-z]?\d*\.', next_text):
-                    label = next_text
-            
-            return item_number, label
-        
-        elif pattern_type == 'nested':
-            item_number = match.group(1) + match.group(2) + match.group(3)
-            label = match.group(4).strip()
-            return item_number, label
-        
-        elif pattern_type == 'paren':
-            return match.group(1), match.group(2).strip()
-        
-        elif pattern_type == 'letter':
-            return match.group(1), match.group(2).strip()
-        
-        elif pattern_type in ['number_only', 'sub_number_only']:
-            if pattern_type == 'number_only':
-                item_number = match.group(1)
-            else:
-                item_number = match.group(1) + match.group(2)
-            
-            # Look ahead for label
-            if block_idx + 1 < len(all_blocks):
-                next_text = all_blocks[block_idx + 1]['text'].strip()
-                if not re.match(r'^\d+[a-z]?\d*\.', next_text):
-                    return item_number, next_text
-            
-            return "", ""
-        
-        elif pattern_type == 'special_field':
-            # Special handling for fields like A-Number
-            field_name = match.group(1)
-            # Generate a unique item number
-            item_number = f"S{abs(hash(field_name)) % 1000}"
-            return item_number, field_name
-        
-        return "", ""
-    
-    def _extract_field_context(self, blocks: List[Dict], block_idx: int) -> str:
-        """Extract surrounding context for a field"""
-        context_blocks = []
-        
-        # Get previous block
-        if block_idx > 0:
-            context_blocks.append(blocks[block_idx - 1]['text'])
-        
-        # Get next 2 blocks
-        for i in range(block_idx + 1, min(block_idx + 3, len(blocks))):
-            context_blocks.append(blocks[i]['text'])
-        
-        return " | ".join(context_blocks)
-    
-    def _extract_checkbox_options_enhanced(self, blocks: List[Dict], start_idx: int) -> List[CheckboxOption]:
-        """Enhanced checkbox extraction"""
-        options = []
-        
-        for i in range(start_idx, min(start_idx + 15, len(blocks))):
-            block = blocks[i]
-            text = block['text'].strip()
-            
-            # Stop if we hit a new field
-            if re.match(r'^\d+[a-z]?\d*\.', text):
-                break
-            
-            # Enhanced checkbox patterns
-            checkbox_patterns = [
-                (r'^[□☐]\s*(.+)', False),  # Empty checkbox
-                (r'^[☑☒]\s*(.+)', True),   # Checked checkbox
-                (r'^\[\s*\]\s*(.+)', False),  # Square brackets empty
-                (r'^\[X\]\s*(.+)', True),     # Square brackets checked
-                (r'^\(\s*\)\s*(.+)', False),  # Parentheses empty
-                (r'^\(X\)\s*(.+)', True),     # Parentheses checked
-                (r'^○\s*(.+)', False),        # Circle empty
-                (r'^●\s*(.+)', True),         # Circle filled
-            ]
-            
-            for pattern, is_selected in checkbox_patterns:
-                match = re.match(pattern, text)
-                if match:
-                    options.append(CheckboxOption(
-                        text=match.group(1).strip(),
-                        is_selected=is_selected,
-                        position=(block['bbox'][0], block['bbox'][1]),
-                        confidence=0.9
-                    ))
-                    break
-            else:
-                # Check if it's an indented option
-                if block['bbox'][0] > blocks[start_idx - 1]['bbox'][0] + 20:
-                    if len(text) < 100 and not text.endswith(':'):
-                        options.append(CheckboxOption(
-                            text=text,
-                            is_selected=False,
-                            position=(block['bbox'][0], block['bbox'][1]),
-                            confidence=0.7
-                        ))
-        
-        return options
     
     def _post_process_extraction(self, result: FormExtractionResult):
         """Post-process extraction results"""
@@ -1465,7 +1534,7 @@ class SmartValidationAgent(BaseAgent):
                 'critical': False
             },
             'field_types': {
-                'min_typed': 0.7,  # 70% of fields should have identified types
+                'min_typed': 0.7,
                 'weight': 1.0,
                 'critical': False
             }
@@ -2242,8 +2311,179 @@ class IntelligentMappingAgent(BaseAgent):
                         field.validation_errors.append(f"Value must be one of: {', '.join(field_info['values'])}")
                         field.is_valid = False
 
-# Continue with the rest of the code (UI functions and main application)...
-# [The rest of the code continues as in the original, starting from display_enhanced_form_parts function]
+# ===== ENHANCED MASTER COORDINATOR =====
+class EnhancedMasterCoordinator(BaseAgent):
+    """Enhanced coordinator with full pipeline"""
+    
+    def __init__(self):
+        super().__init__(
+            "Enhanced Master Coordinator",
+            AgentRole.KNOWLEDGE,
+            "Orchestrates the entire extraction pipeline"
+        )
+        # Use the FIXED extraction agent
+        self.agents = {
+            'extractor': FixedEnhancedExtractionAgent(),
+            'validator': SmartValidationAgent(),
+            'mapper': IntelligentMappingAgent()
+        }
+        self.max_iterations = 3
+    
+    def execute(self, pdf_file, manual_mappings: Dict[str, str] = None) -> Dict[str, Any]:
+        """Execute enhanced pipeline"""
+        self.status = "active"
+        self.log("🚀 Starting enhanced agentic form processing pipeline...", "info")
+        
+        try:
+            start_time = time.time()
+            
+            # Phase 1: Extraction with KB
+            self.log("\n📊 Phase 1: Enhanced Extraction", "info")
+            best_result = None
+            best_score = 0.0
+            
+            for iteration in range(self.max_iterations):
+                self.log(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}", "info")
+                
+                # Extract
+                result = self.agents['extractor'].execute(pdf_file)
+                
+                if not result:
+                    self.log("Extraction failed", "error")
+                    break
+                
+                # Validate
+                is_valid, score, validation_results, corrected_result = self.agents['validator'].execute(result)
+                result = corrected_result
+                result.extraction_iterations = iteration + 1
+                
+                if score > best_score:
+                    best_score = score
+                    best_result = copy.deepcopy(result)
+                
+                if is_valid and score >= 0.85:
+                    self.log(f"✨ Extraction successful with {score:.0%} confidence!", "success")
+                    break
+                
+                if iteration < self.max_iterations - 1:
+                    self.log(f"Current score {score:.0%} - attempting to improve...", "warning")
+            
+            if not best_result:
+                self.log("Pipeline failed: No valid extraction", "error")
+                return None
+            
+            # Phase 2: Intelligent Mapping
+            self.log("\n🔗 Phase 2: Intelligent Database Mapping", "info")
+            mapped_result = self.agents['mapper'].execute(best_result, manual_mappings)
+            
+            # Phase 3: Prepare comprehensive output
+            output = self._prepare_enhanced_output(mapped_result)
+            
+            # Calculate final metrics
+            end_time = time.time()
+            total_time = end_time - start_time
+            
+            self.log(f"\n✅ Pipeline completed in {total_time:.2f}s!", "success")
+            self.log(f"📊 Results: {mapped_result.total_fields} fields, "
+                    f"{len(mapped_result.field_mappings)} mapped, "
+                    f"{len(mapped_result.questionnaire_fields)} in questionnaire", "success")
+            
+            # Store in session
+            if hasattr(st, 'session_state'):
+                st.session_state.extraction_result = mapped_result
+                st.session_state.pipeline_output = output
+            
+            return output
+            
+        except Exception as e:
+            self.log(f"❌ Pipeline failed: {str(e)}", "error", traceback.format_exc())
+            raise
+    
+    def _prepare_enhanced_output(self, result: FormExtractionResult) -> Dict[str, Any]:
+        """Prepare enhanced output with all information"""
+        parts_data = {}
+        
+        for part_num, part in result.parts.items():
+            part_fields = []
+            
+            # Process fields with full information
+            for root_field in sorted(part.root_fields, key=lambda f: self._parse_item_number(f.item_number)):
+                field_data = self._field_to_enhanced_dict(root_field)
+                part_fields.append(field_data)
+            
+            # Get validation report
+            validation_report = part.get_validation_report()
+            
+            parts_data[f"part_{part_num}"] = {
+                'number': part_num,
+                'title': part.part_title,
+                'page_range': f"{part.start_page}-{part.end_page}",
+                'fields': part_fields,
+                'total_fields': len(part.get_all_fields_flat()),
+                'validation': validation_report
+            }
+        
+        return {
+            'form_info': {
+                'number': result.form_number,
+                'title': result.form_title,
+                'total_fields': result.total_fields,
+                'confidence_score': result.confidence_score,
+                'extraction_iterations': result.extraction_iterations,
+                'extraction_time': result.extraction_time
+            },
+            'parts': parts_data,
+            'mappings': {
+                'mapped': result.field_mappings,
+                'manual': result.manual_mappings,
+                'suggested': result.suggested_mappings,
+                'questionnaire': result.questionnaire_fields
+            },
+            'statistics': {
+                'total_parts': len(result.parts),
+                'total_fields': result.total_fields,
+                'mapped_fields': len(result.field_mappings),
+                'questionnaire_fields': len(result.questionnaire_fields),
+                'confidence_score': result.confidence_score,
+                'valid_fields': sum(1 for p in result.parts.values() 
+                                  for f in p.get_all_fields_flat() if f.is_valid)
+            },
+            'knowledge_base': {
+                'form_matched': result.form_number in FormKnowledgeBase().form_structures,
+                'kb_suggestions': len(result.kb_suggestions)
+            }
+        }
+    
+    def _field_to_enhanced_dict(self, field: FieldNode) -> Dict:
+        """Convert field to enhanced dictionary"""
+        data = field.to_dict()
+        
+        # Add children recursively
+        if field.children:
+            data['children'] = []
+            for child in sorted(field.children, key=lambda f: self._parse_item_number(f.item_number)):
+                data['children'].append(self._field_to_enhanced_dict(child))
+        
+        return data
+    
+    def _parse_item_number(self, item_num: str) -> Tuple:
+        """Parse item number for sorting"""
+        # Handle manual fields
+        if item_num.startswith('M'):
+            return (999, '', int(item_num[1:]))
+        
+        # Handle special fields
+        if item_num.startswith('S'):
+            return (998, '', int(item_num[1:]))
+        
+        # Regular parsing
+        match = re.match(r'^(\d+)([a-z]?)(\d*)$', item_num)
+        if match:
+            main = int(match.group(1))
+            sub = match.group(2) or ''
+            nested = int(match.group(3)) if match.group(3) else 0
+            return (main, sub, nested)
+        return (999, '', 0)
 
 # ===== UI HELPER FUNCTIONS =====
 def display_enhanced_form_parts(result: FormExtractionResult):
@@ -2870,185 +3110,124 @@ def generate_questionnaire_text(result: FormExtractionResult, fields: List[Field
     
     return "\n".join(lines)
 
-# ===== ENHANCED MASTER COORDINATOR =====
-class EnhancedMasterCoordinator(BaseAgent):
-    """Enhanced coordinator with full pipeline"""
+def debug_extraction_results(result: FormExtractionResult):
+    """Debug function to analyze extraction results"""
+    print(f"\n=== EXTRACTION DEBUG ===")
+    print(f"Form: {result.form_number} - {result.form_title}")
+    print(f"Total fields extracted: {result.total_fields}")
+    print(f"Parts found: {len(result.parts)}")
     
-    def __init__(self):
-        super().__init__(
-            "Enhanced Master Coordinator",
-            AgentRole.KNOWLEDGE,
-            "Orchestrates the entire extraction pipeline"
-        )
-        self.agents = {
-            'extractor': EnhancedExtractionAgent(),
-            'validator': SmartValidationAgent(),
-            'mapper': IntelligentMappingAgent()
-        }
-        self.max_iterations = 3
+    for part_num in sorted(result.parts.keys()):
+        part = result.parts[part_num]
+        print(f"\n--- Part {part_num}: {part.part_title} ---")
+        print(f"Pages: {part.start_page}-{part.end_page}")
+        print(f"Total fields in part: {len(part.get_all_fields_flat())}")
+        
+        # Show field distribution
+        field_numbers = defaultdict(int)
+        for field in part.get_all_fields_flat():
+            # Count main vs sub fields
+            if re.match(r'^\d+, field.item_number):
+                field_numbers['main'] += 1
+            elif re.match(r'^\d+[a-z], field.item_number):
+                field_numbers['sub_letter'] += 1
+            elif re.match(r'^\d+[a-z]\d+, field.item_number):
+                field_numbers['nested'] += 1
+            else:
+                field_numbers['other'] += 1
+        
+        print(f"Field distribution: {dict(field_numbers)}")
+        
+        # Show first few fields
+        fields = part.get_all_fields_flat()[:10]
+        print(f"\nFirst {len(fields)} fields:")
+        for field in fields:
+            print(f"  {field.item_number}. {field.label[:50]}{'...' if len(field.label) > 50 else ''}")
+            if field.checkbox_options:
+                print(f"    - Has {len(field.checkbox_options)} checkbox options")
+
+def generate_sql_script(result: FormExtractionResult) -> str:
+    """Generate SQL insert script from extraction results"""
+    sql_lines = []
     
-    def execute(self, pdf_file, manual_mappings: Dict[str, str] = None) -> Dict[str, Any]:
-        """Execute enhanced pipeline"""
-        self.status = "active"
-        self.log("🚀 Starting enhanced agentic form processing pipeline...", "info")
-        
-        try:
-            start_time = time.time()
-            
-            # Phase 1: Extraction with KB
-            self.log("\n📊 Phase 1: Enhanced Extraction", "info")
-            best_result = None
-            best_score = 0.0
-            
-            for iteration in range(self.max_iterations):
-                self.log(f"\n🔄 Iteration {iteration + 1}/{self.max_iterations}", "info")
-                
-                # Extract
-                result = self.agents['extractor'].execute(pdf_file)
-                
-                if not result:
-                    self.log("Extraction failed", "error")
-                    break
-                
-                # Validate
-                is_valid, score, validation_results, corrected_result = self.agents['validator'].execute(result)
-                result = corrected_result
-                result.extraction_iterations = iteration + 1
-                
-                if score > best_score:
-                    best_score = score
-                    best_result = copy.deepcopy(result)
-                
-                if is_valid and score >= 0.85:
-                    self.log(f"✨ Extraction successful with {score:.0%} confidence!", "success")
-                    break
-                
-                if iteration < self.max_iterations - 1:
-                    self.log(f"Current score {score:.0%} - attempting to improve...", "warning")
-            
-            if not best_result:
-                self.log("Pipeline failed: No valid extraction", "error")
-                return None
-            
-            # Phase 2: Intelligent Mapping
-            self.log("\n🔗 Phase 2: Intelligent Database Mapping", "info")
-            mapped_result = self.agents['mapper'].execute(best_result, manual_mappings)
-            
-            # Phase 3: Prepare comprehensive output
-            output = self._prepare_enhanced_output(mapped_result)
-            
-            # Calculate final metrics
-            end_time = time.time()
-            total_time = end_time - start_time
-            
-            self.log(f"\n✅ Pipeline completed in {total_time:.2f}s!", "success")
-            self.log(f"📊 Results: {mapped_result.total_fields} fields, "
-                    f"{len(mapped_result.field_mappings)} mapped, "
-                    f"{len(mapped_result.questionnaire_fields)} in questionnaire", "success")
-            
-            # Store in session
-            if hasattr(st, 'session_state'):
-                st.session_state.extraction_result = mapped_result
-                st.session_state.pipeline_output = output
-            
-            return output
-            
-        except Exception as e:
-            self.log(f"❌ Pipeline failed: {str(e)}", "error", traceback.format_exc())
-            raise
+    # Header
+    sql_lines.append("-- USCIS Form Data Export")
+    sql_lines.append(f"-- Form: {result.form_number} - {result.form_title}")
+    sql_lines.append(f"-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    sql_lines.append("-- ===============================================\n")
     
-    def _prepare_enhanced_output(self, result: FormExtractionResult) -> Dict[str, Any]:
-        """Prepare enhanced output with all information"""
-        parts_data = {}
-        
-        for part_num, part in result.parts.items():
-            part_fields = []
-            
-            # Process fields with full information
-            for root_field in sorted(part.root_fields, key=lambda f: self._parse_item_number(f.item_number)):
-                field_data = self._field_to_enhanced_dict(root_field)
-                part_fields.append(field_data)
-            
-            # Get validation report
-            validation_report = part.get_validation_report()
-            
-            parts_data[f"part_{part_num}"] = {
-                'number': part_num,
-                'title': part.part_title,
-                'page_range': f"{part.start_page}-{part.end_page}",
-                'fields': part_fields,
-                'total_fields': len(part.get_all_fields_flat()),
-                'validation': validation_report
-            }
-        
-        return {
-            'form_info': {
-                'number': result.form_number,
-                'title': result.form_title,
-                'total_fields': result.total_fields,
-                'confidence_score': result.confidence_score,
-                'extraction_iterations': result.extraction_iterations,
-                'extraction_time': result.extraction_time
-            },
-            'parts': parts_data,
-            'mappings': {
-                'mapped': result.field_mappings,
-                'manual': result.manual_mappings,
-                'suggested': result.suggested_mappings,
-                'questionnaire': result.questionnaire_fields
-            },
-            'statistics': {
-                'total_parts': len(result.parts),
-                'total_fields': result.total_fields,
-                'mapped_fields': len(result.field_mappings),
-                'questionnaire_fields': len(result.questionnaire_fields),
-                'confidence_score': result.confidence_score,
-                'valid_fields': sum(1 for p in result.parts.values() 
-                                  for f in p.get_all_fields_flat() if f.is_valid)
-            },
-            'knowledge_base': {
-                'form_matched': result.form_number in FormKnowledgeBase().form_structures,
-                'kb_suggestions': len(result.kb_suggestions)
-            }
-        }
+    # Create tables if needed
+    sql_lines.append("-- Create tables if they don't exist")
+    sql_lines.append("""
+CREATE TABLE IF NOT EXISTS form_submissions (
+    id SERIAL PRIMARY KEY,
+    form_number VARCHAR(50),
+    form_title VARCHAR(200),
+    submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    confidence_score DECIMAL(3,2),
+    status VARCHAR(50) DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS form_fields (
+    id SERIAL PRIMARY KEY,
+    submission_id INTEGER REFERENCES form_submissions(id),
+    field_key VARCHAR(100),
+    item_number VARCHAR(20),
+    label TEXT,
+    value TEXT,
+    field_type VARCHAR(50),
+    part_number INTEGER,
+    page_number INTEGER,
+    mapped_to VARCHAR(100),
+    is_valid BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+""")
     
-    def _field_to_enhanced_dict(self, field: FieldNode) -> Dict:
-        """Convert field to enhanced dictionary"""
-        data = field.to_dict()
-        
-        # Add children recursively
-        if field.children:
-            data['children'] = []
-            for child in sorted(field.children, key=lambda f: self._parse_item_number(f.item_number)):
-                data['children'].append(self._field_to_enhanced_dict(child))
-        
-        return data
+    # Insert submission
+    sql_lines.append("\n-- Insert form submission")
+    sql_lines.append(f"""
+INSERT INTO form_submissions (form_number, form_title, confidence_score)
+VALUES ('{result.form_number}', '{result.form_title}', {result.confidence_score:.2f})
+RETURNING id;
+""")
     
-    def _parse_item_number(self, item_num: str) -> Tuple:
-        """Parse item number for sorting"""
-        # Handle manual fields
-        if item_num.startswith('M'):
-            return (999, '', int(item_num[1:]))
-        
-        # Handle special fields
-        if item_num.startswith('S'):
-            return (998, '', int(item_num[1:]))
-        
-        # Regular parsing
-        match = re.match(r'^(\d+)([a-z]?)(\d*)$', item_num)
-        if match:
-            main = int(match.group(1))
-            sub = match.group(2) or ''
-            nested = int(match.group(3)) if match.group(3) else 0
-            return (main, sub, nested)
-        return (999, '', 0)
+    sql_lines.append("\n-- Assuming the submission ID is 1 (replace with actual ID)")
+    sql_lines.append("SET @submission_id = 1;\n")
+    
+    # Insert fields
+    sql_lines.append("-- Insert form fields")
+    
+    for part in result.parts.values():
+        for field in part.get_all_fields_flat():
+            # Escape single quotes in values
+            value = field.value.replace("'", "''") if field.value else ''
+            label = field.label.replace("'", "''")
+            mapped_to = field.mapped_to.replace("'", "''") if field.mapped_to else 'NULL'
+            
+            sql_lines.append(f"""
+INSERT INTO form_fields (submission_id, field_key, item_number, label, value, 
+                        field_type, part_number, page_number, mapped_to, is_valid)
+VALUES (@submission_id, '{field.key}', '{field.item_number}', '{label}', '{value}',
+        '{field.field_type.value}', {field.part_number}, {field.page}, 
+        {f"'{mapped_to}'" if mapped_to != 'NULL' else 'NULL'}, {str(field.is_valid).upper()});""")
+    
+    # Add indexes
+    sql_lines.append("\n-- Create indexes for better performance")
+    sql_lines.append("""
+CREATE INDEX IF NOT EXISTS idx_form_fields_submission_id ON form_fields(submission_id);
+CREATE INDEX IF NOT EXISTS idx_form_fields_mapped_to ON form_fields(mapped_to);
+CREATE INDEX IF NOT EXISTS idx_form_fields_field_type ON form_fields(field_type);
+""")
+    
+    return "\n".join(sql_lines)
 
 # ===== MAIN APPLICATION =====
 def main():
     st.markdown(
         '<div class="main-header">'
         '<h1>🤖 Enhanced Agentic USCIS Form Reader</h1>'
-        '<p>Advanced extraction with Knowledge Base, Smart Validation, and Manual Controls</p>'
+        '<p>Complete extraction with all parts and fields (1, 1a, 1b, 1c, etc.)</p>'
         '</div>', 
         unsafe_allow_html=True
     )
@@ -3068,33 +3247,19 @@ def main():
         show_agent_logs = st.checkbox("Show Agent Activity", value=True)
         auto_map = st.checkbox("Auto-map fields", value=True)
         use_kb = st.checkbox("Use Knowledge Base", value=True)
+        show_debug = st.checkbox("Show Debug Info", value=False)
         
         st.markdown("---")
-        st.markdown("## 📊 Enhanced Features")
+        st.markdown("## 📊 Features Status")
         st.markdown("""
-        **Knowledge Base Integration:**
-        - ✅ Form structure recognition
-        - ✅ Field type suggestions
-        - ✅ Validation rules
-        - ✅ Common values
-        
-        **Smart Validation:**
-        - ✅ Self-correction
-        - ✅ Field-level validation
-        - ✅ Required field detection
-        - ✅ Pattern matching
-        
-        **Manual Controls:**
-        - ✅ Dropdown mapping for all DB fields
-        - ✅ Move to questionnaire
-        - ✅ Manual field addition
-        - ✅ Bulk operations
-        
-        **Enhanced Extraction:**
-        - ✅ Part 1 detection fixed
-        - ✅ Context awareness
-        - ✅ Multi-column support
-        - ✅ Checkbox detection
+        ✅ **Fixed in this version:**
+        - All parts detected (1, 2, 3, etc.)
+        - All field formats (1, 1a, 1b, 1c, 1a1, etc.)
+        - Hierarchical structure preserved
+        - Knowledge Base integration
+        - Smart validation
+        - Database mapping
+        - Questionnaire support
         """)
         
         # KB Status
@@ -3192,6 +3357,14 @@ def main():
                                         "KB Match",
                                         "❌ No"
                                     )
+        
+        # Debug info
+        if show_debug and st.session_state.extraction_result:
+            with st.expander("🐛 Extraction Debug Info"):
+                debug_info = io.StringIO()
+                with contextlib.redirect_stdout(debug_info):
+                    debug_extraction_results(st.session_state.extraction_result)
+                st.code(debug_info.getvalue())
     
     # Tab 2: Review & Edit Fields
     with tabs[1]:
@@ -3317,7 +3490,7 @@ def main():
             
             with col1:
                 # JSON export
-                json_str = json.dumps(output, indent=2)
+                json_str = json.dumps(output, indent=2, default=str)
                 st.download_button(
                     "📦 Download JSON",
                     json_str,
@@ -3453,82 +3626,6 @@ def main():
                            language='sql')
         else:
             st.info("No results to export. Please process a form first.")
-
-def generate_sql_script(result: FormExtractionResult) -> str:
-    """Generate SQL insert script from extraction results"""
-    sql_lines = []
-    
-    # Header
-    sql_lines.append("-- USCIS Form Data Export")
-    sql_lines.append(f"-- Form: {result.form_number} - {result.form_title}")
-    sql_lines.append(f"-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    sql_lines.append("-- ===============================================\n")
-    
-    # Create tables if needed
-    sql_lines.append("-- Create tables if they don't exist")
-    sql_lines.append("""
-CREATE TABLE IF NOT EXISTS form_submissions (
-    id SERIAL PRIMARY KEY,
-    form_number VARCHAR(50),
-    form_title VARCHAR(200),
-    submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    confidence_score DECIMAL(3,2),
-    status VARCHAR(50) DEFAULT 'pending'
-);
-
-CREATE TABLE IF NOT EXISTS form_fields (
-    id SERIAL PRIMARY KEY,
-    submission_id INTEGER REFERENCES form_submissions(id),
-    field_key VARCHAR(100),
-    item_number VARCHAR(20),
-    label TEXT,
-    value TEXT,
-    field_type VARCHAR(50),
-    part_number INTEGER,
-    page_number INTEGER,
-    mapped_to VARCHAR(100),
-    is_valid BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-""")
-    
-    # Insert submission
-    sql_lines.append("\n-- Insert form submission")
-    sql_lines.append(f"""
-INSERT INTO form_submissions (form_number, form_title, confidence_score)
-VALUES ('{result.form_number}', '{result.form_title}', {result.confidence_score:.2f})
-RETURNING id;
-""")
-    
-    sql_lines.append("\n-- Assuming the submission ID is 1 (replace with actual ID)")
-    sql_lines.append("SET @submission_id = 1;\n")
-    
-    # Insert fields
-    sql_lines.append("-- Insert form fields")
-    
-    for part in result.parts.values():
-        for field in part.get_all_fields_flat():
-            # Escape single quotes in values
-            value = field.value.replace("'", "''") if field.value else ''
-            label = field.label.replace("'", "''")
-            mapped_to = field.mapped_to.replace("'", "''") if field.mapped_to else 'NULL'
-            
-            sql_lines.append(f"""
-INSERT INTO form_fields (submission_id, field_key, item_number, label, value, 
-                        field_type, part_number, page_number, mapped_to, is_valid)
-VALUES (@submission_id, '{field.key}', '{field.item_number}', '{label}', '{value}',
-        '{field.field_type.value}', {field.part_number}, {field.page}, 
-        {f"'{mapped_to}'" if mapped_to != 'NULL' else 'NULL'}, {str(field.is_valid).upper()});""")
-    
-    # Add indexes
-    sql_lines.append("\n-- Create indexes for better performance")
-    sql_lines.append("""
-CREATE INDEX IF NOT EXISTS idx_form_fields_submission_id ON form_fields(submission_id);
-CREATE INDEX IF NOT EXISTS idx_form_fields_mapped_to ON form_fields(mapped_to);
-CREATE INDEX IF NOT EXISTS idx_form_fields_field_type ON form_fields(field_type);
-""")
-    
-    return "\n".join(sql_lines)
 
 # ===== RUN APPLICATION =====
 if __name__ == "__main__":
