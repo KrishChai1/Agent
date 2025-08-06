@@ -3127,7 +3127,7 @@ def debug_extraction_results(result: FormExtractionResult):
         field_numbers = defaultdict(int)
         for field in part.get_all_fields_flat():
             # Count main vs sub fields
-            if re.match(r'^\d+, field.item_number):
+            if re.match(r'^\d+$', field.item_number):
                 field_numbers['main'] += 1
             elif re.match(r'^\d+[a-z], field.item_number):
                 field_numbers['sub_letter'] += 1
@@ -3641,3 +3641,4 @@ if __name__ == "__main__":
     
     # Run main application
     main()
+
