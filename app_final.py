@@ -3,6 +3,7 @@ import os
 import re
 import json
 import fitz  # PyMuPDF
+import zipfile
 import streamlit as st
 from collections import defaultdict
 from typing import Dict, List, Any, Tuple
@@ -11,7 +12,6 @@ from typing import Dict, List, Any, Tuple
 st.set_page_config(page_title="USCIS Form Reader & Mapper", layout="wide")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # optional
 
-# Built-in auto-split patterns (overridable by uploaded JSON)
 DEFAULT_PATTERNS = [
     {"match": ["Family Name", "Given Name", "Middle Name"], "subs": ["a", "b", "c"]},
     {"match": ["Street Number and Name", "Apt. Ste. Flr.", "City or Town", "State", "ZIP Code"], "subs": ["a", "b", "c", "d", "e"]},
@@ -19,20 +19,10 @@ DEFAULT_PATTERNS = [
     {"match": ["Daytime Telephone", "Mobile Telephone", "Email Address"], "subs": ["a", "b", "c"]},
 ]
 
-# Force-include these filenames if present (exact names you shared)
 FORCE_INCLUDE_FILES = [
-    "Attorney object.txt",
-    "Beneficiary.txt",
-    "Case Object.txt",
-    "Customer object.txt",
-    "Lawfirm Object.txt",
-    "LCA Object.txt",
-    "Petitioner.txt",
-    "empty_json_structures.json",
-    "g28.json",
-    "i90-form.json",
-    "i129-sec1.2.form.json",
-    "G28.ts",
+    "Attorney object.txt","Beneficiary.txt","Case Object.txt","Customer object.txt",
+    "Lawfirm Object.txt","LCA Object.txt","Petitioner.txt","empty_json_structures.json",
+    "g28.json","i90-form.json","i129-sec1.2.form.json","G28.ts",
 ]
 
 # ================= REGEX / HELPERS =================
@@ -45,9 +35,7 @@ TS_TYPE_OBJ_RX = re.compile(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', re.DOTALL)
 TS_CONST_OBJ_RX = re.compile(r'export\s+const\s+\w+\s*=\s*{(.*?)}\s*(?:as\s+const)?', re.DOTALL)
 TS_FIELD_KEY_RX = re.compile(r'(\w+)\??\s*:')
 
-# paths like a.b.c or a[*]
 LINE_PATH_RX = re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*(?:\[\*\])?')
-# keys like key: value
 KEY_COLON_RX = re.compile(r'\b([A-Za-z_][\w\.]*)\s*:')
 
 ALLOWED_EXTS = (".json", ".txt", ".ts", ".tsx")
@@ -123,16 +111,15 @@ def extract_field_names_from_ts(text: str) -> List[str]:
             seen.add(n); out.append(n)
     return out
 
-def extract_field_names(file) -> List[str]:
-    raw = file.getbuffer()
-    name = file.name.lower()
-    if name.endswith((".json", ".txt")):
+def extract_field_names_from_uploadlike(name: str, raw: bytes) -> List[str]:
+    lname = name.lower()
+    if lname.endswith((".json", ".txt")):
         obj, err = try_load_json_bytes(raw)
         if obj:
             return [k for k in flatten_keys(obj) if k]
         text = _decode_best(raw)
         return extract_field_names_from_text_lines(text)
-    elif name.endswith((".ts", ".tsx")):
+    elif lname.endswith((".ts", ".tsx")):
         text = _decode_best(raw)
         return extract_field_names_from_ts(text)
     return []
@@ -237,12 +224,15 @@ def auto_split_fields(merged_parts, patterns):
                 new_parts[part].append(field)
     return new_parts
 
-# ================= UI =================
+# ================= UI: Sidebar Inputs =================
 st.sidebar.header("Upload Inputs")
 pdf_files = st.sidebar.file_uploader("USCIS PDF(s)", type=["pdf"], accept_multiple_files=True)
 schema_files = st.sidebar.file_uploader("Extra DB Objects/Schemas", type=["json","ts","tsx","txt"], accept_multiple_files=True)
+zip_db = st.sidebar.file_uploader("Upload ZIP of DB objects (json/txt/ts inside)", type=["zip"])
 patterns_file = st.sidebar.file_uploader("Auto-split Patterns JSON (optional)", type=["json"])
-show_split_preview = st.sidebar.checkbox("Show Auto-split Preview", value=True)
+
+st.sidebar.header("DB Catalog")
+manual_db_text = st.sidebar.text_area("Paste DB fields (one per line)", height=150, placeholder="Attorney.name.first\nBeneficiary.address.city\n...")
 
 # Load patterns (optional override)
 patterns = DEFAULT_PATTERNS
@@ -259,40 +249,29 @@ if pdf_files:
     merged = merge_parts(part_maps)
     merged = auto_split_fields(merged, patterns)
 
-# ================= DB Targets: auto-load + uploads (force-include) =================
+# ================= DB Targets: build from (A) forced files (B) autoscan (C) ZIP (D) uploads (E) pasted =================
 scan_dir = "/mnt/data" if os.path.exists("/mnt/data") else os.getcwd()
 loaded_db_sources = []
-all_fields = []
+all_fields: List[str] = []
 
-def _add_upload_like_bytes(name: str, raw: bytes):
-    fake_upload = type("UploadedFile", (), {
-        "name": name,
-        "getbuffer": lambda raw=raw: raw
-    })
-    fields = extract_field_names(fake_upload)
+def add_source(name: str, raw: bytes, label: str):
+    fields = extract_field_names_from_uploadlike(name, raw)
     if fields:
         all_fields.extend(fields)
-        loaded_db_sources.append((name, len(fields)))
+        loaded_db_sources.append((label, name, len(fields)))
 
-def _try_read(path: str) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
-
-# 1) Force-include your known files from scan_dir if present
+# (A) force-include known filenames
 for fname in FORCE_INCLUDE_FILES:
     p = os.path.join(scan_dir, fname)
     if os.path.exists(p):
         try:
-            raw = _try_read(p)
-            # filter obvious junk only for .txt
-            if fname.lower().endswith(".txt"):
-                txt = _decode_best(raw)
-                # accept even if not strictly "structured" — you asked to include them
-            _add_upload_like_bytes(fname, raw)
+            with open(p, "rb") as f:
+                raw = f.read()
+            add_source(fname, raw, "forced")
         except Exception as e:
             st.warning(f"Could not read {fname}: {e}")
 
-# 2) Auto-scan rest of the directory for additional JSON/TS files (ignore common junk)
+# (B) autoscan dir (filter junk)
 try:
     for fname in os.listdir(scan_dir):
         if fname in FORCE_INCLUDE_FILES:
@@ -303,28 +282,43 @@ try:
             continue
         path = os.path.join(scan_dir, fname)
         try:
-            raw = _try_read(path)
-            # For .txt, skip obvious dependency lists (very defensive):
-            if fname.lower().endswith(".txt"):
-                txt = _decode_best(raw)
-                if re.search(r'(^|\s)(pillow|numpy|pandas|streamlit|fastapi|uvicorn|scikit|torch|tensorflow|langchain)\b', txt, re.I):
-                    # looks like requirements — skip
-                    continue
-            _add_upload_like_bytes(fname, raw)
+            with open(path, "rb") as f:
+                raw = f.read()
+            add_source(fname, raw, "scan")
         except Exception as e:
             st.warning(f"Could not read {fname}: {e}")
 except Exception as e:
     st.warning(f"Could not scan {scan_dir}: {e}")
 
-# 3) Merge any manual uploads
+# (C) ZIP of DB objects
+if zip_db is not None:
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_db.read()))
+        for info in zf.infolist():
+            name = info.filename
+            if name.lower().endswith(ALLOWED_EXTS) and not IGNORE_FILE_RX.match(os.path.basename(name)):
+                raw = zf.read(info)
+                add_source(os.path.basename(name), raw, "zip")
+    except Exception as e:
+        st.sidebar.error(f"ZIP parse failed: {e}")
+
+# (D) Uploaded extra schema files
 if schema_files:
     for sf in schema_files:
-        fields = extract_field_names(sf)
-        if fields:
-            all_fields.extend(fields)
-            loaded_db_sources.append((sf.name, len(fields)))
+        add_source(sf.name, sf.getbuffer(), "upload")
 
-# Dedup & sort
+# (E) Manual pasted DB fields
+manual_lines = []
+if manual_db_text.strip():
+    for ln in manual_db_text.splitlines():
+        s = ln.strip()
+        if s:
+            manual_lines.append(s)
+if manual_lines:
+    all_fields.extend(manual_lines)
+    loaded_db_sources.append(("manual", "pasted_fields", len(manual_lines)))
+
+# Dedup + sort
 db_targets = ["— (unmapped) —"] + sorted(set(all_fields))
 
 # ================= STATE & TABS =================
@@ -335,11 +329,11 @@ tab_map, tab_dbdebug, tab_export = st.tabs(["📄 Parts & Mapping", "🧭 DB/Sch
 
 with tab_dbdebug:
     st.write(f"Scanning directory: `{scan_dir}`")
-    if not loaded_db_sources:
-        st.warning("No DB objects discovered. Make sure your files are in this folder or upload them in the sidebar.")
+    if not loaded_db_sources and not manual_lines:
+        st.warning("No DB objects discovered. Use the ZIP uploader or paste DB fields in the sidebar.")
     else:
-        for name, cnt in loaded_db_sources:
-            st.write(f"- **{name}** → {cnt} fields")
+        for src, name, cnt in loaded_db_sources:
+            st.write(f"- **{src}** · {name} → {cnt} fields")
     if db_targets and len(db_targets) > 1:
         st.success(f"Total unique DB fields loaded: {len(db_targets)-1}")
         st.caption("Sample fields:")
