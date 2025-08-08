@@ -595,7 +595,7 @@ def export_to_csv(result: ExtractionResult) -> str:
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>📋 USCIS Form Reader</h1>'
+        '<h1>📋 USCIS Form  k Reader</h1>'
         '<p>Extract filled data from USCIS PDF forms</p>'
         '</div>', 
         unsafe_allow_html=True
@@ -714,3 +714,4 @@ if __name__ == "__main__":
         st.stop()
     
     main()
+
