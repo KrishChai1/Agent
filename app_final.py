@@ -186,16 +186,20 @@ if pdf_files:
     merged = auto_split_fields(merged, patterns)
 
 # DB Targets: auto-load + uploads
+scan_dir = "/mnt/data" if os.path.exists("/mnt/data") else os.getcwd()
 all_fields = []
-for fname in os.listdir("/mnt/data"):
+for fname in os.listdir(scan_dir):
     if fname.lower().endswith((".json", ".txt", ".ts", ".tsx")):
-        path = os.path.join("/mnt/data", fname)
-        with open(path, "rb") as f:
-            fake_upload = type("UploadedFile", (), {
-                "name": fname,
-                "getbuffer": lambda f=f: f.read()
-            })
-            all_fields.extend(extract_field_names(fake_upload))
+        path = os.path.join(scan_dir, fname)
+        try:
+            with open(path, "rb") as f:
+                fake_upload = type("UploadedFile", (), {
+                    "name": fname,
+                    "getbuffer": lambda f=f: f.read()
+                })
+                all_fields.extend(extract_field_names(fake_upload))
+        except Exception as e:
+            st.warning(f"Could not read {fname}: {e}")
 
 if schema_files:
     for sf in schema_files:
