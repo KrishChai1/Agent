@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Complete Working USCIS Form Reader
+Complete Working a USCIS Form Reader
 Extracts both field labels AND filled values from PDF forms
 """
 
@@ -38,7 +38,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="USCIS Form Reader - Complete Version",
+    page_title="USCIS Form Reader k - Complete Version",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded"
