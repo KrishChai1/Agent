@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Enhanced Agentic USCIS Form Reader - Final Working Version
+Enhanced Agentic USCIS Form Reader - Fixed Version
 Complete extraction with all parts and fields (1, 1a, 1b, 1c, etc.)
+Fixed: Proper part display and manual DB mapping
 """
 
 import os
@@ -126,6 +127,15 @@ st.markdown("""
         color: white;
         font-weight: bold;
     }
+    
+    .field-row {
+        border-bottom: 1px solid #e0e0e0;
+        padding: 0.5rem 0;
+    }
+    
+    .field-row:hover {
+        background: #f5f5f5;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -232,6 +242,19 @@ class FormKnowledgeBase:
                 },
                 "expected_fields": 45,
                 "page_count": 7
+            },
+            "G-28": {
+                "title": "Notice of Entry of Appearance as Attorney or Accredited Representative",
+                "parts": {
+                    1: "Information About Attorney or Accredited Representative",
+                    2: "Information About Client",
+                    3: "Notice of Appearance as Attorney or Accredited Representative",
+                    4: "Client's Consent to Representation and Signature",
+                    5: "Signature of Attorney or Accredited Representative",
+                    6: "Additional Information"
+                },
+                "expected_fields": 50,
+                "page_count": 4
             }
         }
     
@@ -252,7 +275,8 @@ class FormKnowledgeBase:
                     r"Date of Birth",
                     r"Date of Filing",
                     r"Expiration Date",
-                    r"Marriage Date"
+                    r"Marriage Date",
+                    r"Date of Signature"
                 ],
                 "type": FieldType.DATE
             },
@@ -265,6 +289,18 @@ class FormKnowledgeBase:
                     r"Receipt Number"
                 ],
                 "type": FieldType.NUMBER
+            },
+            "address_fields": {
+                "patterns": [
+                    r"Street Number\s+and Name",
+                    r"City or Town",
+                    r"State",
+                    r"ZIP Code",
+                    r"Postal Code",
+                    r"Province",
+                    r"Country"
+                ],
+                "type": FieldType.ADDRESS
             }
         }
     
@@ -436,10 +472,13 @@ class PartStructure:
     
     def _get_parent_number(self, item_number: str) -> Optional[str]:
         """Get parent number from item number"""
+        # Handle various numbering formats
         if re.match(r'^\d+[a-z]$', item_number):
             return item_number[:-1]
         elif re.match(r'^\d+[a-z]\d+$', item_number):
             return re.match(r'^(\d+[a-z])', item_number).group(1)
+        elif re.match(r'^\d+\.\d+$', item_number):
+            return item_number.split('.')[0]
         return None
     
     def get_all_fields_flat(self) -> List[FieldNode]:
@@ -491,6 +530,17 @@ class FormExtractionResult:
             field.mapping_status = MappingStatus.QUESTIONNAIRE
             if field_key not in self.questionnaire_fields:
                 self.questionnaire_fields.append(field_key)
+    
+    def update_mapping(self, field_key: str, target: str):
+        """Update field mapping"""
+        field = self.get_field_by_key(field_key)
+        if field:
+            if target == "questionnaire":
+                self.move_to_questionnaire(field_key)
+            else:
+                self.field_mappings[field_key] = target
+                field.mapped_to = target
+                field.mapping_status = MappingStatus.MANUAL
 
 # ===== BASE AGENT CLASS =====
 class BaseAgent(ABC):
@@ -630,7 +680,7 @@ class ExtractionAgent(BaseAgent):
         return {"number": "Unknown", "title": "Unknown Form"}
     
     def _extract_page_blocks(self, page, page_num: int) -> List[Dict]:
-        """Extract text blocks from page"""
+        """Extract text blocks from page with better handling"""
         blocks = []
         page_dict = page.get_text("dict")
         
@@ -653,14 +703,16 @@ class ExtractionAgent(BaseAgent):
         return blocks
     
     def _find_parts(self, blocks: List[Dict]) -> Dict[int, Dict]:
-        """Find all parts in document"""
+        """Find all parts in document - enhanced detection"""
         parts_info = {}
         
-        # Part patterns
+        # Part patterns - more comprehensive
         part_patterns = [
             r'^Part\s+(\d+)[.:]\s*(.*)$',
+            r'^Part\s+(\d+)\s*[-–—]\s*(.*)$',
             r'^Part\s+(\d+)\s*$',
-            r'^PART\s+(\d+)[.:]\s*(.*)$'
+            r'^PART\s+(\d+)[.:]\s*(.*)$',
+            r'^Part\s+(\d+)\.\s+(.*)$'
         ]
         
         for i, block in enumerate(blocks):
@@ -700,18 +752,20 @@ class ExtractionAgent(BaseAgent):
         return parts_info
     
     def _is_field_start(self, text: str) -> bool:
-        """Check if text is a field start"""
+        """Check if text is a field start - enhanced patterns"""
         patterns = [
             r'^\d+\.\s+\w+',
+            r'^\d+\.\s*[a-z]\.\s+\w+',
             r'^\d+[a-z]\.\s+\w+',
             r'^[A-Z]\.\s+\w+',
-            r'^\(\d+\)\s+\w+'
+            r'^\(\d+\)\s+\w+',
+            r'^\d+\.\s*[a-z]\.\s*\d+\.\s+\w+'  # For 1.a.1. format
         ]
         return any(re.match(p, text) for p in patterns)
     
     def _extract_fields_by_parts(self, blocks: List[Dict], parts_info: Dict[int, Dict], 
                                  result: FormExtractionResult):
-        """Extract fields for each part"""
+        """Extract fields for each part - enhanced extraction"""
         for part_num in sorted(parts_info.keys()):
             part_info = parts_info[part_num]
             
@@ -727,10 +781,10 @@ class ExtractionAgent(BaseAgent):
             start = part_info['start_block']
             end = part_info['end_block']
             
-            self.log(f"📝 Extracting fields for Part {part_num}")
+            self.log(f"📝 Extracting fields for Part {part_num} (blocks {start}-{end})")
             
             i = start
-            while i <= end:
+            while i <= end and i < len(blocks):
                 block = blocks[i]
                 
                 # Skip part headers
@@ -742,7 +796,11 @@ class ExtractionAgent(BaseAgent):
                 field = self._extract_field(blocks, i, end)
                 if field:
                     part.add_field(field)
-                    i += 1
+                    # Skip ahead if we consumed multiple blocks (for checkboxes)
+                    if field.checkbox_options:
+                        i += len(field.checkbox_options) + 1
+                    else:
+                        i += 1
                 else:
                     i += 1
             
@@ -750,61 +808,73 @@ class ExtractionAgent(BaseAgent):
             self.log(f"✅ Part {part_num}: {len(part.get_all_fields_flat())} fields")
     
     def _extract_field(self, blocks: List[Dict], idx: int, end_idx: int) -> Optional[FieldNode]:
-        """Extract field from block"""
+        """Extract field from block - enhanced patterns"""
         if idx >= len(blocks):
             return None
         
         block = blocks[idx]
         text = block['text']
         
-        # Field patterns
+        # Enhanced field patterns to catch more formats
         patterns = [
+            # Most specific first
             (r'^(\d+)\.([a-z])\.(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
             (r'^(\d+)([a-z])(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
             (r'^(\d+)\.([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
             (r'^(\d+)([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
             (r'^(\d+)\.\s+(.+)', lambda m: (m.group(1), m.group(2))),
             (r'^\(([a-z])\)\s+(.+)', lambda m: (m.group(1), m.group(2))),
-            (r'^([A-Z])\.\s+(.+)', lambda m: (m.group(1), m.group(2)))
+            (r'^([A-Z])\.\s+(.+)', lambda m: (m.group(1), m.group(2))),
+            # Additional patterns for various formats
+            (r'^(\d+)-([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
+            (r'^Item\s+(\d+)\.\s+(.+)', lambda m: (m.group(1), m.group(2))),
+            (r'^Question\s+(\d+)\.\s+(.+)', lambda m: (m.group(1), m.group(2)))
         ]
         
         for pattern, parser in patterns:
             match = re.match(pattern, text)
             if match:
-                item_number, label = parser(match)
-                
-                # Create field
-                field = FieldNode(
-                    item_number=item_number,
-                    label=label.strip(),
-                    page=block['page']
-                )
-                
-                # Suggest field type
-                field.field_type, conf = self.knowledge_base.suggest_field_type(label)
-                if conf > 0.7:
-                    field.confidence = ExtractionConfidence.HIGH
-                
-                # Look for checkboxes
-                if field.field_type == FieldType.CHECKBOX:
-                    field.checkbox_options = self._extract_checkboxes(blocks, idx + 1, end_idx)
-                
-                return field
+                try:
+                    item_number, label = parser(match)
+                    
+                    # Create field
+                    field = FieldNode(
+                        item_number=item_number,
+                        label=label.strip(),
+                        page=block['page']
+                    )
+                    
+                    # Suggest field type
+                    field.field_type, conf = self.knowledge_base.suggest_field_type(label)
+                    if conf > 0.7:
+                        field.confidence = ExtractionConfidence.HIGH
+                    
+                    # Look for checkboxes
+                    if field.field_type == FieldType.CHECKBOX or "select" in label.lower():
+                        field.checkbox_options = self._extract_checkboxes(blocks, idx + 1, end_idx)
+                    
+                    return field
+                except Exception as e:
+                    self.log(f"Error parsing field: {e}", "warning")
+                    continue
         
         return None
     
     def _extract_checkboxes(self, blocks: List[Dict], start_idx: int, end_idx: int) -> List[CheckboxOption]:
-        """Extract checkbox options"""
+        """Extract checkbox options - enhanced detection"""
         options = []
         
         patterns = [
             (r'^[□☐]\s*(.+)', False),
-            (r'^[☑☒]\s*(.+)', True),
+            (r'^[☑☒✓]\s*(.+)', True),
             (r'^\[\s*\]\s*(.+)', False),
-            (r'^\[X\]\s*(.+)', True)
+            (r'^\[X\]\s*(.+)', True),
+            (r'^\(\s*\)\s*(.+)', False),
+            (r'^\(X\)\s*(.+)', True),
+            (r'^-\s*(.+)', False),  # Bullet points as options
         ]
         
-        for i in range(start_idx, min(end_idx, start_idx + 10)):
+        for i in range(start_idx, min(end_idx + 1, start_idx + 15)):  # Increased range
             if i >= len(blocks):
                 break
             
@@ -856,11 +926,24 @@ class ValidationAgent(BaseAgent):
         else:
             checks.append(('parts', 0.0, "No parts found"))
         
+        # Check part ordering
+        part_numbers = sorted(result.parts.keys())
+        expected_sequence = list(range(1, len(part_numbers) + 1))
+        if part_numbers == expected_sequence:
+            checks.append(('part_sequence', 1.0, "Parts in correct sequence"))
+        else:
+            checks.append(('part_sequence', 0.5, f"Part sequence: {part_numbers}"))
+        
         # Calculate overall score
         total_score = sum(score for _, score, _ in checks) / len(checks)
         is_valid = total_score >= 0.7
         
         result.confidence_score = total_score
+        
+        # Log validation results
+        for check_name, score, message in checks:
+            level = "success" if score >= 0.8 else "warning" if score >= 0.5 else "error"
+            self.log(f"{message} ({score:.0%})", level)
         
         self.log(f"✅ Validation complete: {total_score:.0%} confidence", "success" if is_valid else "warning")
         
@@ -877,10 +960,13 @@ class MappingAgent(BaseAgent):
     def _init_db_schema(self) -> Dict[str, List[str]]:
         """Initialize database schema"""
         return {
-            "personal_info": ["first_name", "middle_name", "last_name", "date_of_birth", "gender"],
-            "identification": ["alien_number", "uscis_number", "social_security_number", "passport_number"],
-            "contact_info": ["mailing_address", "city", "state", "zip_code", "country", "phone_number", "email_address"],
-            "immigration_info": ["current_status", "last_entry_date", "visa_type", "priority_date"]
+            "personal_info": ["first_name", "middle_name", "last_name", "date_of_birth", "gender", "country_of_birth"],
+            "identification": ["alien_number", "uscis_number", "social_security_number", "passport_number", "receipt_number"],
+            "contact_info": ["mailing_address", "street_number", "street_name", "apt_number", "city", "state", "zip_code", "country", "phone_number", "email_address"],
+            "immigration_info": ["current_status", "last_entry_date", "visa_type", "priority_date", "class_of_admission"],
+            "attorney_info": ["attorney_name", "attorney_bar_number", "attorney_uscis_number", "law_firm_name"],
+            "family_info": ["spouse_name", "spouse_alien_number", "children_count"],
+            "employment_info": ["employer_name", "occupation", "employment_start_date"]
         }
     
     def get_all_db_fields(self) -> List[str]:
@@ -896,20 +982,16 @@ class MappingAgent(BaseAgent):
         self.status = "active"
         self.log("🔗 Starting field mapping...")
         
-        # Apply manual mappings
+        # Apply manual mappings first
         if manual_mappings:
             for field_key, target in manual_mappings.items():
-                if target == "questionnaire":
-                    result.move_to_questionnaire(field_key)
-                else:
-                    result.field_mappings[field_key] = target
-                    field = result.get_field_by_key(field_key)
-                    if field:
-                        field.mapped_to = target
-                        field.mapping_status = MappingStatus.MANUAL
+                result.update_mapping(field_key, target)
+                self.log(f"Applied manual mapping: {field_key} → {target}")
         
         # Auto-map remaining fields
         unmapped_count = 0
+        auto_mapped_count = 0
+        
         for part in result.parts.values():
             for field in part.get_all_fields_flat():
                 if field.key not in result.field_mappings and not field.in_questionnaire:
@@ -923,36 +1005,55 @@ class MappingAgent(BaseAgent):
                             result.field_mappings[field.key] = suggestions[0][0]
                             field.mapped_to = suggestions[0][0]
                             field.mapping_status = MappingStatus.MAPPED
+                            auto_mapped_count += 1
                     else:
                         unmapped_count += 1
         
-        self.log(f"✅ Mapping complete: {len(result.field_mappings)} mapped", "success")
+        self.log(f"✅ Mapping complete: {len(result.field_mappings)} mapped ({auto_mapped_count} auto-mapped)", "success")
         
         return result
     
     def _suggest_mapping(self, field: FieldNode) -> List[Tuple[str, float]]:
-        """Suggest mappings for field"""
+        """Suggest mappings for field - enhanced matching"""
         suggestions = []
         label_lower = field.label.lower()
         
-        # Pattern matching
+        # Enhanced pattern matching
         patterns = {
-            r'family.*name|last.*name': 'personal_info.last_name',
+            r'family.*name|last.*name|surname': 'personal_info.last_name',
             r'given.*name|first.*name': 'personal_info.first_name',
             r'middle.*name': 'personal_info.middle_name',
-            r'date.*birth': 'personal_info.date_of_birth',
-            r'a[\-\s]?number|alien.*number': 'identification.alien_number',
+            r'date.*birth|birth.*date|dob': 'personal_info.date_of_birth',
+            r'a[\-\s]?number|alien.*number|alien.*registration': 'identification.alien_number',
+            r'uscis.*number|uscis.*account': 'identification.uscis_number',
+            r'social.*security|ssn': 'identification.social_security_number',
+            r'receipt.*number': 'identification.receipt_number',
+            r'street.*number.*name|address.*line.*1': 'contact_info.street_number',
+            r'apt|apartment|suite|unit': 'contact_info.apt_number',
             r'city|town': 'contact_info.city',
             r'state|province': 'contact_info.state',
-            r'email': 'contact_info.email_address',
-            r'phone': 'contact_info.phone_number'
+            r'zip.*code|postal.*code': 'contact_info.zip_code',
+            r'country': 'contact_info.country',
+            r'email.*address|e\-mail': 'contact_info.email_address',
+            r'phone.*number|telephone': 'contact_info.phone_number',
+            r'attorney.*name|representative.*name': 'attorney_info.attorney_name',
+            r'bar.*number|state.*bar': 'attorney_info.attorney_bar_number',
+            r'employer|company.*name': 'employment_info.employer_name',
+            r'occupation|job.*title': 'employment_info.occupation',
+            r'current.*status|immigration.*status': 'immigration_info.current_status',
+            r'entry.*date|arrival.*date': 'immigration_info.last_entry_date',
+            r'visa.*type|visa.*class': 'immigration_info.visa_type'
         }
         
         for pattern, db_field in patterns.items():
             if re.search(pattern, label_lower):
                 confidence = 0.8
+                # Boost confidence for exact matches
                 if field.field_type.value in db_field:
                     confidence += 0.1
+                # Boost for item number patterns
+                if field.item_number in ['1a', '1b', '1c'] and 'name' in db_field:
+                    confidence += 0.05
                 suggestions.append((db_field, confidence))
         
         return sorted(suggestions, key=lambda x: x[1], reverse=True)[:3]
@@ -1009,7 +1110,8 @@ class Coordinator(BaseAgent):
         """Prepare output"""
         parts_data = {}
         
-        for part_num, part in result.parts.items():
+        for part_num in sorted(result.parts.keys()):
+            part = result.parts[part_num]
             fields_data = []
             for field in part.root_fields:
                 fields_data.append(self._field_to_dict_recursive(field))
@@ -1052,13 +1154,13 @@ class Coordinator(BaseAgent):
 
 # ===== UI FUNCTIONS =====
 def display_form_parts(result: FormExtractionResult):
-    """Display form parts"""
+    """Display form parts - enhanced display"""
     if not result:
         st.info("No extraction results available")
         return
     
-    # Summary
-    col1, col2, col3, col4 = st.columns(4)
+    # Summary metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Fields", result.total_fields)
     with col2:
@@ -1067,77 +1169,171 @@ def display_form_parts(result: FormExtractionResult):
         st.metric("Confidence", f"{result.confidence_score:.0%}")
     with col4:
         st.metric("Mapped", len(result.field_mappings))
+    with col5:
+        st.metric("In Questionnaire", len(result.questionnaire_fields))
     
-    # Display parts
+    # Add field filter
+    st.markdown("### 🔍 Field Filters")
+    col1, col2 = st.columns(2)
+    with col1:
+        filter_unmapped = st.checkbox("Show only unmapped fields", value=False)
+    with col2:
+        filter_type = st.selectbox("Filter by type", ["All"] + [t.value for t in FieldType])
+    
+    # Display parts in order
     for part_num in sorted(result.parts.keys()):
         part = result.parts[part_num]
         
+        # Count statistics for this part
+        all_fields = part.get_all_fields_flat()
+        mapped_count = sum(1 for f in all_fields if f.mapped_to)
+        questionnaire_count = sum(1 for f in all_fields if f.in_questionnaire)
+        
+        # Part header with statistics
         st.markdown(
             f'<div class="part-header">'
-            f'Part {part_num}: {part.part_title} '
-            f'({len(part.get_all_fields_flat())} fields)'
+            f'Part {part_num}: {part.part_title}<br/>'
+            f'<small>Total: {len(all_fields)} | Mapped: {mapped_count} | Questionnaire: {questionnaire_count}</small>'
             f'</div>',
             unsafe_allow_html=True
         )
         
-        # Display fields
-        for field in part.root_fields:
-            display_field_with_controls(field, 0)
+        # Create expandable section for each part
+        with st.expander(f"View Part {part_num} Fields", expanded=(part_num == 1)):
+            # Display fields with filtering
+            for field in part.root_fields:
+                should_display = True
+                
+                # Apply filters
+                if filter_unmapped and field.mapped_to:
+                    should_display = False
+                if filter_type != "All" and field.field_type.value != filter_type:
+                    should_display = False
+                
+                if should_display:
+                    display_field_with_controls(field, 0, filter_unmapped, filter_type)
 
-def display_field_with_controls(field: FieldNode, level: int = 0):
-    """Display field with controls"""
+def display_field_with_controls(field: FieldNode, level: int = 0, filter_unmapped: bool = False, filter_type: str = "All"):
+    """Display field with controls - enhanced with proper state management"""
     indent = "  " * level
     
+    # Apply filtering to children
+    display_children = []
+    for child in field.children:
+        should_display = True
+        if filter_unmapped and child.mapped_to:
+            should_display = False
+        if filter_type != "All" and child.field_type.value != filter_type:
+            should_display = False
+        if should_display:
+            display_children.append(child)
+    
+    # Field display
     with st.container():
+        st.markdown(f'<div class="field-row">', unsafe_allow_html=True)
         cols = st.columns([3, 2, 3, 1])
         
         with cols[0]:
-            st.markdown(f"{indent}**{field.item_number}.** {field.label}")
+            # Field label with hierarchy
+            label_html = f"{indent}<strong>{field.item_number}.</strong> {field.label}"
+            if field.mapping_status == MappingStatus.QUESTIONNAIRE:
+                label_html = f'<span style="color: #ff6b6b;">{label_html} (Q)</span>'
+            elif field.mapping_status == MappingStatus.MAPPED:
+                label_html = f'<span style="color: #4caf50;">{label_html} ✓</span>'
             
+            st.markdown(label_html, unsafe_allow_html=True)
+            
+            # Display checkbox options if present
             if field.checkbox_options:
                 opt_html = ""
                 for opt in field.checkbox_options:
-                    css_class = "checkbox-selected" if opt.is_selected else ""
-                    opt_html += f'<span class="checkbox-option {css_class}">{opt.text}</span>'
+                    css_class = "checkbox-option checkbox-selected" if opt.is_selected else "checkbox-option"
+                    opt_html += f'<span class="{css_class}">{opt.text}</span>'
                 st.markdown(opt_html, unsafe_allow_html=True)
         
         with cols[1]:
             # Value input
-            key = f"value_{field.key}"
+            value_key = f"value_{field.key}"
             if field.field_type == FieldType.DATE:
-                field.value = st.date_input("", key=key, label_visibility="collapsed")
+                try:
+                    current_value = field.value if field.value else None
+                    new_value = st.date_input("", value=current_value, key=value_key, label_visibility="collapsed")
+                    field.value = str(new_value) if new_value else ""
+                except:
+                    field.value = st.text_input("", value=field.value, key=value_key, label_visibility="collapsed")
             else:
-                field.value = st.text_input("", value=field.value, key=key, label_visibility="collapsed")
+                field.value = st.text_input("", value=field.value or "", key=value_key, label_visibility="collapsed")
         
         with cols[2]:
-            # Mapping dropdown
+            # Mapping dropdown with proper state management
             agent = MappingAgent()
             db_fields = ["-- Unmapped --", "Move to Questionnaire"] + agent.get_all_db_fields()
             
-            current = field.mapped_to or "-- Unmapped --"
+            # Determine current selection
             if field.in_questionnaire:
-                current = "Move to Questionnaire"
+                current_idx = 1  # "Move to Questionnaire"
+            elif field.mapped_to:
+                try:
+                    current_idx = db_fields.index(field.mapped_to)
+                except ValueError:
+                    current_idx = 0
+            else:
+                current_idx = 0
             
-            mapping = st.selectbox("", options=db_fields, index=db_fields.index(current), 
-                                 key=f"map_{field.key}", label_visibility="collapsed")
+            mapping_key = f"map_{field.key}"
+            selected = st.selectbox(
+                "", 
+                options=db_fields, 
+                index=current_idx,
+                key=mapping_key, 
+                label_visibility="collapsed"
+            )
             
-            if mapping != current:
-                if mapping == "Move to Questionnaire":
-                    if 'extraction_result' in st.session_state:
+            # Handle mapping changes
+            if selected != db_fields[current_idx]:
+                if 'extraction_result' in st.session_state:
+                    if selected == "Move to Questionnaire":
                         st.session_state.extraction_result.move_to_questionnaire(field.key)
-                        st.rerun()
-                elif mapping != "-- Unmapped --":
+                    elif selected != "-- Unmapped --":
+                        st.session_state.extraction_result.update_mapping(field.key, selected)
+                    else:
+                        # Remove mapping
+                        if field.key in st.session_state.extraction_result.field_mappings:
+                            del st.session_state.extraction_result.field_mappings[field.key]
+                        field.mapped_to = None
+                        field.mapping_status = MappingStatus.UNMAPPED
+                    
+                    # Update manual mappings
                     if 'manual_mappings' not in st.session_state:
                         st.session_state.manual_mappings = {}
-                    st.session_state.manual_mappings[field.key] = mapping
+                    
+                    if selected == "Move to Questionnaire":
+                        st.session_state.manual_mappings[field.key] = "questionnaire"
+                    elif selected != "-- Unmapped --":
+                        st.session_state.manual_mappings[field.key] = selected
+                    
                     st.rerun()
         
         with cols[3]:
-            st.markdown(f"📝 {field.field_type.value}")
+            # Field type indicator
+            type_icon = {
+                FieldType.TEXT: "📝",
+                FieldType.DATE: "📅",
+                FieldType.NUMBER: "🔢",
+                FieldType.CHECKBOX: "☑️",
+                FieldType.EMAIL: "📧",
+                FieldType.PHONE: "📞",
+                FieldType.ADDRESS: "📍",
+                FieldType.NAME: "👤",
+                FieldType.SIGNATURE: "✍️"
+            }.get(field.field_type, "❓")
+            st.markdown(f"{type_icon} {field.field_type.value}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    # Display children
-    for child in field.children:
-        display_field_with_controls(child, level + 1)
+    # Display children recursively
+    for child in display_children:
+        display_field_with_controls(child, level + 1, filter_unmapped, filter_type)
 
 def generate_sql_script(result: FormExtractionResult) -> str:
     """Generate SQL insert script"""
@@ -1148,26 +1344,96 @@ def generate_sql_script(result: FormExtractionResult) -> str:
     sql_lines.append(f"-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     sql_lines.append("")
     
+    # Create table structure
+    sql_lines.append("-- Create table if not exists")
+    sql_lines.append("CREATE TABLE IF NOT EXISTS form_fields (")
+    sql_lines.append("    id INT AUTO_INCREMENT PRIMARY KEY,")
+    sql_lines.append("    form_number VARCHAR(50),")
+    sql_lines.append("    item_number VARCHAR(20),")
+    sql_lines.append("    label VARCHAR(500),")
+    sql_lines.append("    value TEXT,")
+    sql_lines.append("    field_type VARCHAR(50),")
+    sql_lines.append("    part_number INT,")
+    sql_lines.append("    page_number INT,")
+    sql_lines.append("    mapped_to VARCHAR(100),")
+    sql_lines.append("    in_questionnaire BOOLEAN,")
+    sql_lines.append("    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    sql_lines.append(");")
+    sql_lines.append("")
+    
+    # Insert data
     sql_lines.append("-- Insert form fields")
     for part in result.parts.values():
+        sql_lines.append(f"-- Part {part.part_number}: {part.part_title}")
         for field in part.get_all_fields_flat():
             value = field.value.replace("'", "''") if field.value else ''
             label = field.label.replace("'", "''")
+            mapped_to = field.mapped_to or 'NULL'
+            in_questionnaire = 'TRUE' if field.in_questionnaire else 'FALSE'
             
             sql_lines.append(
-                f"INSERT INTO form_fields (item_number, label, value, field_type, part_number, page_number) "
-                f"VALUES ('{field.item_number}', '{label}', '{value}', "
-                f"'{field.field_type.value}', {field.part_number}, {field.page});"
+                f"INSERT INTO form_fields "
+                f"(form_number, item_number, label, value, field_type, part_number, page_number, mapped_to, in_questionnaire) "
+                f"VALUES ('{result.form_number}', '{field.item_number}', '{label}', '{value}', "
+                f"'{field.field_type.value}', {field.part_number}, {field.page}, "
+                f"{'NULL' if mapped_to == 'NULL' else f\"'{mapped_to}'\"}, {in_questionnaire});"
             )
     
     return "\n".join(sql_lines)
+
+def export_to_excel(result: FormExtractionResult) -> io.BytesIO:
+    """Export to Excel with multiple sheets"""
+    output = io.BytesIO()
+    
+    if XLSXWRITER_AVAILABLE:
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # Summary sheet
+            summary_data = {
+                'Metric': ['Form Number', 'Form Title', 'Total Parts', 'Total Fields', 
+                          'Mapped Fields', 'Questionnaire Fields', 'Confidence Score'],
+                'Value': [result.form_number, result.form_title, len(result.parts), 
+                         result.total_fields, len(result.field_mappings), 
+                         len(result.questionnaire_fields), f"{result.confidence_score:.2%}"]
+            }
+            pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+            
+            # All fields sheet
+            all_fields_data = []
+            for part in result.parts.values():
+                for field in part.get_all_fields_flat():
+                    all_fields_data.append({
+                        'Part': part.part_number,
+                        'Part Title': part.part_title,
+                        'Item Number': field.item_number,
+                        'Label': field.label,
+                        'Value': field.value,
+                        'Type': field.field_type.value,
+                        'Page': field.page,
+                        'Mapped To': field.mapped_to or '',
+                        'In Questionnaire': 'Yes' if field.in_questionnaire else 'No'
+                    })
+            
+            pd.DataFrame(all_fields_data).to_excel(writer, sheet_name='All Fields', index=False)
+            
+            # Mapped fields sheet
+            mapped_data = [row for row in all_fields_data if row['Mapped To']]
+            if mapped_data:
+                pd.DataFrame(mapped_data).to_excel(writer, sheet_name='Mapped Fields', index=False)
+            
+            # Questionnaire fields sheet
+            quest_data = [row for row in all_fields_data if row['In Questionnaire'] == 'Yes']
+            if quest_data:
+                pd.DataFrame(quest_data).to_excel(writer, sheet_name='Questionnaire', index=False)
+    
+    output.seek(0)
+    return output
 
 # ===== MAIN APPLICATION =====
 def main():
     st.markdown(
         '<div class="main-header">'
         '<h1>🤖 Enhanced Agentic USCIS Form Reader</h1>'
-        '<p>Extract all parts and fields from USCIS forms</p>'
+        '<p>Extract all parts and fields from USCIS forms with intelligent mapping</p>'
         '</div>', 
         unsafe_allow_html=True
     )
@@ -1188,26 +1454,43 @@ def main():
         st.markdown("---")
         st.markdown("## 📊 Features")
         st.markdown("""
-        ✅ All parts detected  
+        ✅ All parts detected & displayed  
         ✅ All field formats (1, 1a, 1b, etc.)  
-        ✅ Hierarchical structure  
-        ✅ Smart validation  
-        ✅ Database mapping  
-        ✅ Export capabilities
+        ✅ Hierarchical structure preserved  
+        ✅ Smart validation & mapping  
+        ✅ Manual database mapping  
+        ✅ Questionnaire assignment  
+        ✅ Multiple export formats
         """)
+        
+        st.markdown("---")
+        st.markdown("## 🎯 Quick Actions")
+        if st.button("🔄 Reset All Mappings"):
+            st.session_state.manual_mappings = {}
+            if st.session_state.extraction_result:
+                st.session_state.extraction_result.field_mappings = {}
+                st.session_state.extraction_result.questionnaire_fields = []
+                for part in st.session_state.extraction_result.parts.values():
+                    for field in part.get_all_fields_flat():
+                        field.mapped_to = None
+                        field.mapping_status = MappingStatus.UNMAPPED
+                        field.in_questionnaire = False
+            st.rerun()
     
     # Main tabs
-    tabs = st.tabs(["📄 Upload", "📊 Review", "💾 Export"])
+    tabs = st.tabs(["📄 Upload", "📊 Review & Map", "💾 Export", "📋 Questionnaire"])
     
     # Upload tab
     with tabs[0]:
         st.markdown("### 📄 Upload USCIS Form")
         
-        uploaded_file = st.file_uploader(
-            "Choose a PDF form",
-            type=['pdf'],
-            help="Upload any USCIS form"
-        )
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Choose a PDF form",
+                type=['pdf'],
+                help="Upload any USCIS form (I-130, I-485, I-90, I-765, G-28, etc.)"
+            )
         
         if uploaded_file:
             col1, col2 = st.columns([3, 1])
@@ -1216,28 +1499,30 @@ def main():
                 st.success(f"✅ Uploaded: {uploaded_file.name}")
             
             with col2:
-                if st.button("🚀 Process", type="primary"):
+                if st.button("🚀 Process", type="primary", use_container_width=True):
                     if show_agent_logs:
                         st.markdown("### 🤖 Agent Activity")
                         agent_container = st.container()
                         st.session_state.agent_container = agent_container
                     
-                    with st.spinner("Processing..."):
+                    with st.spinner("Processing form..."):
                         coordinator = Coordinator()
                         output = coordinator.execute(uploaded_file, st.session_state.manual_mappings)
                         
                         if output:
                             st.success("✅ Processing complete!")
                             st.balloons()
+                            st.info("Go to the 'Review & Map' tab to see extracted fields and assign database mappings.")
     
     # Review tab
     with tabs[1]:
-        st.markdown("### 📊 Review Extracted Fields")
+        st.markdown("### 📊 Review Extracted Fields & Assign Mappings")
         
         if st.session_state.extraction_result:
+            st.info("💡 Use the dropdown in each row to manually assign database fields or move items to the questionnaire.")
             display_form_parts(st.session_state.extraction_result)
         else:
-            st.info("No results. Please process a form first.")
+            st.info("No results. Please process a form first in the Upload tab.")
     
     # Export tab
     with tabs[2]:
@@ -1245,8 +1530,11 @@ def main():
         
         if st.session_state.pipeline_output:
             output = st.session_state.pipeline_output
+            result = st.session_state.extraction_result
             
-            col1, col2, col3 = st.columns(3)
+            # Export options
+            st.markdown("#### Export Formats")
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 # JSON export
@@ -1254,25 +1542,28 @@ def main():
                 st.download_button(
                     "📦 Download JSON",
                     json_str,
-                    "form_extraction.json",
-                    mime="application/json"
+                    f"{result.form_number}_extraction.json",
+                    mime="application/json",
+                    use_container_width=True
                 )
             
             with col2:
                 # CSV export
                 csv_data = []
                 for part_key, part_data in output['parts'].items():
-                    def flatten(fields):
+                    def flatten(fields, parent_num=""):
                         for field in fields:
                             csv_data.append({
                                 'Part': part_data['number'],
                                 'Item': field['item_number'],
                                 'Label': field['label'],
                                 'Value': field['value'],
-                                'Type': field['type']
+                                'Type': field['type'],
+                                'Mapped To': field.get('mapped_to', ''),
+                                'In Questionnaire': field.get('in_questionnaire', False)
                             })
                             if 'children' in field:
-                                flatten(field['children'])
+                                flatten(field['children'], field['item_number'])
                     
                     flatten(part_data['fields'])
                 
@@ -1282,22 +1573,94 @@ def main():
                     st.download_button(
                         "📊 Download CSV",
                         csv,
-                        "form_extraction.csv",
-                        mime="text/csv"
+                        f"{result.form_number}_extraction.csv",
+                        mime="text/csv",
+                        use_container_width=True
                     )
             
             with col3:
                 # SQL export
-                if st.session_state.extraction_result:
-                    sql = generate_sql_script(st.session_state.extraction_result)
+                if result:
+                    sql = generate_sql_script(result)
                     st.download_button(
                         "🗄️ Download SQL",
                         sql,
-                        "form_data.sql",
-                        mime="text/plain"
+                        f"{result.form_number}_data.sql",
+                        mime="text/plain",
+                        use_container_width=True
                     )
+            
+            with col4:
+                # Excel export
+                if XLSXWRITER_AVAILABLE and result:
+                    excel_data = export_to_excel(result)
+                    st.download_button(
+                        "📑 Download Excel",
+                        excel_data,
+                        f"{result.form_number}_extraction.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+            
+            # Preview
+            st.markdown("#### Preview Extracted Data")
+            with st.expander("View JSON Output"):
+                st.json(output)
         else:
-            st.info("No results to export.")
+            st.info("No results to export. Please process a form first.")
+    
+    # Questionnaire tab
+    with tabs[3]:
+        st.markdown("### 📋 Questionnaire Fields")
+        
+        if st.session_state.extraction_result:
+            result = st.session_state.extraction_result
+            questionnaire_fields = []
+            
+            for part in result.parts.values():
+                for field in part.get_all_fields_flat():
+                    if field.in_questionnaire:
+                        questionnaire_fields.append(field)
+            
+            if questionnaire_fields:
+                st.info(f"Found {len(questionnaire_fields)} fields marked for questionnaire")
+                
+                # Display questionnaire fields
+                for i, field in enumerate(questionnaire_fields):
+                    st.markdown(f"**{i+1}. {field.label}** (Item {field.item_number})")
+                    answer_key = f"quest_{field.key}"
+                    field.value = st.text_area(
+                        "Answer:", 
+                        value=field.value or "", 
+                        key=answer_key,
+                        height=100
+                    )
+                    st.markdown("---")
+                
+                # Export questionnaire
+                if st.button("💾 Export Questionnaire Responses"):
+                    quest_data = []
+                    for field in questionnaire_fields:
+                        quest_data.append({
+                            'Question Number': field.item_number,
+                            'Question': field.label,
+                            'Answer': field.value,
+                            'Part': field.part_number,
+                            'Original Page': field.page
+                        })
+                    
+                    df = pd.DataFrame(quest_data)
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        "📋 Download Questionnaire CSV",
+                        csv,
+                        f"{result.form_number}_questionnaire.csv",
+                        mime="text/csv"
+                    )
+            else:
+                st.info("No fields assigned to questionnaire. Use the 'Review & Map' tab to move fields to the questionnaire.")
+        else:
+            st.info("No form processed yet.")
 
 if __name__ == "__main__":
     if not PYMUPDF_AVAILABLE:
