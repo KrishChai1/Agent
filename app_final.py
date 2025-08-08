@@ -5,52 +5,41 @@ import json
 import fitz  # PyMuPDF
 import streamlit as st
 from collections import defaultdict
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Any
 
-st.set_page_config(page_title="USCIS Form Parser & Mapper", layout="wide")
+# ============= CONFIG =============
+st.set_page_config(page_title="USCIS Form Reader & Mapper", layout="wide")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # If you want to add AI features later
 
-# -------------------------
-# Regexes
-# -------------------------
-
+# ============= REGEX =============
 PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.IGNORECASE)
-FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?((?:[a-z])?)\.\s*(.*)$')  # 1.  or 1.a.
+FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
 FIELD_INLINE_RX = re.compile(r'(\b\d+\.[a-z]\.)')
 
 def normalize(s: str) -> str:
-    return re.sub(r'\s+', ' ', s).strip()
+    return re.sub(r'\s+', ' ', s or '').strip()
 
-# -------------------------
-# PDF Parsing with label carry-over
-# -------------------------
+# ============= PDF PARSER =============
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
-    """
-    Parse parts and fields; carry label text forward across wrapped lines until the next field/part.
-    Returns: { "Part N: Title": [ {id, label, page}, ... ] }
-    """
-    parts: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    parts = defaultdict(list)
     current_part_key = None
-    last_field_key = None  # (part, id) for label continuation
+    last_field_key = None
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    def start_field(part_key: str, fid: str, label: str, page_no: int):
+    def start_field(part_key, fid, label, page_no):
         nonlocal last_field_key
-        label = normalize(label)
-        item = {"id": fid, "label": label, "page": page_no}
+        item = {"id": fid, "label": normalize(label), "page": page_no}
         parts[part_key].append(item)
         last_field_key = (part_key, fid)
 
     for pno in range(len(doc)):
-        page = doc[pno]
-        lines = [l for l in page.get_text("text").splitlines()]
+        lines = page_lines = [l for l in doc[pno].get_text("text").splitlines()]
         for raw in lines:
             line = raw.strip()
             if not line:
-                # Blank line ends continuation
                 last_field_key = None
                 continue
-
-            # New Part header
+            # Detect Part header
             m_part = PART_RX.match(line)
             if m_part:
                 idx, title = m_part.group(1), m_part.group(2).strip()
@@ -59,40 +48,29 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
                     parts[current_part_key] = []
                 last_field_key = None
                 continue
-
-            # New field head "1." or "1.a."
+            # Detect field head
             m_field = FIELD_HEAD_RX.match(line)
             if m_field and current_part_key:
-                num = m_field.group(1)
-                sub = m_field.group(2)
-                rest = normalize(m_field.group(3) or "")
+                num, sub, rest = m_field.group(1), m_field.group(2), normalize(m_field.group(3) or "")
                 fid = f"{num}.{sub}" if sub else num
                 start_field(current_part_key, fid, rest, pno + 1)
                 continue
-
-            # Inline "1.a." found mid-line
+            # Inline fields
             if current_part_key:
                 inlines = list(FIELD_INLINE_RX.finditer(line))
                 if inlines:
-                    # Push each inline as a field with trailing text as label
                     for m in inlines:
                         fid = m.group(0).strip(".")
-                        label_hint = normalize(line[m.end():])
-                        start_field(current_part_key, fid, label_hint, pno + 1)
+                        start_field(current_part_key, fid, normalize(line[m.end():]), pno + 1)
                     continue
-
-            # Continuation of the previous field's label
+            # Continuation
             if last_field_key:
                 pk, fid = last_field_key
-                if parts.get(pk):
-                    # Append with space
-                    prev = parts[pk][-1]
-                    if prev["id"] == fid:
-                        extended = normalize((prev.get("label") or "") + " " + line)
-                        prev["label"] = extended
-                continue
+                prev = parts[pk][-1]
+                if prev["id"] == fid:
+                    prev["label"] = normalize((prev.get("label") or "") + " " + line)
 
-    # Deduplicate by id within each part keeping earliest page and longest label
+    # Deduplicate
     for pk, items in parts.items():
         best = {}
         for it in items:
@@ -100,10 +78,8 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
                 best[it["id"]] = it
             else:
                 cur = best[it["id"]]
-                # Prefer earliest page
                 if it["page"] < cur["page"]:
                     cur["page"] = it["page"]
-                # Prefer longer, non-empty label
                 if len(it.get("label","")) > len(cur.get("label","")):
                     cur["label"] = it["label"]
         parts[pk] = [best[k] for k in sorted(best.keys(), key=lambda x: (int(re.match(r"\d+", x).group()), x))]
@@ -114,7 +90,7 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
     for mp in maps:
         for k, v in mp.items():
             out[k].extend(v)
-    # Re-coalesce
+    # re-coalesce
     for k, v in out.items():
         byid = {}
         for it in v:
@@ -128,230 +104,131 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
         out[k] = [byid[i] for i in sorted(byid.keys(), key=lambda x: (int(re.match(r"\d+", x).group()), x))]
     return out
 
-# -------------------------
-# Schema ingestion (JSON/TS)
-# -------------------------
-
-def load_json_schema(file_bytes: bytes) -> Dict[str, Any]:
+# ============= DB OBJECT LOADER =============
+def try_load_json_bytes(b: bytes) -> dict:
     try:
-        return json.loads(file_bytes.decode("utf-8"))
-    except Exception:
-        return {}
-
-def extract_field_names_from_json(data: Dict[str, Any]) -> List[str]:
-    names = []
-    # 1) controls[*].name
-    ctrls = data.get("controls")
-    if isinstance(ctrls, list):
-        for c in ctrls:
-            if isinstance(c, dict) and c.get("name"):
-                names.append(str(c["name"]))
-    # 2) fields[*].{name|id|key|label}
-    for k in ["fields", "questions", "sections"]:
-        val = data.get(k)
-        if isinstance(val, list):
-            for item in val:
-                if isinstance(item, dict):
-                    for cand in ["name", "id", "key", "label"]:
-                        if item.get(cand):
-                            names.append(str(item[cand]))
-                            break
-    # 3) properties keys (JSON Schema)
-    if isinstance(data.get("properties"), dict):
-        names.extend(list(data["properties"].keys()))
-    # Dedup preserve order
-    seen = set()
-    out = []
-    for n in names:
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out
-
-def extract_field_names_from_ts(ts_text: str) -> List[str]:
-    # Look for export interface ... { ... } and type literals
-    names = []
-    for m in re.finditer(r'export\s+interface\s+\w+\s*{([^}]*)}', ts_text, re.DOTALL):
-        body = m.group(1)
-        names += re.findall(r'(\w+)\??\s*:', body)
-    # Also parse exported type with object literal
-    for m in re.finditer(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', ts_text, re.DOTALL):
-        body = m.group(1)
-        names += re.findall(r'(\w+)\??\s*:', body)
-    # Dedup
-    seen=set(); out=[]
-    for n in names:
-        if n not in seen:
-            seen.add(n); out.append(n)
-    return out
-
-def download_bytes(filename: str, data: bytes, label: str):
-    st.download_button(label=label, file_name=filename, mime="application/octet-stream", data=data)
-
-# -------------------------
-# Sidebar inputs
-# -------------------------
-
-st.sidebar.title("Inputs")
-pdf_files = st.sidebar.file_uploader("Upload USCIS PDF(s)", type=["pdf"], accept_multiple_files=True)
-schema_files = st.sidebar.file_uploader("Upload schema files (JSON or TS)", type=["json","ts","tsx"], accept_multiple_files=True)
-
-load_demo_pdfs = st.sidebar.checkbox("Load demo PDFs from /mnt/data", value=False)
-auto_scan_schemas = st.sidebar.checkbox("Auto-scan /mnt/data for *.json/*.ts", value=True)
-
-if load_demo_pdfs:
-    for path in ["/mnt/data/G28_test.pdf", "/mnt/data/I-129_test.pdf"]:
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                pdf_files.append(type("UploadedFile", (), {"name": os.path.basename(path), "getbuffer": lambda f=f: f.read()}))
-
-# Auto-load schemas if none uploaded
-if (not schema_files) and auto_scan_schemas:
-    found = []
-    for path in ["/mnt/data/g28.json", "/mnt/data/i90-form.json", "/mnt/data/i129-sec1.2.form.json", "/mnt/data/G28.ts"]:
-        if os.path.exists(path):
-            with open(path, "rb") as f:
-                found.append(type("UploadedFile", (), {"name": os.path.basename(path), "getbuffer": lambda f=f: f.read()}))
-    schema_files = found
-
-# -------------------------
-# Parse PDFs
-# -------------------------
-
-part_maps = []
-if pdf_files:
-    for up in pdf_files:
+        return json.loads(b.decode("utf-8"))
+    except:
         try:
-            parts = parse_pdf_parts_and_fields(up.getbuffer())
-            part_maps.append(parts)
-        except Exception as e:
-            st.error(f"Error parsing {up.name}: {e}")
+            return json.loads(b.decode("utf-16"))
+        except:
+            return {}
 
-merged = merge_parts(part_maps) if part_maps else {}
+def flatten_keys(obj, prefix="") -> List[str]:
+    keys = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            newp = f"{prefix}.{k}" if prefix else k
+            keys.extend(flatten_keys(v, newp))
+    elif isinstance(obj, list):
+        keys.append(f"{prefix}[*]")
+        for i, v in enumerate(obj[:1]):  # sample first
+            keys.extend(flatten_keys(v, f"{prefix}[{i}]"))
+    else:
+        keys.append(prefix)
+    return keys
 
-# -------------------------
-# Load schemas and extract field names
-# -------------------------
+def extract_field_names(file) -> List[str]:
+    raw = file.getbuffer()
+    if file.name.lower().endswith((".json",".txt")):
+        data = try_load_json_bytes(raw)
+        return [k for k in flatten_keys(data) if k]
+    elif file.name.lower().endswith((".ts",".tsx")):
+        text = raw.decode("utf-8", errors="ignore")
+        names = []
+        for m in re.finditer(r'export\s+interface\s+\w+\s*{([^}]*)}', text, re.DOTALL):
+            body = m.group(1)
+            names += re.findall(r'(\w+)\??\s*:', body)
+        return list(dict.fromkeys(names))
+    return []
 
-schema_field_pool = {}  # filename -> [field names]
+# ============= SIDEBAR INPUTS =============
+st.sidebar.header("Upload Inputs")
+pdf_files = st.sidebar.file_uploader("USCIS PDF(s)", type=["pdf"], accept_multiple_files=True)
+schema_files = st.sidebar.file_uploader("DB Objects/Schemas", type=["json","ts","tsx","txt"], accept_multiple_files=True)
+
+# ============= PARSE PDFs =============
+merged = {}
+if pdf_files:
+    part_maps = [parse_pdf_parts_and_fields(up.getbuffer()) for up in pdf_files]
+    merged = merge_parts(part_maps)
+
+# ============= DB TARGETS =============
+schema_field_pool = {}
 if schema_files:
     for sf in schema_files:
-        raw = sf.getbuffer()
-        if sf.name.lower().endswith((".json",)):
-            data = load_json_schema(raw)
-            names = extract_field_names_from_json(data)
-        else:
-            try:
-                text = raw.decode("utf-8", errors="ignore")
-            except Exception:
-                text = ""
-            names = extract_field_names_from_ts(text)
-        if names:
-            schema_field_pool[sf.name] = names
+        fields = extract_field_names(sf)
+        if fields:
+            schema_field_pool[sf.name] = fields
+db_targets = ["— (unmapped) —"] + [f"{fname}:{fld}" for fname, fields in schema_field_pool.items() for fld in fields]
 
-# Flatten into dropdown
-db_targets = ["— (unmapped) —"]
-for fname, fields in sorted(schema_field_pool.items()):
-    for fld in fields:
-        db_targets.append(f"{fname}:{fld}")
+# ============= STATE =============
+if "mappings" not in st.session_state:
+    st.session_state["mappings"] = {}
 
-# -------------------------
-# UI
-# -------------------------
-
-st.title("USCIS Form Parser → Part-by-Part Field Mapper")
-
-col1, col2 = st.columns([2,1])
-with col1:
-    st.markdown("**Parsed attributes** now include carried-over labels across lines/pages. Expand a Part to see each item’s full label.")
-with col2:
-    if not schema_field_pool:
-        st.warning("No schema fields detected. Upload JSON/TS schema files or enable auto-scan.")
-    else:
-        st.success(f"Loaded {sum(len(v) for v in schema_field_pool.values())} DB fields from {len(schema_field_pool)} schema file(s).")
-
+# ============= UI: PARTS =============
+st.title("Universal USCIS Form Reader & Mapper")
 if not merged:
-    st.info("Upload at least one PDF to begin.")
+    st.info("Upload at least one USCIS PDF to start.")
     st.stop()
 
-tab_parts, tab_schemas, tab_exports = st.tabs(["📄 Parts & Mapping", "📚 Schema Preview", "⬇️ Exports"])
+for part_name in sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
+    with st.expander(part_name, expanded=False):
+        if part_name not in st.session_state["mappings"]:
+            st.session_state["mappings"][part_name] = {}
+        for row in merged[part_name]:
+            fid, label, page = row["id"], row.get("label",""), row.get("page")
+            c1, c2, c3, c4, c5 = st.columns([1,4,3,3,1])
+            with c1:
+                st.write(f"**{fid}**")
+                if page: st.caption(f"p.{page}")
+            with c2:
+                st.write(label or "—")
+            with c3:
+                choice = st.selectbox("Map DB", db_targets, index=0, key=f"db_{part_name}_{fid}")
+            with c4:
+                manual = st.text_input("Manual DB Path", key=f"man_{part_name}_{fid}")
+            with c5:
+                send_q = st.checkbox("Q?", key=f"q_{part_name}_{fid}")
+            st.session_state["mappings"][part_name][fid] = {
+                "db": manual or (choice if choice != "— (unmapped) —" else None),
+                "questionnaire": send_q,
+                "label": label
+            }
+            # Optional split into sub-items
+            split_prefix = st.text_input("Split Prefix (leave blank to skip)", key=f"split_{part_name}_{fid}")
+            if split_prefix:
+                for sub in ["a","b","c"]:
+                    sub_id = f"{fid}.{sub}"
+                    sc1, sc2, sc3 = st.columns([3,3,1])
+                    with sc1:
+                        dbmap = st.selectbox(f"{sub_id} DB", db_targets, index=0, key=f"db_{part_name}_{sub_id}")
+                    with sc2:
+                        manmap = st.text_input(f"{sub_id} Manual", key=f"man_{part_name}_{sub_id}")
+                    with sc3:
+                        sendq = st.checkbox("Q?", key=f"q_{part_name}_{sub_id}")
+                    st.session_state["mappings"][part_name][sub_id] = {
+                        "db": manmap or (dbmap if dbmap != "— (unmapped) —" else None),
+                        "questionnaire": sendq,
+                        "label": f"{split_prefix} ({sub})"
+                    }
 
-with tab_schemas:
-    if schema_field_pool:
-        for fname, fields in schema_field_pool.items():
-            with st.expander(f"{fname}  ·  {len(fields)} fields", expanded=False):
-                st.write(", ".join(fields[:200]) + (", ..." if len(fields) > 200 else ""))
-    else:
-        st.caption("No schemas loaded.")
+# ============= EXPORTS =============
+st.header("Exports")
+all_ids = [f"{p.replace(' ', '_')}_{fid}" for p, fields in st.session_state["mappings"].items() for fid in fields]
+ts_code = "export interface USCISForm {\n" + "\n".join([f"  {re.sub(r'[^a-zA-Z0-9_]','_',fid)}?: string;" for fid in all_ids]) + "\n}"
+unmapped = []
+for p, items in st.session_state["mappings"].items():
+    for fid, mapping in items.items():
+        if not mapping["db"] or mapping["questionnaire"]:
+            unmapped.append({
+                "part": p, "id": fid,
+                "label": mapping.get("label",""),
+                "question_key": f"{p.split(':')[0]}_{fid}".replace(".",""),
+            })
+qjson = json.dumps({"questions": unmapped}, indent=2)
+fullmap = json.dumps(st.session_state["mappings"], indent=2)
 
-with tab_parts:
-    if not db_targets or len(db_targets) == 1:
-        st.info("DB dropdown will show targets after you load schema files (JSON with controls[*].name, fields[*], or JSON Schema; or TS interfaces).")
-
-    if "mappings" not in st.session_state:
-        st.session_state["mappings"] = {}
-
-    for part_name in sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
-        with st.expander(part_name, expanded=False):
-            st.caption("Attribute names are derived from the PDF item labels; edit your questionnaire keys to fit your model.")
-            if part_name not in st.session_state["mappings"]:
-                st.session_state["mappings"][part_name] = {}
-
-            for row in merged[part_name]:
-                fid = row["id"]
-                label = row.get("label") or ""
-                page = row.get("page")
-                # Render row
-                c1, c2, c3, c4 = st.columns([1,5,3,3])
-                with c1:
-                    st.write(f"**{fid}**")
-                    if page: st.caption(f"p.{page}")
-                with c2:
-                    st.write(label if label else "—")
-                with c3:
-                    default_db = st.session_state["mappings"][part_name].get(fid, {}).get("db", "— (unmapped) —")
-                    idx = db_targets.index(default_db) if default_db in db_targets else 0
-                    choice = st.selectbox(f"DB map ({fid})", options=db_targets, index=idx, key=f"db_{part_name}_{fid}")
-                with c4:
-                    default_q = st.session_state["mappings"][part_name].get(fid, {}).get("question_key", "")
-                    qkey = st.text_input("Question key", value=default_q, key=f"q_{part_name}_{fid}")
-                st.session_state["mappings"][part_name][fid] = {"db": choice if choice != "— (unmapped) —" else None, "question_key": qkey or None, "label": label}
-
-with tab_exports:
-    def ts_interface(name: str, fields: List[str]) -> str:
-        lines = [f"export interface {name} {{"]
-        for f in fields:
-            safe = re.sub(r'[^a-zA-Z0-9_]', '_', f)
-            lines.append(f"  {safe}?: string;")
-        lines.append("}")
-        return "\\n".join(lines)
-
-    st.subheader("TypeScript (TS) Definitions")
-    ts_iface_name = st.text_input("Interface name", value="UscisFormFields")
-    all_ids = [f"{p.replace(' ', '_')}_{it['id']}" for p, items in merged.items() for it in items]
-    ts_code = ts_interface(ts_iface_name, all_ids)
-    st.code(ts_code, language="typescript")
-
-    st.subheader("Questionnaire JSON for Unmapped Fields")
-    unmapped = []
-    for p, items in merged.items():
-        for it in items:
-            mp = st.session_state["mappings"].get(p, {}).get(it["id"], {})
-            if not mp.get("db"):
-                qkey = mp.get("question_key") or f"{p.split(':')[0].replace(' ', '').lower()}_{it['id'].replace('.', '')}"
-                unmapped.append({
-                    "part": p,
-                    "id": it["id"],
-                    "question_key": qkey,
-                    "label": it.get("label") or f"Please provide value for {it['id']}",
-                    "page": it.get("page")
-                })
-    st.write(f"Unmapped count: **{len(unmapped)}**")
-    qjson = json.dumps({"questions": unmapped}, indent=2)
-    st.code(qjson, language="json")
-
-    st.download_button("Download TS Interface", "uscis_fields.ts", ts_code.encode("utf-8"))
-    st.download_button("Download Questionnaire (Unmapped)", "questionnaire_unmapped.json", qjson.encode("utf-8"))
-    fullmap = json.dumps(st.session_state["mappings"], indent=2)
-    st.download_button("Download Full Field Mappings", "field_mappings.json", fullmap.encode("utf-8"))
-
+st.download_button("Download TS Interface", data=ts_code.encode("utf-8"), file_name="uscis_fields.ts", mime="text/plain")
+st.download_button("Download Questionnaire (Unmapped/Flagged)", data=qjson.encode("utf-8"), file_name="questionnaire.json", mime="application/json")
+st.download_button("Download Full Field Mappings", data=fullmap.encode("utf-8"), file_name="field_mappings.json", mime="application/json")
