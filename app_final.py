@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Tuple
 
 # ================= CONFIG =================
 st.set_page_config(page_title="USCIS Form Reader & Mapper", layout="wide")
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # Future AI integration (not required)
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # optional
 
 # Built-in auto-split patterns (overridable by uploaded JSON)
 DEFAULT_PATTERNS = [
@@ -19,22 +19,38 @@ DEFAULT_PATTERNS = [
     {"match": ["Daytime Telephone", "Mobile Telephone", "Email Address"], "subs": ["a", "b", "c"]},
 ]
 
+# Force-include these filenames if present (exact names you shared)
+FORCE_INCLUDE_FILES = [
+    "Attorney object.txt",
+    "Beneficiary.txt",
+    "Case Object.txt",
+    "Customer object.txt",
+    "Lawfirm Object.txt",
+    "LCA Object.txt",
+    "Petitioner.txt",
+    "empty_json_structures.json",
+    "g28.json",
+    "i90-form.json",
+    "i129-sec1.2.form.json",
+    "G28.ts",
+]
+
 # ================= REGEX / HELPERS =================
 PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.IGNORECASE)
 FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
 FIELD_INLINE_RX = re.compile(r'(\b\d+\.[a-z]\.)')
+
 TS_INTERFACE_RX = re.compile(r'export\s+interface\s+\w+\s*{([^}]*)}', re.DOTALL)
 TS_TYPE_OBJ_RX = re.compile(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', re.DOTALL)
 TS_CONST_OBJ_RX = re.compile(r'export\s+const\s+\w+\s*=\s*{(.*?)}\s*(?:as\s+const)?', re.DOTALL)
 TS_FIELD_KEY_RX = re.compile(r'(\w+)\??\s*:')
-LINE_PATH_RX = re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*(?:\[\*\])?')
 
-# Filter for scanning DB files
+# paths like a.b.c or a[*]
+LINE_PATH_RX = re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*(?:\[\*\])?')
+# keys like key: value
+KEY_COLON_RX = re.compile(r'\b([A-Za-z_][\w\.]*)\s*:')
+
 ALLOWED_EXTS = (".json", ".txt", ".ts", ".tsx")
-CANDIDATE_NAME_RX = re.compile(
-    r'(attorney|beneficiary|case|customer|lawfirm|lca|petitioner|schema|object|g28|i-?90|i-?129)',
-    re.I
-)
 IGNORE_FILE_RX = re.compile(
     r'^(requirements(\.txt)?|pyproject\.toml|poetry\.lock|package(-lock)?\.json|yarn\.lock|Pipfile(\.lock)?)$',
     re.I
@@ -52,7 +68,6 @@ def _decode_best(b: bytes) -> str:
     return b.decode("utf-8", errors="ignore")
 
 def try_load_json_bytes(b: bytes) -> Tuple[dict, str]:
-    """Return (obj, err). If err == '', obj is valid json."""
     last = ""
     for enc in ("utf-8", "utf-16", "utf-8-sig", "latin-1"):
         try:
@@ -69,7 +84,7 @@ def flatten_keys(obj, prefix="") -> List[str]:
             keys.extend(flatten_keys(v, newp))
     elif isinstance(obj, list):
         keys.append(f"{prefix}[*]")
-        for i, v in enumerate(obj[:1]):  # sample first shape
+        for i, v in enumerate(obj[:1]):
             keys.extend(flatten_keys(v, f"{prefix}[{i}]"))
     else:
         if prefix:
@@ -86,6 +101,8 @@ def extract_field_names_from_text_lines(text: str) -> List[str]:
             out.append(line)
         for m in LINE_PATH_RX.finditer(line):
             out.append(m.group(0))
+        for m in KEY_COLON_RX.finditer(line):
+            out.append(m.group(1))
     seen = set(); res=[]
     for k in out:
         if k and k not in seen:
@@ -98,7 +115,6 @@ def extract_field_names_from_ts(text: str) -> List[str]:
         names += TS_FIELD_KEY_RX.findall(body)
     for body in (m.group(1) for m in TS_TYPE_OBJ_RX.finditer(text)):
         names += TS_FIELD_KEY_RX.findall(body)
-    # crude parse of exported const object keys
     for body in (m.group(1) for m in TS_CONST_OBJ_RX.finditer(text)):
         names += [k for k in re.findall(r'["\']?([A-Za-z_]\w+)["\']?\s*:', body)]
     seen=set(); out=[]
@@ -120,19 +136,6 @@ def extract_field_names(file) -> List[str]:
         text = _decode_best(raw)
         return extract_field_names_from_ts(text)
     return []
-
-def looks_like_db_text(text: str) -> bool:
-    """Accept .txt only if it resembles structured keys, not package pins."""
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if not lines:
-        return False
-    kept = 0
-    for ln in lines[:200]:
-        if re.search(r'(==|>=|<=|~=|!=)\s*\d', ln):  # looks like requirements pin
-            continue
-        if ('.' in ln) or ('{' in ln) or ('[' in ln) or (':' in ln) or ('"' in ln) or ("'" in ln):
-            kept += 1
-    return kept > 0
 
 # ================= PDF PARSING =================
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
@@ -256,48 +259,64 @@ if pdf_files:
     merged = merge_parts(part_maps)
     merged = auto_split_fields(merged, patterns)
 
-# ================= DB Targets: auto-load + uploads (filtered) =================
+# ================= DB Targets: auto-load + uploads (force-include) =================
 scan_dir = "/mnt/data" if os.path.exists("/mnt/data") else os.getcwd()
 loaded_db_sources = []
 all_fields = []
 
-def _add_upload_like(path: str):
-    try:
-        name = os.path.basename(path)
-        if not name.lower().endswith(ALLOWED_EXTS):  # extension gate
-            return
-        if IGNORE_FILE_RX.match(name):               # ignore obvious non-DB files
-            return
-        # If filename doesn't match our DB-ish pattern, we still allow JSON/TS if structured
-        with open(path, "rb") as f:
-            raw = f.read()
-        # Extra guard for .txt — only keep if looks structured, not package pins
-        if name.lower().endswith(".txt"):
-            text = _decode_best(raw)
-            if not looks_like_db_text(text):
-                return
-        # Build pseudo UploadedFile
-        fake_upload = type("UploadedFile", (), {
-            "name": name,
-            "getbuffer": lambda raw=raw: raw
-        })
-        fields = extract_field_names(fake_upload)
-        if fields:
-            all_fields.extend(fields)
-            loaded_db_sources.append((name, len(fields)))
-    except Exception as e:
-        st.warning(f"Could not read {path}: {e}")
+def _add_upload_like_bytes(name: str, raw: bytes):
+    fake_upload = type("UploadedFile", (), {
+        "name": name,
+        "getbuffer": lambda raw=raw: raw
+    })
+    fields = extract_field_names(fake_upload)
+    if fields:
+        all_fields.extend(fields)
+        loaded_db_sources.append((name, len(fields)))
 
-# Auto-scan folder
+def _try_read(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+# 1) Force-include your known files from scan_dir if present
+for fname in FORCE_INCLUDE_FILES:
+    p = os.path.join(scan_dir, fname)
+    if os.path.exists(p):
+        try:
+            raw = _try_read(p)
+            # filter obvious junk only for .txt
+            if fname.lower().endswith(".txt"):
+                txt = _decode_best(raw)
+                # accept even if not strictly "structured" — you asked to include them
+            _add_upload_like_bytes(fname, raw)
+        except Exception as e:
+            st.warning(f"Could not read {fname}: {e}")
+
+# 2) Auto-scan rest of the directory for additional JSON/TS files (ignore common junk)
 try:
     for fname in os.listdir(scan_dir):
-        # prefer filenames that look like your DB objects/schemas
-        if CANDIDATE_NAME_RX.search(fname) or fname.lower().endswith((".json", ".ts", ".tsx")):
-            _add_upload_like(os.path.join(scan_dir, fname))
+        if fname in FORCE_INCLUDE_FILES:
+            continue
+        if not fname.lower().endswith(ALLOWED_EXTS):
+            continue
+        if IGNORE_FILE_RX.match(fname):
+            continue
+        path = os.path.join(scan_dir, fname)
+        try:
+            raw = _try_read(path)
+            # For .txt, skip obvious dependency lists (very defensive):
+            if fname.lower().endswith(".txt"):
+                txt = _decode_best(raw)
+                if re.search(r'(^|\s)(pillow|numpy|pandas|streamlit|fastapi|uvicorn|scikit|torch|tensorflow|langchain)\b', txt, re.I):
+                    # looks like requirements — skip
+                    continue
+            _add_upload_like_bytes(fname, raw)
+        except Exception as e:
+            st.warning(f"Could not read {fname}: {e}")
 except Exception as e:
     st.warning(f"Could not scan {scan_dir}: {e}")
 
-# Plus any manual uploads
+# 3) Merge any manual uploads
 if schema_files:
     for sf in schema_files:
         fields = extract_field_names(sf)
@@ -305,6 +324,7 @@ if schema_files:
             all_fields.extend(fields)
             loaded_db_sources.append((sf.name, len(fields)))
 
+# Dedup & sort
 db_targets = ["— (unmapped) —"] + sorted(set(all_fields))
 
 # ================= STATE & TABS =================
@@ -316,7 +336,7 @@ tab_map, tab_dbdebug, tab_export = st.tabs(["📄 Parts & Mapping", "🧭 DB/Sch
 with tab_dbdebug:
     st.write(f"Scanning directory: `{scan_dir}`")
     if not loaded_db_sources:
-        st.warning("No DB objects discovered. Place Attorney/Beneficiary/Case/Customer/Lawfirm/LCA/Petitioner objects or your JSON/TS schemas in the scan folder, or upload them in the sidebar.")
+        st.warning("No DB objects discovered. Make sure your files are in this folder or upload them in the sidebar.")
     else:
         for name, cnt in loaded_db_sources:
             st.write(f"- **{name}** → {cnt} fields")
