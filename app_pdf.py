@@ -1371,12 +1371,15 @@ def generate_sql_script(result: FormExtractionResult) -> str:
             mapped_to = field.mapped_to or 'NULL'
             in_questionnaire = 'TRUE' if field.in_questionnaire else 'FALSE'
             
+            # Format mapped_to value
+            mapped_value = 'NULL' if mapped_to == 'NULL' else f"'{mapped_to}'"
+            
             sql_lines.append(
                 f"INSERT INTO form_fields "
                 f"(form_number, item_number, label, value, field_type, part_number, page_number, mapped_to, in_questionnaire) "
                 f"VALUES ('{result.form_number}', '{field.item_number}', '{label}', '{value}', "
                 f"'{field.field_type.value}', {field.part_number}, {field.page}, "
-                f"{'NULL' if mapped_to == 'NULL' else f\"'{mapped_to}'\"}, {in_questionnaire});"
+                f"{mapped_value}, {in_questionnaire});"
             )
     
     return "\n".join(sql_lines)
