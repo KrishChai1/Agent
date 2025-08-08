@@ -11,24 +11,11 @@ from typing import Dict, List, Any
 st.set_page_config(page_title="USCIS Form Reader & Mapper", layout="wide")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # Future AI integration
 
-# Default auto-split patterns
 DEFAULT_PATTERNS = [
-    {
-        "match": ["Family Name", "Given Name", "Middle Name"],
-        "subs": ["a", "b", "c"]
-    },
-    {
-        "match": ["Street Number and Name", "Apt. Ste. Flr.", "City or Town", "State", "ZIP Code"],
-        "subs": ["a", "b", "c", "d", "e"]
-    },
-    {
-        "match": ["Date of Birth", "City/Town of Birth", "Country of Birth"],
-        "subs": ["a", "b", "c"]
-    },
-    {
-        "match": ["Daytime Telephone", "Mobile Telephone", "Email Address"],
-        "subs": ["a", "b", "c"]
-    }
+    {"match": ["Family Name", "Given Name", "Middle Name"], "subs": ["a", "b", "c"]},
+    {"match": ["Street Number and Name", "Apt. Ste. Flr.", "City or Town", "State", "ZIP Code"], "subs": ["a", "b", "c", "d", "e"]},
+    {"match": ["Date of Birth", "City/Town of Birth", "Country of Birth"], "subs": ["a", "b", "c"]},
+    {"match": ["Daytime Telephone", "Mobile Telephone", "Email Address"], "subs": ["a", "b", "c"]}
 ]
 
 # ================= HELPERS =================
@@ -143,7 +130,6 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
     for mp in maps:
         for k, v in mp.items():
             out[k].extend(v)
-    # Re-coalesce
     for k, v in out.items():
         byid = {}
         for it in v:
@@ -180,7 +166,7 @@ def auto_split_fields(merged_parts, patterns):
 # ================= UI =================
 st.sidebar.header("Upload Inputs")
 pdf_files = st.sidebar.file_uploader("USCIS PDF(s)", type=["pdf"], accept_multiple_files=True)
-schema_files = st.sidebar.file_uploader("DB Objects/Schemas", type=["json","ts","tsx","txt"], accept_multiple_files=True)
+schema_files = st.sidebar.file_uploader("Extra DB Objects/Schemas", type=["json","ts","tsx","txt"], accept_multiple_files=True)
 patterns_file = st.sidebar.file_uploader("Auto-split Patterns JSON (optional)", type=["json"])
 show_split_preview = st.sidebar.checkbox("Show Auto-split Preview", value=True)
 
@@ -199,11 +185,22 @@ if pdf_files:
     merged = merge_parts(part_maps)
     merged = auto_split_fields(merged, patterns)
 
-# DB Targets
+# DB Targets: auto-load + uploads
 all_fields = []
+for fname in os.listdir("/mnt/data"):
+    if fname.lower().endswith((".json", ".txt", ".ts", ".tsx")):
+        path = os.path.join("/mnt/data", fname)
+        with open(path, "rb") as f:
+            fake_upload = type("UploadedFile", (), {
+                "name": fname,
+                "getbuffer": lambda f=f: f.read()
+            })
+            all_fields.extend(extract_field_names(fake_upload))
+
 if schema_files:
     for sf in schema_files:
         all_fields.extend(extract_field_names(sf))
+
 db_targets = ["— (unmapped) —"] + sorted(set(all_fields))
 
 # State
