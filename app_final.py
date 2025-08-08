@@ -9,8 +9,9 @@ from typing import Dict, List, Any, Tuple
 
 # ================= CONFIG =================
 st.set_page_config(page_title="USCIS Form Reader & Mapper", layout="wide")
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # Future AI integration
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", None)  # Future AI integration (not required)
 
+# Built-in auto-split patterns (overridable by uploaded JSON)
 DEFAULT_PATTERNS = [
     {"match": ["Family Name", "Given Name", "Middle Name"], "subs": ["a", "b", "c"]},
     {"match": ["Street Number and Name", "Apt. Ste. Flr.", "City or Town", "State", "ZIP Code"], "subs": ["a", "b", "c", "d", "e"]},
@@ -18,10 +19,26 @@ DEFAULT_PATTERNS = [
     {"match": ["Daytime Telephone", "Mobile Telephone", "Email Address"], "subs": ["a", "b", "c"]},
 ]
 
-# ================= HELPERS =================
+# ================= REGEX / HELPERS =================
 PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.IGNORECASE)
 FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
 FIELD_INLINE_RX = re.compile(r'(\b\d+\.[a-z]\.)')
+TS_INTERFACE_RX = re.compile(r'export\s+interface\s+\w+\s*{([^}]*)}', re.DOTALL)
+TS_TYPE_OBJ_RX = re.compile(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', re.DOTALL)
+TS_CONST_OBJ_RX = re.compile(r'export\s+const\s+\w+\s*=\s*{(.*?)}\s*(?:as\s+const)?', re.DOTALL)
+TS_FIELD_KEY_RX = re.compile(r'(\w+)\??\s*:')
+LINE_PATH_RX = re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*(?:\[\*\])?')
+
+# Filter for scanning DB files
+ALLOWED_EXTS = (".json", ".txt", ".ts", ".tsx")
+CANDIDATE_NAME_RX = re.compile(
+    r'(attorney|beneficiary|case|customer|lawfirm|lca|petitioner|schema|object|g28|i-?90|i-?129)',
+    re.I
+)
+IGNORE_FILE_RX = re.compile(
+    r'^(requirements(\.txt)?|pyproject\.toml|poetry\.lock|package(-lock)?\.json|yarn\.lock|Pipfile(\.lock)?)$',
+    re.I
+)
 
 def normalize(s: str) -> str:
     return re.sub(r'\s+', ' ', s or '').strip()
@@ -36,6 +53,7 @@ def _decode_best(b: bytes) -> str:
 
 def try_load_json_bytes(b: bytes) -> Tuple[dict, str]:
     """Return (obj, err). If err == '', obj is valid json."""
+    last = ""
     for enc in ("utf-8", "utf-16", "utf-8-sig", "latin-1"):
         try:
             return json.loads(b.decode(enc)), ""
@@ -51,42 +69,28 @@ def flatten_keys(obj, prefix="") -> List[str]:
             keys.extend(flatten_keys(v, newp))
     elif isinstance(obj, list):
         keys.append(f"{prefix}[*]")
-        for i, v in enumerate(obj[:1]):
+        for i, v in enumerate(obj[:1]):  # sample first shape
             keys.extend(flatten_keys(v, f"{prefix}[{i}]"))
     else:
         if prefix:
             keys.append(prefix)
     return keys
 
-LINE_PATH_RX = re.compile(r'[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*(?:\[\*\])?')
-
 def extract_field_names_from_text_lines(text: str) -> List[str]:
-    """
-    Fallback for .txt that aren't JSON: treat each non-empty line as a candidate,
-    and also extract dotted/array-ish paths within the line.
-    """
     out = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        # whole line as key if it looks like a path or label
         if len(line) <= 200:
             out.append(line)
-        # extract embedded paths like a.b.c or a[*]
         for m in LINE_PATH_RX.finditer(line):
             out.append(m.group(0))
-    # de-dup but keep order
     seen = set(); res=[]
     for k in out:
         if k and k not in seen:
             seen.add(k); res.append(k)
     return res
-
-TS_INTERFACE_RX = re.compile(r'export\s+interface\s+\w+\s*{([^}]*)}', re.DOTALL)
-TS_TYPE_OBJ_RX = re.compile(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', re.DOTALL)
-TS_CONST_OBJ_RX = re.compile(r'export\s+const\s+\w+\s*=\s*{(.*?)}\s*(?:as\s+const)?', re.DOTALL)
-TS_FIELD_KEY_RX = re.compile(r'(\w+)\??\s*:')
 
 def extract_field_names_from_ts(text: str) -> List[str]:
     names = []
@@ -97,7 +101,6 @@ def extract_field_names_from_ts(text: str) -> List[str]:
     # crude parse of exported const object keys
     for body in (m.group(1) for m in TS_CONST_OBJ_RX.finditer(text)):
         names += [k for k in re.findall(r'["\']?([A-Za-z_]\w+)["\']?\s*:', body)]
-    # de-dup
     seen=set(); out=[]
     for n in names:
         if n not in seen:
@@ -111,13 +114,25 @@ def extract_field_names(file) -> List[str]:
         obj, err = try_load_json_bytes(raw)
         if obj:
             return [k for k in flatten_keys(obj) if k]
-        # fallback line-based if not JSON
         text = _decode_best(raw)
         return extract_field_names_from_text_lines(text)
     elif name.endswith((".ts", ".tsx")):
         text = _decode_best(raw)
         return extract_field_names_from_ts(text)
     return []
+
+def looks_like_db_text(text: str) -> bool:
+    """Accept .txt only if it resembles structured keys, not package pins."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    kept = 0
+    for ln in lines[:200]:
+        if re.search(r'(==|>=|<=|~=|!=)\s*\d', ln):  # looks like requirements pin
+            continue
+        if ('.' in ln) or ('{' in ln) or ('[' in ln) or (':' in ln) or ('"' in ln) or ("'" in ln):
+            kept += 1
+    return kept > 0
 
 # ================= PDF PARSING =================
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
@@ -226,7 +241,7 @@ schema_files = st.sidebar.file_uploader("Extra DB Objects/Schemas", type=["json"
 patterns_file = st.sidebar.file_uploader("Auto-split Patterns JSON (optional)", type=["json"])
 show_split_preview = st.sidebar.checkbox("Show Auto-split Preview", value=True)
 
-# Load patterns
+# Load patterns (optional override)
 patterns = DEFAULT_PATTERNS
 if patterns_file:
     try:
@@ -241,31 +256,48 @@ if pdf_files:
     merged = merge_parts(part_maps)
     merged = auto_split_fields(merged, patterns)
 
-# DB Targets: auto-load + uploads, with debug
+# ================= DB Targets: auto-load + uploads (filtered) =================
 scan_dir = "/mnt/data" if os.path.exists("/mnt/data") else os.getcwd()
 loaded_db_sources = []
 all_fields = []
 
 def _add_upload_like(path: str):
-    with open(path, "rb") as f:
+    try:
+        name = os.path.basename(path)
+        if not name.lower().endswith(ALLOWED_EXTS):  # extension gate
+            return
+        if IGNORE_FILE_RX.match(name):               # ignore obvious non-DB files
+            return
+        # If filename doesn't match our DB-ish pattern, we still allow JSON/TS if structured
+        with open(path, "rb") as f:
+            raw = f.read()
+        # Extra guard for .txt — only keep if looks structured, not package pins
+        if name.lower().endswith(".txt"):
+            text = _decode_best(raw)
+            if not looks_like_db_text(text):
+                return
+        # Build pseudo UploadedFile
         fake_upload = type("UploadedFile", (), {
-            "name": os.path.basename(path),
-            "getbuffer": lambda f=f: f.read()
+            "name": name,
+            "getbuffer": lambda raw=raw: raw
         })
         fields = extract_field_names(fake_upload)
         if fields:
             all_fields.extend(fields)
-            loaded_db_sources.append((os.path.basename(path), len(fields)))
+            loaded_db_sources.append((name, len(fields)))
+    except Exception as e:
+        st.warning(f"Could not read {path}: {e}")
 
-# auto-scan
+# Auto-scan folder
 try:
     for fname in os.listdir(scan_dir):
-        if fname.lower().endswith((".json", ".txt", ".ts", ".tsx")):
+        # prefer filenames that look like your DB objects/schemas
+        if CANDIDATE_NAME_RX.search(fname) or fname.lower().endswith((".json", ".ts", ".tsx")):
             _add_upload_like(os.path.join(scan_dir, fname))
 except Exception as e:
     st.warning(f"Could not scan {scan_dir}: {e}")
 
-# user uploads extend the list
+# Plus any manual uploads
 if schema_files:
     for sf in schema_files:
         fields = extract_field_names(sf)
@@ -275,23 +307,22 @@ if schema_files:
 
 db_targets = ["— (unmapped) —"] + sorted(set(all_fields))
 
-# State
+# ================= STATE & TABS =================
 if "mappings" not in st.session_state:
     st.session_state["mappings"] = {}
 
-# Tabs
 tab_map, tab_dbdebug, tab_export = st.tabs(["📄 Parts & Mapping", "🧭 DB/Schema Debug", "⬇️ Exports"])
 
 with tab_dbdebug:
     st.write(f"Scanning directory: `{scan_dir}`")
     if not loaded_db_sources:
-        st.warning("No DB objects discovered. Drop JSON/TXT/TS files into the scan folder or upload in the sidebar.")
+        st.warning("No DB objects discovered. Place Attorney/Beneficiary/Case/Customer/Lawfirm/LCA/Petitioner objects or your JSON/TS schemas in the scan folder, or upload them in the sidebar.")
     else:
         for name, cnt in loaded_db_sources:
             st.write(f"- **{name}** → {cnt} fields")
     if db_targets and len(db_targets) > 1:
         st.success(f"Total unique DB fields loaded: {len(db_targets)-1}")
-        st.caption("Example fields:")
+        st.caption("Sample fields:")
         st.code("\n".join(list(sorted(set(all_fields)))[:50]))
 
 with tab_map:
