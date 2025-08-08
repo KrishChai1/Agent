@@ -759,49 +759,92 @@ class EnhancedExtractionAgent:
             
             result.parts[part_num] = part
     
-    def _extract_field(self, blocks: List[Dict], idx: int, end_idx: int) -> Optional[FieldNode]:
-        """Extract field from block"""
-        if idx >= len(blocks):
-            return None
-        
-        block = blocks[idx]
-        text = block['text']
-        
-        patterns = [
-            (r'^(\d+)\.([a-z])\.(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
-            (r'^(\d+)([a-z])(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
-            (r'^(\d+)\.([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
-            (r'^(\d+)([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
-            (r'^(\d+)\.\s+(.+)', lambda m: (m.group(1), m.group(2))),
-        ]
-        
-        for pattern, parser in patterns:
-            match = re.match(pattern, text)
-            if match:
-                try:
-                    item_number, label = parser(match)
-                    
-                    field = FieldNode(
-                        item_number=item_number,
-                        label=label.strip(),
-                        page=block['page'],
-                        label_bbox=block.get('bbox')
-                    )
-                    
-                    # Suggest field type
-                    field.field_type, conf = self.knowledge_base.suggest_field_type(label)
-                    field.extraction_confidence = conf * 0.5  # Basic extraction, lower confidence
-                    field.extraction_method = "basic"
-                    
-                    # Look for checkboxes
-                    if field.field_type == FieldType.CHECKBOX or "select" in label.lower():
-                        field.checkbox_options = self._extract_checkboxes(blocks, idx + 1, end_idx)
-                    
-                    return field
-                except Exception:
-                    continue
-        
+   def _extract_field(self, blocks: List[Dict], idx: int, end_idx: int) -> Optional[FieldNode]:
+    """Extract field from block WITH VALUE"""
+    if idx >= len(blocks):
         return None
+    
+    block = blocks[idx]
+    text = block['text']
+    
+    patterns = [
+        (r'^(\d+)\.([a-z])\.(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
+        (r'^(\d+)([a-z])(\d+)\.\s+(.+)', lambda m: (m.group(1)+m.group(2)+m.group(3), m.group(4))),
+        (r'^(\d+)\.([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
+        (r'^(\d+)([a-z])\.\s+(.+)', lambda m: (m.group(1)+m.group(2), m.group(3))),
+        (r'^(\d+)\.\s+(.+)', lambda m: (m.group(1), m.group(2))),
+    ]
+    
+    for pattern, parser in patterns:
+        match = re.match(pattern, text)
+        if match:
+            try:
+                item_number, label = parser(match)
+                
+                field = FieldNode(
+                    item_number=item_number,
+                    label=label.strip(),
+                    page=block['page'],
+                    label_bbox=block.get('bbox')
+                )
+                
+                # Suggest field type
+                field.field_type, conf = self.knowledge_base.suggest_field_type(label)
+                field.extraction_confidence = conf * 0.5  # Basic extraction, lower confidence
+                field.extraction_method = "basic"
+                
+                # Look for checkboxes
+                if field.field_type == FieldType.CHECKBOX or "select" in label.lower():
+                    field.checkbox_options = self._extract_checkboxes(blocks, idx + 1, end_idx)
+                else:
+                    # EXTRACT VALUE - Look ahead for the field value
+                    field.value = self._extract_field_value(blocks, idx, end_idx, field)
+                
+                return field
+            except Exception:
+                continue
+    
+    return None
+
+
+    def _extract_page_blocks(self, page, page_num: int) -> List[Dict]:
+    """Extract text blocks from page with better structure"""
+    blocks = []
+    page_dict = page.get_text("dict")
+    
+    for block in page_dict["blocks"]:
+        if block["type"] == 0:  # Text block
+            for line in block["lines"]:
+                # Get full line text
+                line_text = ""
+                line_bbox = [float('inf'), float('inf'), float('-inf'), float('-inf')]
+                
+                for span in line["spans"]:
+                    span_text = span["text"]
+                    if span_text.strip():
+                        if line_text and not line_text.endswith(' '):
+                            line_text += " "
+                        line_text += span_text
+                        
+                        # Update line bbox
+                        span_bbox = span.get("bbox", [0, 0, 0, 0])
+                        line_bbox[0] = min(line_bbox[0], span_bbox[0])
+                        line_bbox[1] = min(line_bbox[1], span_bbox[1])
+                        line_bbox[2] = max(line_bbox[2], span_bbox[2])
+                        line_bbox[3] = max(line_bbox[3], span_bbox[3])
+                
+                if line_text.strip():
+                    blocks.append({
+                        'text': line_text.strip(),
+                        'page': page_num,
+                        'bbox': line_bbox,
+                        'y_pos': line_bbox[1],
+                        'x_pos': line_bbox[0]
+                    })
+    
+    # Sort by position (top to bottom, left to right)
+    blocks.sort(key=lambda b: (b['page'], b['y_pos'], b['x_pos']))
+    return blocks
     
     def _extract_checkboxes(self, blocks: List[Dict], start_idx: int, end_idx: int) -> List[CheckboxOption]:
         """Extract checkbox options"""
@@ -1966,3 +2009,4 @@ if __name__ == "__main__":
         st.stop()
     
     main()
+
