@@ -42,7 +42,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Enhanced KK USCIS Form Reader with Validation",
+    page_title="Enhanced USCIS Form Reader with Validation",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1158,7 +1158,7 @@ def export_to_csv_enhanced(result: ExtractionResult) -> str:
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1> KK Enhanced USCIS Form Reader</h1>'
+        '<h1>📋 Enhanced USCIS Form Reader</h1>'
         '<p>Extract fields with proper sequence validation (1a, 1b, 1c support)</p>'
         '</div>', 
         unsafe_allow_html=True
@@ -1494,5 +1494,3 @@ if __name__ == "__main__":
         st.stop()
     
     main()
-
-
