@@ -42,7 +42,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Enhanced USCIS Form Reader with Validation",
+    page_title="Enhanced KK USCIS Form Reader with Validation",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1494,3 +1494,4 @@ if __name__ == "__main__":
         st.stop()
     
     main()
+
