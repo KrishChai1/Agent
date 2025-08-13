@@ -164,12 +164,19 @@ class FieldNumber:
     
     def to_sort_key(self) -> Tuple:
         """Return a tuple for sorting"""
-        return (
-            self.main,
-            self.sub_letter or "",
-            int(self.sub_number) if self.sub_number.isdigit() else 999,
-            self.sub_roman or ""
-        )
+        # Handle None values properly
+        main_key = self.main if self.main is not None else 999
+        letter_key = self.sub_letter if self.sub_letter else ""
+        
+        # Parse sub_number if it's a digit string
+        if self.sub_number and self.sub_number.isdigit():
+            number_key = int(self.sub_number)
+        else:
+            number_key = 999
+            
+        roman_key = self.sub_roman if self.sub_roman else ""
+        
+        return (main_key, letter_key, number_key, roman_key)
 
 @dataclass
 class ExtractedField:
@@ -209,6 +216,11 @@ class FormPart:
     expected_sequence: List[str] = field(default_factory=list)
     missing_fields: List[str] = field(default_factory=list)
     
+    def __post_init__(self):
+        """Initialize any missing attributes"""
+        if not hasattr(self, 'missing_fields'):
+            self.missing_fields = []
+    
     def add_field(self, field: ExtractedField):
         field.part_number = self.number
         field.part_name = self.title
@@ -216,7 +228,11 @@ class FormPart:
     
     def sort_fields(self):
         """Sort fields by their parsed numbers"""
-        self.fields.sort(key=lambda f: f.parsed_number.to_sort_key() if f.parsed_number else (999, "", 999, ""))
+        try:
+            self.fields.sort(key=lambda f: f.parsed_number.to_sort_key() if f.parsed_number else (999, "", 999, ""))
+        except Exception as e:
+            # If sorting fails, just leave in original order
+            pass
     
     def validate_sequence(self):
         """Validate field sequence and find missing fields"""
@@ -268,13 +284,23 @@ class ExtractionResult:
     debug_info: List[str] = field(default_factory=list)
     validation_report: Dict[str, Any] = field(default_factory=dict)
     
+    def __post_init__(self):
+        """Initialize any missing attributes"""
+        if not hasattr(self, 'sequence_issues'):
+            self.sequence_issues = 0
+    
     def calculate_stats(self):
         """Calculate statistics"""
         self.total_fields = sum(len(part.fields) for part in self.parts.values())
         self.filled_fields = sum(1 for part in self.parts.values() 
                                 for field in part.fields if field.value and field.value.strip())
         self.empty_fields = self.total_fields - self.filled_fields
-        self.sequence_issues = sum(len(part.missing_fields) for part in self.parts.values())
+        
+        # Calculate sequence issues safely
+        try:
+            self.sequence_issues = sum(len(getattr(part, 'missing_fields', [])) for part in self.parts.values())
+        except:
+            self.sequence_issues = 0
 
 # ===== FIELD NUMBER PARSER =====
 class FieldNumberParser:
@@ -351,93 +377,151 @@ class EnhancedUSCISFormExtractor:
         """Extract form data from PDF"""
         start_time = time.time()
         
-        # Open PDF
-        if hasattr(pdf_file, 'read'):
-            pdf_file.seek(0)
-            pdf_bytes = pdf_file.read()
-        else:
-            pdf_bytes = pdf_file
+        try:
+            # Open PDF
+            if hasattr(pdf_file, 'read'):
+                pdf_file.seek(0)
+                pdf_bytes = pdf_file.read()
+            else:
+                pdf_bytes = pdf_file
+                
+            self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            self.log(f"Opened PDF with {len(self.doc)} pages")
             
-        self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        self.log(f"Opened PDF with {len(self.doc)} pages")
-        
-        # Identify form
-        self.form_info = self._identify_form()
-        self.log(f"Identified form: {self.form_info['number']} - {self.form_info['title']}")
-        
-        # Create result
-        result = ExtractionResult(
-            form_number=self.form_info['number'],
-            form_title=self.form_info['title']
-        )
-        
-        # Extract all text with positions
-        all_text_blocks = []
-        for page_num in range(len(self.doc)):
-            page = self.doc[page_num]
-            blocks = self._extract_page_data(page, page_num + 1)
-            all_text_blocks.extend(blocks)
-            self.log(f"Page {page_num + 1}: Found {len(blocks)} text blocks")
-        
-        self.log(f"Total text blocks: {len(all_text_blocks)}")
-        
-        # Find parts
-        parts_info = self._find_parts(all_text_blocks)
-        self.log(f"Found {len(parts_info)} parts")
-        
-        # If no parts found, treat entire document as Part 1
-        if not parts_info:
-            parts_info = {
-                1: {
-                    'title': 'Complete Form',
-                    'start_idx': 0,
-                    'end_idx': len(all_text_blocks) - 1,
-                    'page': 1
-                }
-            }
-        
-        # Extract fields for each part
-        for part_num, part_info in parts_info.items():
-            part = FormPart(
-                number=part_num, 
-                title=part_info['title'],
-                start_page=part_info['page']
+            # Identify form
+            self.form_info = self._identify_form()
+            self.log(f"Identified form: {self.form_info['number']} - {self.form_info['title']}")
+            
+            # Create result with proper initialization
+            result = ExtractionResult(
+                form_number=self.form_info['number'],
+                form_title=self.form_info['title'],
+                sequence_issues=0  # Explicitly initialize
             )
             
-            # Get blocks for this part
-            start_idx = part_info['start_idx']
-            end_idx = part_info['end_idx']
-            part_blocks = all_text_blocks[start_idx:end_idx + 1]
+            # Extract all text with positions
+            all_text_blocks = []
+            for page_num in range(len(self.doc)):
+                try:
+                    page = self.doc[page_num]
+                    blocks = self._extract_page_data(page, page_num + 1)
+                    all_text_blocks.extend(blocks)
+                    self.log(f"Page {page_num + 1}: Found {len(blocks)} text blocks")
+                except Exception as e:
+                    self.log(f"Error extracting page {page_num + 1}: {str(e)}")
+                    continue
             
-            self.log(f"Part {part_num}: Processing {len(part_blocks)} blocks")
+            self.log(f"Total text blocks: {len(all_text_blocks)}")
             
-            # Extract fields with enhanced parsing
-            fields = self._extract_fields_enhanced(part_blocks, part_info['page'])
+            if not all_text_blocks:
+                self.log("WARNING: No text blocks extracted from PDF!")
+                self.log("This could mean:")
+                self.log("1. The PDF is image-based (scanned) and needs OCR")
+                self.log("2. The PDF has an unusual structure")
+                self.log("3. The PDF is corrupted or encrypted")
+                result.debug_info = self.debug_logs
+                
+                # Try to provide more info
+                if self.doc and len(self.doc) > 0:
+                    try:
+                        # Check if PDF has text
+                        sample_text = self.doc[0].get_text()
+                        if not sample_text.strip():
+                            self.log("The PDF appears to have no extractable text. It might be a scanned image.")
+                        else:
+                            self.log(f"Found some text but couldn't parse it: {sample_text[:200]}...")
+                    except:
+                        pass
+                
+                return result
             
-            self.log(f"Part {part_num}: Found {len(fields)} fields")
+            # Find parts
+            parts_info = self._find_parts(all_text_blocks)
+            self.log(f"Found {len(parts_info)} parts")
             
-            for field in fields:
-                part.add_field(field)
+            # If no parts found, treat entire document as Part 1
+            if not parts_info:
+                parts_info = {
+                    1: {
+                        'title': 'Complete Form',
+                        'start_idx': 0,
+                        'end_idx': len(all_text_blocks) - 1,
+                        'page': 1
+                    }
+                }
             
-            # Sort fields by their parsed numbers
-            part.sort_fields()
+            # Extract fields for each part
+            for part_num, part_info in parts_info.items():
+                try:
+                    part = FormPart(
+                        number=part_num, 
+                        title=part_info['title'],
+                        start_page=part_info['page']
+                    )
+                    
+                    # Get blocks for this part
+                    start_idx = part_info['start_idx']
+                    end_idx = part_info['end_idx']
+                    
+                    # Ensure indices are valid
+                    if start_idx < 0 or end_idx >= len(all_text_blocks):
+                        self.log(f"Part {part_num}: Invalid indices, skipping")
+                        continue
+                        
+                    part_blocks = all_text_blocks[start_idx:end_idx + 1]
+                    
+                    self.log(f"Part {part_num}: Processing {len(part_blocks)} blocks")
+                    
+                    # Extract fields with enhanced parsing
+                    fields = self._extract_fields_enhanced(part_blocks, part_info['page'])
+                    
+                    self.log(f"Part {part_num}: Found {len(fields)} fields")
+                    
+                    for field in fields:
+                        part.add_field(field)
+                    
+                    # Sort fields by their parsed numbers
+                    part.sort_fields()
+                    
+                    # Validate sequence
+                    part.validate_sequence()
+                    
+                    result.parts[part_num] = part
+                    
+                except Exception as e:
+                    self.log(f"Error processing part {part_num}: {str(e)}")
+                    if self.debug_mode:
+                        traceback.print_exc()
+                    continue
             
-            # Validate sequence
-            part.validate_sequence()
+            # Run validation
+            try:
+                result.validation_report = self._validate_extraction(result)
+            except Exception as e:
+                self.log(f"Error during validation: {str(e)}")
+                result.validation_report = {}
             
-            result.parts[part_num] = part
-        
-        # Run validation
-        result.validation_report = self._validate_extraction(result)
-        
-        # Calculate stats
-        result.calculate_stats()
-        result.extraction_time = time.time() - start_time
-        result.debug_info = self.debug_logs
-        
-        self.log(f"Extraction complete: {result.total_fields} fields, {result.filled_fields} filled, {result.sequence_issues} sequence issues")
-        
-        return result
+            # Calculate stats
+            result.calculate_stats()
+            result.extraction_time = time.time() - start_time
+            result.debug_info = self.debug_logs
+            
+            self.log(f"Extraction complete: {result.total_fields} fields, {result.filled_fields} filled, {result.sequence_issues} sequence issues")
+            
+            return result
+            
+        except Exception as e:
+            self.log(f"CRITICAL ERROR during extraction: {str(e)}")
+            if self.debug_mode:
+                traceback.print_exc()
+            
+            # Return a minimal result object
+            return ExtractionResult(
+                form_number="ERROR",
+                form_title="Extraction Failed",
+                debug_info=self.debug_logs + [f"CRITICAL ERROR: {str(e)}"],
+                sequence_issues=0
+            )
     
     def _identify_form(self) -> Dict[str, str]:
         """Identify form type"""
@@ -482,40 +566,82 @@ class EnhancedUSCISFormExtractor:
         """Extract all text blocks with positions from page"""
         blocks = []
         
-        # Method 1: Get text with detailed position info
-        text_dict = page.get_text("dict")
+        try:
+            # Method 1: Get text with detailed position info
+            text_dict = page.get_text("dict")
+            
+            for block in text_dict["blocks"]:
+                if block["type"] == 0:  # Text block
+                    for line in block["lines"]:
+                        line_text = ""
+                        line_bbox = None
+                        
+                        for span in line["spans"]:
+                            text = span["text"]
+                            if text.strip():
+                                if line_text and not line_text.endswith(' '):
+                                    line_text += " "
+                                line_text += text
+                                
+                                if line_bbox is None:
+                                    line_bbox = list(span["bbox"])
+                                else:
+                                    # Extend bbox
+                                    line_bbox[2] = max(line_bbox[2], span["bbox"][2])
+                                    line_bbox[3] = max(line_bbox[3], span["bbox"][3])
+                        
+                        if line_text.strip():
+                            blocks.append({
+                                'text': line_text.strip(),
+                                'page': page_num,
+                                'bbox': line_bbox or [0, 0, 0, 0],
+                                'y': line_bbox[1] if line_bbox else 0,
+                                'x': line_bbox[0] if line_bbox else 0
+                            })
+            
+            # Method 2: Also try simple text extraction as fallback
+            if not blocks:
+                self.log(f"Page {page_num}: No blocks from dict method, trying simple extraction")
+                simple_text = page.get_text()
+                if simple_text:
+                    lines = simple_text.split('\n')
+                    for idx, line in enumerate(lines):
+                        if line.strip():
+                            blocks.append({
+                                'text': line.strip(),
+                                'page': page_num,
+                                'bbox': [0, idx * 20, 100, (idx + 1) * 20],  # Dummy bbox
+                                'y': idx * 20,
+                                'x': 0
+                            })
+            
+            # Sort by position
+            blocks.sort(key=lambda b: (b['y'], b['x']))
+            
+            # Log sample text from page
+            if blocks and self.debug_mode:
+                sample = blocks[0]['text'] if blocks else "No text"
+                self.log(f"Page {page_num} sample: {sample[:100]}...")
+                
+        except Exception as e:
+            self.log(f"Error extracting page {page_num}: {str(e)}")
+            # Try simple fallback
+            try:
+                simple_text = page.get_text()
+                if simple_text:
+                    lines = simple_text.split('\n')
+                    for idx, line in enumerate(lines):
+                        if line.strip():
+                            blocks.append({
+                                'text': line.strip(),
+                                'page': page_num,
+                                'bbox': [0, idx * 20, 100, (idx + 1) * 20],
+                                'y': idx * 20,
+                                'x': 0
+                            })
+            except:
+                pass
         
-        for block in text_dict["blocks"]:
-            if block["type"] == 0:  # Text block
-                for line in block["lines"]:
-                    line_text = ""
-                    line_bbox = None
-                    
-                    for span in line["spans"]:
-                        text = span["text"]
-                        if text.strip():
-                            if line_text and not line_text.endswith(' '):
-                                line_text += " "
-                            line_text += text
-                            
-                            if line_bbox is None:
-                                line_bbox = list(span["bbox"])
-                            else:
-                                # Extend bbox
-                                line_bbox[2] = max(line_bbox[2], span["bbox"][2])
-                                line_bbox[3] = max(line_bbox[3], span["bbox"][3])
-                    
-                    if line_text.strip():
-                        blocks.append({
-                            'text': line_text.strip(),
-                            'page': page_num,
-                            'bbox': line_bbox or [0, 0, 0, 0],
-                            'y': line_bbox[1] if line_bbox else 0,
-                            'x': line_bbox[0] if line_bbox else 0
-                        })
-        
-        # Sort by position
-        blocks.sort(key=lambda b: (b['y'], b['x']))
         return blocks
     
     def _find_parts(self, blocks: List[Dict]) -> Dict[int, Dict]:
@@ -769,6 +895,9 @@ class EnhancedUSCISFormExtractor:
             'overall_score': 0.0
         }
         
+        if not result.parts:
+            return report
+        
         total_score = 0
         
         for part_num, part in result.parts.items():
@@ -834,10 +963,11 @@ def display_enhanced_results(result: ExtractionResult):
     with col3:
         st.metric("Empty Fields", result.empty_fields)
     with col4:
-        st.metric("Sequence Issues", result.sequence_issues, 
-                 delta="Good" if result.sequence_issues == 0 else f"-{result.sequence_issues}")
+        sequence_issues = getattr(result, 'sequence_issues', 0)
+        st.metric("Sequence Issues", sequence_issues, 
+                 delta="Good" if sequence_issues == 0 else f"-{sequence_issues}")
     with col5:
-        score = result.validation_report.get('overall_score', 0)
+        score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
         st.metric("Validation Score", f"{score:.0f}%")
     
     # Validation Report
@@ -869,6 +999,14 @@ def display_enhanced_results(result: ExtractionResult):
     
     # Display parts with sequence
     st.markdown("### 📋 Extracted Form Data by Part")
+    
+    if not result.parts:
+        st.warning("No parts were extracted from the PDF.")
+        if result.debug_info:
+            with st.expander("Debug Information"):
+                for log in result.debug_info:
+                    st.text(log)
+        return
     
     # Add filters
     col1, col2, col3 = st.columns(3)
@@ -1026,6 +1164,9 @@ def main():
         unsafe_allow_html=True
     )
     
+    # Add a note about PDF requirements
+    st.info("ℹ️ This tool works with fillable PDFs or PDFs with selectable text. Scanned/image PDFs require OCR processing first.")
+    
     # Initialize session state
     if 'extraction_result' not in st.session_state:
         st.session_state.extraction_result = None
@@ -1062,9 +1203,12 @@ def main():
             st.write(f"Form: {result.form_number}")
             st.write(f"Fields: {result.total_fields}")
             st.write(f"Filled: {result.filled_fields}")
-            st.write(f"Issues: {result.sequence_issues}")
             
-            score = result.validation_report.get('overall_score', 0)
+            # Safely access sequence_issues
+            sequence_issues = getattr(result, 'sequence_issues', 0)
+            st.write(f"Issues: {sequence_issues}")
+            
+            score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
             if score >= 90:
                 st.success(f"Validation: {score:.0f}% ✅")
             elif score >= 70:
@@ -1086,21 +1230,67 @@ def main():
         )
         
         if uploaded_file:
-            col1, col2 = st.columns([3, 1])
+            col1, col2, col3 = st.columns([2, 1, 1])
             
             with col1:
                 st.success(f"✅ File uploaded: {uploaded_file.name}")
                 st.info("Click 'Extract Data' to process with sequence validation")
             
             with col2:
+                if st.button("🔍 Test PDF", help="Quick test to verify PDF can be read"):
+                    try:
+                        uploaded_file.seek(0)
+                        pdf_bytes = uploaded_file.read()
+                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                        st.write(f"Pages: {len(doc)}")
+                        
+                        # Get first page text
+                        if len(doc) > 0:
+                            first_page_text = doc[0].get_text()
+                            if first_page_text.strip():
+                                st.success("✅ PDF has extractable text")
+                                st.text_area("First page preview:", first_page_text[:500], height=200)
+                            else:
+                                st.error("❌ No text found - PDF might be scanned/image-based")
+                                st.info("This tool requires PDFs with selectable text. Scanned PDFs need OCR processing first.")
+                                
+                                # Check if page has images
+                                img_list = doc[0].get_images()
+                                if img_list:
+                                    st.write(f"Found {len(img_list)} images on first page")
+                        doc.close()
+                        uploaded_file.seek(0)  # Reset file pointer
+                    except Exception as e:
+                        st.error(f"PDF Test Error: {str(e)}")
+                        if hasattr(uploaded_file, 'seek'):
+                            uploaded_file.seek(0)  # Reset file pointer
+            
+            with col3:
                 if st.button("🚀 Extract Data", type="primary", use_container_width=True):
                     with st.spinner("Extracting and validating form data..."):
                         try:
+                            # Show debug info during extraction
+                            if st.session_state.debug_mode:
+                                debug_container = st.container()
+                                with debug_container:
+                                    st.write("Starting extraction...")
+                            
                             extractor = EnhancedUSCISFormExtractor(debug_mode=st.session_state.debug_mode)
                             result = extractor.extract(uploaded_file)
                             st.session_state.extraction_result = result
                             
-                            if result.total_fields > 0:
+                            # Always show debug info if extraction failed
+                            if result.form_number == "ERROR" or result.total_fields == 0:
+                                st.error("⚠️ Extraction failed or no fields found!")
+                                with st.expander("Debug Information", expanded=True):
+                                    for log in result.debug_info:
+                                        st.text(log)
+                                
+                                # Show what we did extract
+                                st.write(f"Form identified: {result.form_number}")
+                                st.write(f"Parts found: {len(result.parts)}")
+                                st.write(f"Total fields: {result.total_fields}")
+                            elif result.total_fields > 0:
                                 st.success(f"✅ Extracted {result.total_fields} fields from {len(result.parts)} parts!")
                                 
                                 # Show validation summary
@@ -1116,15 +1306,23 @@ def main():
                                     st.warning(f"Found {result.sequence_issues} sequence issues")
                                 
                                 st.info("Check the 'View Results' and 'Validation' tabs for details")
+                                st.balloons()
                             else:
-                                st.warning("No fields were extracted")
-                            
-                            st.balloons()
+                                st.warning("No fields were extracted. The PDF might not be a standard USCIS form.")
+                                with st.expander("Debug Information"):
+                                    for log in result.debug_info:
+                                        st.text(log)
                             
                         except Exception as e:
-                            st.error(f"Error during extraction: {str(e)}")
+                            st.error(f"Critical error during extraction: {str(e)}")
                             if st.session_state.debug_mode:
                                 st.exception(e)
+                            
+                            # Try to show any debug info we have
+                            if 'extractor' in locals():
+                                st.write("Debug logs before error:")
+                                for log in extractor.debug_logs:
+                                    st.text(log)
     
     # Results tab
     with tabs[1]:
@@ -1135,12 +1333,12 @@ def main():
     
     # Validation tab
     with tabs[2]:
-        if st.session_state.extraction_result:
+        if st.session_state.extraction_result and st.session_state.extraction_result.total_fields > 0:
             result = st.session_state.extraction_result
             st.markdown("### 🔍 Detailed Validation Report")
             
             # Overall validation
-            score = result.validation_report.get('overall_score', 0)
+            score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
             if score >= 90:
                 st.markdown('<div class="validation-success">✅ Extraction Quality: Excellent</div>', 
                            unsafe_allow_html=True)
@@ -1154,7 +1352,7 @@ def main():
             # Part-by-part validation
             for part_num in sorted(result.parts.keys()):
                 part = result.parts[part_num]
-                part_report = result.validation_report['parts_validation'].get(f'Part {part_num}', {})
+                part_report = result.validation_report.get('parts_validation', {}).get(f'Part {part_num}', {})
                 
                 with st.expander(f"Part {part_num}: {part.title}", expanded=True):
                     col1, col2, col3 = st.columns(3)
@@ -1162,7 +1360,8 @@ def main():
                     with col1:
                         st.metric("Total Fields", len(part.fields))
                     with col2:
-                        st.metric("Missing in Sequence", len(part.missing_fields))
+                        missing_count = len(getattr(part, 'missing_fields', []))
+                        st.metric("Missing in Sequence", missing_count)
                     with col3:
                         st.metric("Part Score", f"{part_report.get('score', 0):.0f}%")
                     
@@ -1176,7 +1375,7 @@ def main():
                         st.write(", ".join(field_nums))
                     
                     # Display missing fields
-                    if part.missing_fields:
+                    if hasattr(part, 'missing_fields') and part.missing_fields:
                         st.write("**Missing fields:**")
                         st.error(", ".join(part.missing_fields))
                     
