@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Complete Working USCIS Form Reader - Fixed Version
-Properly extracts ALL fields and values from PDF forms
+Enhanced USCIS Form Reader with Proper Sequence Handling
+- Handles field numbering like 1a, 1b, 1c
+- Maintains proper sequence order
+- Validates completeness of extraction
+- Shows extracted attributes per part with sequence validation
 """
 
 import os
@@ -15,9 +18,10 @@ import csv
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from enum import Enum
 from pathlib import Path
+import difflib
 
 import streamlit as st
 import pandas as pd
@@ -38,7 +42,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="USCIS KK  Form Reader - Fixed Version",
+    page_title="Enhanced USCIS Form Reader with Validation",
     page_icon="📋",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -91,6 +95,31 @@ st.markdown("""
         font-weight: bold;
     }
     
+    .sequence-card {
+        background: #e3f2fd;
+        border: 1px solid #1976d2;
+        border-radius: 6px;
+        padding: 0.5rem;
+        margin: 0.3rem 0;
+    }
+    
+    .missing-field {
+        background: #ffebee;
+        border: 1px solid #f44336;
+        color: #d32f2f;
+        padding: 0.5rem;
+        border-radius: 4px;
+        margin: 0.3rem 0;
+    }
+    
+    .validation-success {
+        background: #e8f5e9;
+        border: 1px solid #4caf50;
+        color: #2e7d32;
+        padding: 0.5rem;
+        border-radius: 4px;
+    }
+    
     .debug-info {
         background: #f0f0f0;
         padding: 0.5rem;
@@ -116,10 +145,38 @@ class FieldType(Enum):
 
 # ===== DATA CLASSES =====
 @dataclass
+class FieldNumber:
+    """Represents a parsed field number like 1.a or 2.b.iii"""
+    main: int
+    sub_letter: str = ""
+    sub_number: str = ""
+    sub_roman: str = ""
+    
+    def __str__(self):
+        parts = [str(self.main)]
+        if self.sub_letter:
+            parts.append(self.sub_letter)
+        if self.sub_number:
+            parts.append(self.sub_number)
+        if self.sub_roman:
+            parts.append(self.sub_roman)
+        return ".".join(parts)
+    
+    def to_sort_key(self) -> Tuple:
+        """Return a tuple for sorting"""
+        return (
+            self.main,
+            self.sub_letter or "",
+            int(self.sub_number) if self.sub_number.isdigit() else 999,
+            self.sub_roman or ""
+        )
+
+@dataclass
 class ExtractedField:
     """Represents an extracted form field with its value"""
     item_number: str
-    label: str
+    parsed_number: Optional[FieldNumber] = None
+    label: str = ""
     value: str = ""
     field_type: FieldType = FieldType.UNKNOWN
     page: int = 1
@@ -127,7 +184,8 @@ class ExtractedField:
     part_name: str = ""
     bbox: Optional[List[float]] = None
     confidence: float = 0.0
-    raw_text: str = ""  # Store raw text for debugging
+    raw_text: str = ""
+    sequence_valid: bool = True
     
     def to_dict(self) -> Dict:
         return {
@@ -137,7 +195,8 @@ class ExtractedField:
             'type': self.field_type.value,
             'page': self.page,
             'part': self.part_number,
-            'confidence': self.confidence
+            'confidence': self.confidence,
+            'sequence_valid': self.sequence_valid
         }
 
 @dataclass 
@@ -147,11 +206,53 @@ class FormPart:
     title: str
     start_page: int = 1
     fields: List[ExtractedField] = field(default_factory=list)
+    expected_sequence: List[str] = field(default_factory=list)
+    missing_fields: List[str] = field(default_factory=list)
     
     def add_field(self, field: ExtractedField):
         field.part_number = self.number
         field.part_name = self.title
         self.fields.append(field)
+    
+    def sort_fields(self):
+        """Sort fields by their parsed numbers"""
+        self.fields.sort(key=lambda f: f.parsed_number.to_sort_key() if f.parsed_number else (999, "", 999, ""))
+    
+    def validate_sequence(self):
+        """Validate field sequence and find missing fields"""
+        if not self.fields:
+            return
+        
+        # Get all field numbers
+        found_numbers = set()
+        for field in self.fields:
+            if field.parsed_number:
+                found_numbers.add(str(field.parsed_number))
+        
+        # Check for missing numbers in common sequences
+        self.missing_fields = []
+        
+        # Find the max main number
+        max_main = max((f.parsed_number.main for f in self.fields if f.parsed_number), default=0)
+        
+        # Check main sequence
+        for i in range(1, max_main + 1):
+            if not any(f.parsed_number and f.parsed_number.main == i for f in self.fields):
+                self.missing_fields.append(str(i))
+        
+        # Check for common sub-sequences (a, b, c)
+        for field in self.fields:
+            if field.parsed_number and field.parsed_number.sub_letter:
+                main_num = field.parsed_number.main
+                # Check if we have a sequence like 1.a, 1.b, 1.c
+                for letter in 'abc':
+                    expected = f"{main_num}.{letter}"
+                    if not any(str(f.parsed_number) == expected for f in self.fields if f.parsed_number):
+                        # Only add if we found at least one letter in this sequence
+                        if any(f.parsed_number and f.parsed_number.main == main_num and f.parsed_number.sub_letter 
+                               for f in self.fields):
+                            if ord(letter) <= ord(field.parsed_number.sub_letter):
+                                self.missing_fields.append(expected)
 
 @dataclass
 class ExtractionResult:
@@ -162,8 +263,10 @@ class ExtractionResult:
     total_fields: int = 0
     filled_fields: int = 0
     empty_fields: int = 0
+    sequence_issues: int = 0
     extraction_time: float = 0.0
     debug_info: List[str] = field(default_factory=list)
+    validation_report: Dict[str, Any] = field(default_factory=dict)
     
     def calculate_stats(self):
         """Calculate statistics"""
@@ -171,16 +274,72 @@ class ExtractionResult:
         self.filled_fields = sum(1 for part in self.parts.values() 
                                 for field in part.fields if field.value and field.value.strip())
         self.empty_fields = self.total_fields - self.filled_fields
+        self.sequence_issues = sum(len(part.missing_fields) for part in self.parts.values())
+
+# ===== FIELD NUMBER PARSER =====
+class FieldNumberParser:
+    """Parse complex field numbers like 1.a, 2.b.iii, etc."""
+    
+    @staticmethod
+    def parse(number_str: str) -> Optional[FieldNumber]:
+        """Parse a field number string into components"""
+        if not number_str:
+            return None
+        
+        # Clean the number string
+        number_str = number_str.strip().rstrip('.')
+        
+        # Patterns for different number formats
+        patterns = [
+            # 1.a.2 format
+            r'^(\d+)\.([a-zA-Z])\.(\d+)$',
+            # 1.a format
+            r'^(\d+)\.([a-zA-Z])$',
+            # 1a format (no dot)
+            r'^(\d+)([a-zA-Z])$',
+            # Just number
+            r'^(\d+)$',
+            # With parentheses like (1)
+            r'^\((\d+)\)$',
+            # Complex like 1.a.i
+            r'^(\d+)\.([a-zA-Z])\.([ivxIVX]+)$',
+        ]
+        
+        for pattern in patterns:
+            match = re.match(pattern, number_str)
+            if match:
+                groups = match.groups()
+                field_num = FieldNumber(main=int(groups[0]))
+                
+                if len(groups) > 1 and groups[1]:
+                    field_num.sub_letter = groups[1].lower()
+                
+                if len(groups) > 2 and groups[2]:
+                    if groups[2].isdigit():
+                        field_num.sub_number = groups[2]
+                    else:
+                        field_num.sub_roman = groups[2].lower()
+                
+                return field_num
+        
+        return None
+    
+    @staticmethod
+    def normalize_number(number_str: str) -> str:
+        """Normalize a field number for comparison"""
+        parsed = FieldNumberParser.parse(number_str)
+        return str(parsed) if parsed else number_str
 
 # ===== MAIN EXTRACTOR =====
-class USCISFormExtractor:
-    """Main form extractor that actually works"""
+class EnhancedUSCISFormExtractor:
+    """Enhanced form extractor with sequence validation"""
     
     def __init__(self, debug_mode=False):
         self.doc = None
         self.form_info = {"number": "Unknown", "title": "Unknown Form"}
         self.debug_mode = debug_mode
         self.debug_logs = []
+        self.field_parser = FieldNumberParser()
     
     def log(self, message: str):
         """Log debug message"""
@@ -252,22 +411,31 @@ class USCISFormExtractor:
             
             self.log(f"Part {part_num}: Processing {len(part_blocks)} blocks")
             
-            # Extract fields with values
-            fields = self._extract_fields_with_values(part_blocks, part_info['page'])
+            # Extract fields with enhanced parsing
+            fields = self._extract_fields_enhanced(part_blocks, part_info['page'])
             
             self.log(f"Part {part_num}: Found {len(fields)} fields")
             
             for field in fields:
                 part.add_field(field)
             
+            # Sort fields by their parsed numbers
+            part.sort_fields()
+            
+            # Validate sequence
+            part.validate_sequence()
+            
             result.parts[part_num] = part
+        
+        # Run validation
+        result.validation_report = self._validate_extraction(result)
         
         # Calculate stats
         result.calculate_stats()
         result.extraction_time = time.time() - start_time
         result.debug_info = self.debug_logs
         
-        self.log(f"Extraction complete: {result.total_fields} fields, {result.filled_fields} filled")
+        self.log(f"Extraction complete: {result.total_fields} fields, {result.filled_fields} filled, {result.sequence_issues} sequence issues")
         
         return result
     
@@ -346,22 +514,6 @@ class USCISFormExtractor:
                             'x': line_bbox[0] if line_bbox else 0
                         })
         
-        # Method 2: Also use get_text("blocks") for comparison
-        text_blocks = page.get_text("blocks")
-        for b in text_blocks:
-            text = b[4].strip()
-            if text and len(text) > 1:
-                # Check if we already have this text
-                already_exists = any(block['text'] == text for block in blocks)
-                if not already_exists:
-                    blocks.append({
-                        'text': text,
-                        'page': page_num,
-                        'bbox': list(b[:4]),
-                        'y': b[1],
-                        'x': b[0]
-                    })
-        
         # Sort by position
         blocks.sort(key=lambda b: (b['y'], b['x']))
         return blocks
@@ -410,95 +562,84 @@ class USCISFormExtractor:
         
         return parts
     
-    def _extract_fields_with_values(self, blocks: List[Dict], page_num: int) -> List[ExtractedField]:
-        """Extract fields with their filled values - FIXED VERSION"""
+    def _extract_fields_enhanced(self, blocks: List[Dict], page_num: int) -> List[ExtractedField]:
+        """Extract fields with enhanced number parsing"""
         fields = []
         i = 0
         
-        # Field patterns - comprehensive list
+        # Enhanced field patterns
         field_patterns = [
-            # Standard numbering patterns
-            (r'^(\d+)\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (m.group(1), m.group(2), m.group(3) or "")),
-            (r'^(\d+)\.\s*([a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (f"{m.group(1)}.{m.group(2)}", m.group(3), m.group(4) or "")),
-            (r'^(\d+)([a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (f"{m.group(1)}{m.group(2)}", m.group(3), m.group(4) or "")),
-            (r'^([A-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (m.group(1), m.group(2), m.group(3) or "")),
-            (r'^([a-z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (m.group(1), m.group(2), m.group(3) or "")),
-            (r'^\((\d+)\)\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (f"({m.group(1)})", m.group(2), m.group(3) or "")),
-            # Without dots
-            (r'^(\d+)\s+(.+?)(?:\s*[:：]\s*(.*))?$', lambda m: (m.group(1), m.group(2), m.group(3) or "")),
-            # Special patterns for labels with values
-            (r'^(.+?)\s*[:：]\s*(.+)$', lambda m: ("", m.group(1), m.group(2))),
+            # Standard patterns with sub-numbering
+            (r'^(\d+\.[a-zA-Z]\.?\d*)\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'complex'),
+            (r'^(\d+\.[a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'letter_sub'),
+            (r'^(\d+[a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'letter_no_dot'),
+            (r'^(\d+)\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'simple'),
+            (r'^([A-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'capital'),
+            (r'^([a-z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'lowercase'),
+            (r'^\((\d+)\)\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'parentheses'),
+            (r'^(\d+)\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'no_dot'),
         ]
         
         while i < len(blocks):
             block = blocks[i]
             text = block['text']
             
-            # Skip part headers and page numbers
-            if re.match(r'^Part\s+\d+', text, re.IGNORECASE) or re.match(r'^Page\s+\d+', text, re.IGNORECASE):
+            # Skip headers
+            if re.match(r'^(Part|Page|Form|Section)\s+', text, re.IGNORECASE):
                 i += 1
                 continue
             
-            # Skip form headers
-            if re.match(r'^Form\s+[A-Z]-\d+', text, re.IGNORECASE):
-                i += 1
-                continue
-            
-            # Try to extract field
+            # Try field patterns
             field_found = False
             
-            for pattern, parser in field_patterns:
+            for pattern, pattern_type in field_patterns:
                 match = re.match(pattern, text)
                 if match:
-                    try:
-                        parts = parser(match)
-                        if len(parts) >= 2:
-                            item_num = parts[0] if parts[0] else f"field_{i}"
-                            label = parts[1].strip()
-                            value = parts[2].strip() if len(parts) > 2 and parts[2] else ""
-                            
-                            # Skip if label is too short or looks like instructions
-                            if len(label) < 3 or label.startswith('(') and label.endswith(')'):
-                                break
-                            
-                            # Create field
-                            extracted_field = ExtractedField(
-                                item_number=item_num,
-                                label=label,
-                                value=value,
-                                page=block.get('page', page_num),
-                                bbox=block.get('bbox'),
-                                raw_text=text
-                            )
-                            
-                            # If no value on same line, look for it
-                            if not value:
-                                value = self._find_field_value(blocks, i, label)
-                                extracted_field.value = value
-                            
-                            # Determine field type
-                            extracted_field.field_type = self._determine_field_type(label, value)
-                            
-                            # Set confidence
-                            extracted_field.confidence = 0.9 if value else 0.3
-                            
-                            fields.append(extracted_field)
-                            field_found = True
-                            break
-                            
-                    except Exception as e:
-                        self.log(f"Error parsing field: {e}")
-                        continue
+                    groups = match.groups()
+                    item_num = groups[0]
+                    label = groups[1].strip()
+                    value = groups[2].strip() if len(groups) > 2 and groups[2] else ""
+                    
+                    # Skip if label is too short or looks like instructions
+                    if len(label) < 3 or (label.startswith('(') and label.endswith(')')):
+                        break
+                    
+                    # Parse the field number
+                    parsed_num = self.field_parser.parse(item_num)
+                    
+                    # Create field
+                    extracted_field = ExtractedField(
+                        item_number=item_num,
+                        parsed_number=parsed_num,
+                        label=label,
+                        value=value,
+                        page=block.get('page', page_num),
+                        bbox=block.get('bbox'),
+                        raw_text=text
+                    )
+                    
+                    # If no value on same line, look for it
+                    if not value:
+                        value = self._find_field_value(blocks, i, label)
+                        extracted_field.value = value
+                    
+                    # Determine field type
+                    extracted_field.field_type = self._determine_field_type(label, value)
+                    
+                    # Set confidence
+                    extracted_field.confidence = 0.9 if value else 0.3
+                    
+                    fields.append(extracted_field)
+                    field_found = True
+                    break
             
-            # Handle checkboxes and radio buttons
+            # Handle checkboxes
             if not field_found:
                 checkbox_patterns = [
                     (r'^[□☐]\s*(.+)', False),
                     (r'^[☑☒✓✗×X]\s*(.+)', True),
                     (r'^\[\s*\]\s*(.+)', False),
                     (r'^\[[Xx✓]\]\s*(.+)', True),
-                    (r'^◯\s*(.+)', False),
-                    (r'^◉\s*(.+)', True),
                 ]
                 
                 for pattern, is_checked in checkbox_patterns:
@@ -519,31 +660,6 @@ class USCISFormExtractor:
                         field_found = True
                         break
             
-            # Even if not a clear field pattern, if it looks like it could be a field, add it
-            if not field_found and i < len(blocks) - 1:
-                # Check if this might be a field label (heuristic)
-                if (len(text) > 5 and len(text) < 200 and 
-                    not text.startswith('(') and 
-                    not re.match(r'^(Page|Form|Part|Section|Instructions)', text, re.IGNORECASE)):
-                    
-                    # Look ahead for a value
-                    value = self._find_field_value(blocks, i, text)
-                    
-                    # Only add if we found a value or the text looks like a question
-                    if value or '?' in text or any(word in text.lower() for word in ['name', 'date', 'number', 'address']):
-                        extracted_field = ExtractedField(
-                            item_number=f"auto_{i}",
-                            label=text,
-                            value=value,
-                            page=block.get('page', page_num),
-                            bbox=block.get('bbox'),
-                            confidence=0.5 if value else 0.2,
-                            raw_text=text
-                        )
-                        
-                        extracted_field.field_type = self._determine_field_type(text, value)
-                        fields.append(extracted_field)
-            
             i += 1
         
         return fields
@@ -557,63 +673,39 @@ class USCISFormExtractor:
         field_bbox = field_block.get('bbox', [0, 0, 0, 0])
         
         # Look at next few blocks
-        values = []
-        
         for i in range(field_idx + 1, min(field_idx + 5, len(blocks))):
             next_block = blocks[i]
             next_text = next_block['text'].strip()
             next_bbox = next_block.get('bbox', [0, 0, 0, 0])
             
-            # Skip if it's another field (be more careful here)
-            if re.match(r'^\d+[a-zA-Z]?\.\s+\w+', next_text):
+            # Skip if it's another field
+            if any(re.match(pattern[0], next_text) for pattern, _ in [
+                (r'^(\d+\.[a-zA-Z]\.?\d*)\.\s+', 'complex'),
+                (r'^(\d+\.[a-zA-Z])\.\s+', 'letter_sub'),
+                (r'^(\d+[a-zA-Z])\.\s+', 'letter_no_dot'),
+                (r'^(\d+)\.\s+', 'simple'),
+            ]):
                 break
             
-            # Skip checkboxes
-            if re.match(r'^[□☐☑☒✓✗×\[\]◯◉]\s*', next_text):
+            # Skip checkboxes and headers
+            if re.match(r'^[□☐☑☒✓✗×\[\]◯◉]\s*', next_text) or re.match(r'^(Part|Page|Form)\s+', next_text, re.IGNORECASE):
                 continue
             
-            # Skip common headers and instructions
-            skip_patterns = [
-                r'^(Part|Page|Form|Section)\s+',
-                r'^\(.*\)$',
-                r'^Instructions',
-                r'^Note:',
-            ]
-            
-            if any(re.match(p, next_text, re.IGNORECASE) for p in skip_patterns):
-                continue
-            
-            # Skip if text is too long (probably instructions)
+            # Skip if text is too long
             if len(next_text) > 200:
                 continue
             
-            # Check position - value might be:
-            # 1. On the same line to the right (most common for filled forms)
-            if (next_bbox[0] > field_bbox[2] - 50 and 
-                abs(next_bbox[1] - field_bbox[1]) < 20):
-                return next_text
-            
-            # 2. On the line immediately below
-            if (next_bbox[1] > field_bbox[3] and 
-                next_bbox[1] - field_bbox[3] < 40 and
-                abs(next_bbox[0] - field_bbox[0]) < 200):
-                # Make sure it's not too far below
-                if next_bbox[1] - field_bbox[3] < 25:
+            # Check position - value might be on same line or line below
+            if ((next_bbox[0] > field_bbox[2] - 50 and abs(next_bbox[1] - field_bbox[1]) < 20) or
+                (next_bbox[1] > field_bbox[3] and next_bbox[1] - field_bbox[3] < 40)):
+                
+                if self._looks_like_value(next_text):
                     return next_text
-                # If it's a bit further, only take it if it looks like a value
-                elif self._looks_like_value(next_text):
-                    return next_text
-            
-            # 3. If we haven't found anything yet and this looks like a value, consider it
-            if not values and self._looks_like_value(next_text) and len(next_text) < 100:
-                values.append(next_text)
         
-        # Return the first value we found
-        return values[0] if values else ""
+        return ""
     
     def _looks_like_value(self, text: str) -> bool:
         """Check if text looks like a field value"""
-        # Too short
         if len(text) < 2:
             return False
         
@@ -649,9 +741,9 @@ class USCISFormExtractor:
             return FieldType.DATE
         elif any(word in label_lower for word in ['email', 'e-mail']):
             return FieldType.EMAIL
-        elif any(word in label_lower for word in ['phone', 'telephone', 'mobile', 'cell']):
+        elif any(word in label_lower for word in ['phone', 'telephone', 'mobile']):
             return FieldType.PHONE
-        elif any(word in label_lower for word in ['number', 'no.', '#', 'ssn', 'a-number', 'uscis']):
+        elif any(word in label_lower for word in ['number', 'no.', '#', 'ssn', 'a-number']):
             return FieldType.NUMBER
         elif any(word in label_lower for word in ['name']):
             return FieldType.NAME
@@ -668,17 +760,71 @@ class USCISFormExtractor:
                 return FieldType.PHONE
         
         return FieldType.TEXT
+    
+    def _validate_extraction(self, result: ExtractionResult) -> Dict[str, Any]:
+        """Validate the extraction results"""
+        report = {
+            'total_parts': len(result.parts),
+            'parts_validation': {},
+            'overall_score': 0.0
+        }
+        
+        total_score = 0
+        
+        for part_num, part in result.parts.items():
+            part_report = {
+                'total_fields': len(part.fields),
+                'filled_fields': sum(1 for f in part.fields if f.value),
+                'missing_fields': part.missing_fields,
+                'sequence_gaps': [],
+                'duplicate_numbers': [],
+                'score': 0.0
+            }
+            
+            # Check for sequence gaps
+            if part.fields:
+                parsed_nums = [f.parsed_number for f in part.fields if f.parsed_number]
+                if parsed_nums:
+                    main_nums = sorted(set(pn.main for pn in parsed_nums))
+                    for i in range(len(main_nums) - 1):
+                        if main_nums[i+1] - main_nums[i] > 1:
+                            for missing in range(main_nums[i] + 1, main_nums[i+1]):
+                                part_report['sequence_gaps'].append(str(missing))
+            
+            # Check for duplicates
+            seen_numbers = {}
+            for field in part.fields:
+                if field.item_number in seen_numbers:
+                    part_report['duplicate_numbers'].append(field.item_number)
+                else:
+                    seen_numbers[field.item_number] = True
+            
+            # Calculate part score
+            issues = len(part.missing_fields) + len(part_report['sequence_gaps']) + len(part_report['duplicate_numbers'])
+            if part.fields:
+                part_report['score'] = max(0, 100 - (issues * 5))
+            else:
+                part_report['score'] = 0
+            
+            total_score += part_report['score']
+            report['parts_validation'][f'Part {part_num}'] = part_report
+        
+        # Calculate overall score
+        if result.parts:
+            report['overall_score'] = total_score / len(result.parts)
+        
+        return report
 
 # ===== UI COMPONENTS =====
-def display_results(result: ExtractionResult):
-    """Display extraction results"""
+def display_enhanced_results(result: ExtractionResult):
+    """Display extraction results with sequence validation"""
     if not result:
         st.info("No results to display")
         return
     
     # Summary metrics
     st.markdown("### 📊 Extraction Summary")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric("Total Fields", result.total_fields)
@@ -688,40 +834,91 @@ def display_results(result: ExtractionResult):
     with col3:
         st.metric("Empty Fields", result.empty_fields)
     with col4:
-        st.metric("Extraction Time", f"{result.extraction_time:.1f}s")
+        st.metric("Sequence Issues", result.sequence_issues, 
+                 delta="Good" if result.sequence_issues == 0 else f"-{result.sequence_issues}")
+    with col5:
+        score = result.validation_report.get('overall_score', 0)
+        st.metric("Validation Score", f"{score:.0f}%")
     
-    # Debug info expander
-    if result.debug_info:
-        with st.expander("🔍 Debug Information"):
-            for log in result.debug_info:
-                st.text(log)
+    # Validation Report
+    if result.validation_report:
+        with st.expander("📋 Validation Report", expanded=False):
+            for part_name, part_report in result.validation_report.get('parts_validation', {}).items():
+                st.markdown(f"**{part_name}**")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.write(f"Fields: {part_report['total_fields']} (Filled: {part_report['filled_fields']})")
+                with col2:
+                    st.write(f"Missing: {len(part_report['missing_fields'])}")
+                with col3:
+                    st.write(f"Score: {part_report['score']:.0f}%")
+                
+                if part_report['missing_fields']:
+                    st.markdown(f'<div class="missing-field">Missing fields: {", ".join(part_report["missing_fields"])}</div>', 
+                               unsafe_allow_html=True)
+                
+                if part_report['sequence_gaps']:
+                    st.markdown(f'<div class="missing-field">Sequence gaps: {", ".join(part_report["sequence_gaps"])}</div>', 
+                               unsafe_allow_html=True)
+                
+                if part_report['duplicate_numbers']:
+                    st.warning(f"Duplicate numbers found: {', '.join(part_report['duplicate_numbers'])}")
+                
+                st.markdown("---")
     
-    # Display parts
-    st.markdown("### 📋 Extracted Form Data")
+    # Display parts with sequence
+    st.markdown("### 📋 Extracted Form Data by Part")
     
     # Add filters
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         show_empty = st.checkbox("Show empty fields", value=True)
     with col2:
+        show_sequence = st.checkbox("Show sequence numbers", value=True)
+    with col3:
         field_type_filter = st.selectbox("Filter by type", ["All"] + [t.value for t in FieldType])
     
     for part_num in sorted(result.parts.keys()):
         part = result.parts[part_num]
         filled = sum(1 for f in part.fields if f.value and f.value.strip())
         
+        # Part header with stats
         st.markdown(
             f'<div class="part-header">'
             f'Part {part_num}: {part.title}<br/>'
-            f'<small>Page {part.start_page} | {len(part.fields)} fields | {filled} filled | {len(part.fields) - filled} empty</small>'
+            f'<small>Page {part.start_page} | {len(part.fields)} fields | {filled} filled | '
+            f'{len(part.missing_fields)} missing in sequence</small>'
             f'</div>',
             unsafe_allow_html=True
         )
         
-        with st.expander(f"View Part {part_num} Fields ({len(part.fields)} total)", expanded=(part_num == 1)):
+        with st.expander(f"View Part {part_num} Details", expanded=(part_num == 1)):
             if not part.fields:
                 st.warning("No fields found in this part")
             else:
+                # Show missing fields alert
+                if part.missing_fields:
+                    st.markdown(
+                        f'<div class="missing-field">⚠️ Missing fields in sequence: {", ".join(part.missing_fields)}</div>',
+                        unsafe_allow_html=True
+                    )
+                
+                # Create sequence view
+                if show_sequence:
+                    st.markdown("#### Field Sequence")
+                    sequence_cols = st.columns(6)
+                    for idx, field in enumerate(part.fields):
+                        col_idx = idx % 6
+                        with sequence_cols[col_idx]:
+                            seq_class = "sequence-card" if field.sequence_valid else "missing-field"
+                            st.markdown(
+                                f'<div class="{seq_class}">{field.item_number}</div>',
+                                unsafe_allow_html=True
+                            )
+                
+                # Display fields
+                st.markdown("#### Field Details")
                 for field in part.fields:
                     # Apply filters
                     if not show_empty and not field.value:
@@ -731,15 +928,22 @@ def display_results(result: ExtractionResult):
                     
                     # Create field display
                     st.markdown('<div class="field-card">', unsafe_allow_html=True)
-                    cols = st.columns([3, 4, 1])
+                    cols = st.columns([1, 3, 3, 1])
                     
                     with cols[0]:
-                        # Field label
-                        field_num = f"{field.item_number}. " if field.item_number and not field.item_number.startswith('auto_') else ""
-                        st.markdown(f"**{field_num}{field.label}**")
-                        st.caption(f"Type: {field.field_type.value} | Page: {field.page}")
+                        # Field number with validation indicator
+                        color = "green" if field.sequence_valid else "red"
+                        st.markdown(
+                            f'<span style="color:{color};font-weight:bold;">{field.item_number}</span>',
+                            unsafe_allow_html=True
+                        )
                     
                     with cols[1]:
+                        # Field label
+                        st.markdown(f"**{field.label}**")
+                        st.caption(f"Type: {field.field_type.value} | Page: {field.page}")
+                    
+                    with cols[2]:
                         # Field value
                         if field.value and field.value.strip():
                             st.markdown(f'<div class="field-value">{field.value}</div>', 
@@ -748,20 +952,16 @@ def display_results(result: ExtractionResult):
                             st.markdown('<div class="empty-value">Empty / No value found</div>', 
                                       unsafe_allow_html=True)
                     
-                    with cols[2]:
+                    with cols[3]:
                         # Confidence
                         conf_color = "green" if field.confidence > 0.7 else "orange" if field.confidence > 0.4 else "red"
                         st.markdown(f'<span style="color:{conf_color};font-weight:bold;">{field.confidence:.0%}</span>', 
                                   unsafe_allow_html=True)
                     
-                    # Show raw text in debug mode
-                    if st.session_state.get('debug_mode', False) and field.raw_text:
-                        st.markdown(f'<div class="debug-info">Raw: {field.raw_text}</div>', unsafe_allow_html=True)
-                    
                     st.markdown('</div>', unsafe_allow_html=True)
 
-def export_to_json(result: ExtractionResult) -> str:
-    """Export results to JSON"""
+def export_to_json_enhanced(result: ExtractionResult) -> str:
+    """Export results to JSON with validation info"""
     export_data = {
         'form_info': {
             'number': result.form_number,
@@ -769,21 +969,32 @@ def export_to_json(result: ExtractionResult) -> str:
             'total_fields': result.total_fields,
             'filled_fields': result.filled_fields,
             'empty_fields': result.empty_fields,
-            'extraction_time': result.extraction_time
+            'sequence_issues': result.sequence_issues,
+            'extraction_time': result.extraction_time,
+            'validation_score': result.validation_report.get('overall_score', 0)
         },
+        'validation_report': result.validation_report,
         'parts': {}
     }
     
     for part_num, part in result.parts.items():
-        export_data['parts'][f'part_{part_num}'] = {
+        part_data = {
             'title': part.title,
-            'fields': [field.to_dict() for field in part.fields]
+            'missing_fields': part.missing_fields,
+            'fields': []
         }
+        
+        for field in part.fields:
+            field_data = field.to_dict()
+            field_data['parsed_number'] = str(field.parsed_number) if field.parsed_number else None
+            part_data['fields'].append(field_data)
+        
+        export_data['parts'][f'part_{part_num}'] = part_data
     
     return json.dumps(export_data, indent=2)
 
-def export_to_csv(result: ExtractionResult) -> str:
-    """Export results to CSV"""
+def export_to_csv_enhanced(result: ExtractionResult) -> str:
+    """Export results to CSV with sequence info"""
     rows = []
     
     for part_num, part in result.parts.items():
@@ -791,13 +1002,15 @@ def export_to_csv(result: ExtractionResult) -> str:
             rows.append({
                 'Part': part_num,
                 'Part Title': part.title,
-                'Item Number': field.item_number,
+                'Sequence': field.item_number,
+                'Parsed Number': str(field.parsed_number) if field.parsed_number else "",
                 'Label': field.label,
                 'Value': field.value,
                 'Type': field.field_type.value,
                 'Page': field.page,
                 'Confidence': f"{field.confidence:.0%}",
-                'Has Value': 'Yes' if field.value else 'No'
+                'Has Value': 'Yes' if field.value else 'No',
+                'Sequence Valid': 'Yes' if field.sequence_valid else 'No'
             })
     
     df = pd.DataFrame(rows)
@@ -807,8 +1020,8 @@ def export_to_csv(result: ExtractionResult) -> str:
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>📋 USCIS Form Reader - Complete</h1>'
-        '<p>Extract ALL fields and values from USCIS PDF forms</p>'
+        '<h1>📋 Enhanced USCIS Form Reader</h1>'
+        '<p>Extract fields with proper sequence validation (1a, 1b, 1c support)</p>'
         '</div>', 
         unsafe_allow_html=True
     )
@@ -826,18 +1039,21 @@ def main():
         
         st.markdown("## 📄 About")
         st.info(
-            "This tool extracts both field labels AND filled values from USCIS forms. "
-            "Works with I-130, I-485, I-765, N-400, and other USCIS forms."
+            "Enhanced extractor with:\n"
+            "• Sub-numbering support (1a, 1b, 1c)\n"
+            "• Sequence validation\n"
+            "• Missing field detection\n"
+            "• Part-by-part analysis"
         )
         
         st.markdown("## 🎯 Features")
         st.markdown("""
-        ✅ Extracts ALL form fields  
-        ✅ Captures filled values  
-        ✅ Handles checkboxes  
-        ✅ Smart value detection  
-        ✅ Multiple export formats  
-        ✅ Debug mode available  
+        ✅ Handles complex numbering  
+        ✅ Validates field sequences  
+        ✅ Detects missing fields  
+        ✅ Shows extraction per part  
+        ✅ Validation scoring  
+        ✅ Enhanced reporting  
         """)
         
         if st.session_state.extraction_result:
@@ -846,9 +1062,18 @@ def main():
             st.write(f"Form: {result.form_number}")
             st.write(f"Fields: {result.total_fields}")
             st.write(f"Filled: {result.filled_fields}")
+            st.write(f"Issues: {result.sequence_issues}")
+            
+            score = result.validation_report.get('overall_score', 0)
+            if score >= 90:
+                st.success(f"Validation: {score:.0f}% ✅")
+            elif score >= 70:
+                st.warning(f"Validation: {score:.0f}% ⚠️")
+            else:
+                st.error(f"Validation: {score:.0f}% ❌")
     
     # Main content
-    tabs = st.tabs(["📤 Upload & Extract", "📊 View Results", "💾 Export Data"])
+    tabs = st.tabs(["📤 Upload & Extract", "📊 View Results", "🔍 Validation", "💾 Export Data"])
     
     # Upload tab
     with tabs[0]:
@@ -857,7 +1082,7 @@ def main():
         uploaded_file = st.file_uploader(
             "Choose a filled USCIS form PDF",
             type=['pdf'],
-            help="Upload any USCIS form (I-130, I-485, I-765, N-400, etc.) with filled data"
+            help="Upload any USCIS form with proper field numbering"
         )
         
         if uploaded_file:
@@ -865,34 +1090,34 @@ def main():
             
             with col1:
                 st.success(f"✅ File uploaded: {uploaded_file.name}")
-                st.info("Click 'Extract Data' to process the form")
+                st.info("Click 'Extract Data' to process with sequence validation")
             
             with col2:
                 if st.button("🚀 Extract Data", type="primary", use_container_width=True):
-                    with st.spinner("Extracting form data... This may take a moment for large forms"):
+                    with st.spinner("Extracting and validating form data..."):
                         try:
-                            extractor = USCISFormExtractor(debug_mode=st.session_state.debug_mode)
+                            extractor = EnhancedUSCISFormExtractor(debug_mode=st.session_state.debug_mode)
                             result = extractor.extract(uploaded_file)
                             st.session_state.extraction_result = result
                             
                             if result.total_fields > 0:
-                                st.success(f"✅ Successfully extracted {result.total_fields} fields!")
-                                st.info(f"Found {result.filled_fields} filled fields and {result.empty_fields} empty fields")
+                                st.success(f"✅ Extracted {result.total_fields} fields from {len(result.parts)} parts!")
                                 
-                                # Show quick preview
-                                st.markdown("### Quick Preview")
-                                for part_num in list(result.parts.keys())[:2]:  # Show first 2 parts
-                                    part = result.parts[part_num]
-                                    st.write(f"**Part {part_num}: {part.title}** - {len(part.fields)} fields")
-                                    
-                                    # Show first 3 filled fields
-                                    filled_fields = [f for f in part.fields if f.value][:3]
-                                    for field in filled_fields:
-                                        st.write(f"• {field.label}: **{field.value}**")
+                                # Show validation summary
+                                score = result.validation_report.get('overall_score', 0)
+                                if score >= 90:
+                                    st.success(f"Validation Score: {score:.0f}% - Excellent extraction!")
+                                elif score >= 70:
+                                    st.warning(f"Validation Score: {score:.0f}% - Some issues detected")
+                                else:
+                                    st.error(f"Validation Score: {score:.0f}% - Multiple issues found")
                                 
-                                st.info("Go to 'View Results' tab to see all extracted data")
+                                if result.sequence_issues > 0:
+                                    st.warning(f"Found {result.sequence_issues} sequence issues")
+                                
+                                st.info("Check the 'View Results' and 'Validation' tabs for details")
                             else:
-                                st.warning("No fields were extracted. The PDF might not be a standard USCIS form.")
+                                st.warning("No fields were extracted")
                             
                             st.balloons()
                             
@@ -904,12 +1129,71 @@ def main():
     # Results tab
     with tabs[1]:
         if st.session_state.extraction_result:
-            display_results(st.session_state.extraction_result)
+            display_enhanced_results(st.session_state.extraction_result)
         else:
             st.info("No results yet. Please upload and extract a form first.")
     
-    # Export tab
+    # Validation tab
     with tabs[2]:
+        if st.session_state.extraction_result:
+            result = st.session_state.extraction_result
+            st.markdown("### 🔍 Detailed Validation Report")
+            
+            # Overall validation
+            score = result.validation_report.get('overall_score', 0)
+            if score >= 90:
+                st.markdown('<div class="validation-success">✅ Extraction Quality: Excellent</div>', 
+                           unsafe_allow_html=True)
+            elif score >= 70:
+                st.markdown('<div class="missing-field">⚠️ Extraction Quality: Good (Some Issues)</div>', 
+                           unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="missing-field">❌ Extraction Quality: Poor (Many Issues)</div>', 
+                           unsafe_allow_html=True)
+            
+            # Part-by-part validation
+            for part_num in sorted(result.parts.keys()):
+                part = result.parts[part_num]
+                part_report = result.validation_report['parts_validation'].get(f'Part {part_num}', {})
+                
+                with st.expander(f"Part {part_num}: {part.title}", expanded=True):
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Total Fields", len(part.fields))
+                    with col2:
+                        st.metric("Missing in Sequence", len(part.missing_fields))
+                    with col3:
+                        st.metric("Part Score", f"{part_report.get('score', 0):.0f}%")
+                    
+                    # Show field sequence
+                    st.markdown("#### Expected vs Found Sequence")
+                    
+                    # Display found fields in order
+                    if part.fields:
+                        st.write("**Found fields:**")
+                        field_nums = [f.item_number for f in part.fields]
+                        st.write(", ".join(field_nums))
+                    
+                    # Display missing fields
+                    if part.missing_fields:
+                        st.write("**Missing fields:**")
+                        st.error(", ".join(part.missing_fields))
+                    
+                    # Show any gaps or duplicates
+                    if part_report.get('sequence_gaps'):
+                        st.write("**Sequence gaps:**")
+                        st.warning(", ".join(part_report['sequence_gaps']))
+                    
+                    if part_report.get('duplicate_numbers'):
+                        st.write("**Duplicate numbers:**")
+                        st.error(", ".join(part_report['duplicate_numbers']))
+            
+        else:
+            st.info("No validation data available. Extract a form first.")
+    
+    # Export tab
+    with tabs[3]:
         if st.session_state.extraction_result:
             st.markdown("### 💾 Export Extracted Data")
             
@@ -919,30 +1203,30 @@ def main():
             
             with col1:
                 # JSON export
-                json_data = export_to_json(result)
+                json_data = export_to_json_enhanced(result)
                 st.download_button(
-                    "📦 Download as JSON",
+                    "📦 Download as JSON (with validation)",
                     json_data,
-                    f"{result.form_number}_extracted_data.json",
+                    f"{result.form_number}_extracted_validated.json",
                     mime="application/json",
                     use_container_width=True
                 )
             
             with col2:
                 # CSV export
-                csv_data = export_to_csv(result)
+                csv_data = export_to_csv_enhanced(result)
                 st.download_button(
-                    "📊 Download as CSV",
+                    "📊 Download as CSV (with sequence)",
                     csv_data,
-                    f"{result.form_number}_extracted_data.csv",
+                    f"{result.form_number}_extracted_validated.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
             
-            # Preview
+            # Preview options
             st.markdown("### 📄 Data Preview")
-            
-            preview_type = st.radio("Select preview format", ["Summary", "Filled Fields Only", "All Fields", "JSON"])
+            preview_type = st.radio("Select preview format", 
+                                  ["Summary", "Sequence Analysis", "Filled Fields", "All Fields", "JSON"])
             
             if preview_type == "Summary":
                 st.json({
@@ -950,18 +1234,39 @@ def main():
                     "title": result.form_title,
                     "total_fields": result.total_fields,
                     "filled_fields": result.filled_fields,
-                    "empty_fields": result.empty_fields,
                     "parts": len(result.parts),
-                    "extraction_time": f"{result.extraction_time:.2f} seconds"
+                    "sequence_issues": result.sequence_issues,
+                    "validation_score": f"{result.validation_report.get('overall_score', 0):.0f}%"
                 })
                 
-            elif preview_type == "Filled Fields Only":
+            elif preview_type == "Sequence Analysis":
+                for part_num, part in result.parts.items():
+                    st.write(f"**Part {part_num}:**")
+                    
+                    # Create sequence visualization
+                    seq_data = []
+                    for field in part.fields:
+                        seq_data.append({
+                            'Number': field.item_number,
+                            'Parsed': str(field.parsed_number) if field.parsed_number else "N/A",
+                            'Has Value': 'Yes' if field.value else 'No'
+                        })
+                    
+                    if seq_data:
+                        df = pd.DataFrame(seq_data)
+                        st.dataframe(df)
+                    
+                    if part.missing_fields:
+                        st.error(f"Missing: {', '.join(part.missing_fields)}")
+                    
+            elif preview_type == "Filled Fields":
                 filled_data = []
                 for part in result.parts.values():
                     for field in part.fields:
                         if field.value:
                             filled_data.append({
                                 'Part': part.number,
+                                'Number': field.item_number,
                                 'Field': field.label,
                                 'Value': field.value,
                                 'Type': field.field_type.value
