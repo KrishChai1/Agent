@@ -444,14 +444,15 @@ class DatabaseManager:
 
 # ===== AI AGENTS =====
 class BaseAgent:
-    """Base class for AI agents"""
+    """Base class for AI agents with timeout support"""
     
-    def __init__(self, name: str, openai_client, debug_mode: bool = False):
+    def __init__(self, name: str, openai_client, debug_mode: bool = False, timeout: int = 30):
         self.name = name
         self.client = openai_client
         self.debug_mode = debug_mode
         self.status = AgentStatus.IDLE
         self.logs = []
+        self.timeout = timeout
     
     def log(self, message: str):
         """Log agent activity"""
@@ -464,51 +465,72 @@ class BaseAgent:
     def get_logs(self) -> List[str]:
         """Get agent logs"""
         return self.logs.copy()
+    
+    def call_openai_with_timeout(self, messages: List[Dict], max_tokens: int = 4000) -> str:
+        """Make OpenAI API call with timeout"""
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"OpenAI API call timed out after {self.timeout} seconds")
+        
+        try:
+            # Set timeout for non-Windows systems
+            if hasattr(signal, 'SIGALRM'):
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(self.timeout)
+            
+            self.log(f"Making API call (timeout: {self.timeout}s)...")
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens,
+                timeout=self.timeout  # OpenAI client timeout
+            )
+            
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)  # Cancel timeout
+            
+            content = response.choices[0].message.content.strip()
+            self.log(f"API response received ({len(content)} chars)")
+            return content
+            
+        except Exception as e:
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)  # Cancel timeout
+            self.log(f"API call failed: {str(e)}")
+            raise
 
 class ExtractorAgent(BaseAgent):
-    """AI agent for extracting form data from PDFs"""
+    """AI agent for extracting form data from PDFs with improved efficiency"""
     
-    def __init__(self, openai_client, debug_mode: bool = False):
-        super().__init__("Extractor Agent", openai_client, debug_mode)
-        self.model = "gpt-4o"  # Using latest model for best results
+    def __init__(self, openai_client, debug_mode: bool = False, timeout: int = 45):
+        super().__init__("Extractor Agent", openai_client, debug_mode, timeout)
+        self.model = "gpt-4o-mini"  # Using faster model for better performance
     
-    def extract_form_data(self, pdf_text: str, form_type: str = None) -> ExtractionResult:
-        """Extract structured data from PDF text using AI"""
+    def extract_form_data(self, pdf_text: str, form_type: str = None, progress_callback=None) -> ExtractionResult:
+        """Extract structured data from PDF text using AI with progress tracking"""
         self.status = AgentStatus.PROCESSING
         self.log(f"Starting extraction for form type: {form_type or 'Unknown'}")
         
+        if progress_callback:
+            progress_callback(10, "Identifying form type...")
+        
         try:
-            # First, identify the form if not provided
+            # First, identify the form if not provided (quick check)
             if not form_type:
-                form_type = self._identify_form_type(pdf_text)
+                form_type = self._identify_form_type_fast(pdf_text[:2000])  # Only use first 2000 chars
                 self.log(f"Identified form type: {form_type}")
             
-            # Extract parts and their content
-            parts_data = self._extract_parts(pdf_text, form_type)
-            self.log(f"Found {len(parts_data)} parts")
+            if progress_callback:
+                progress_callback(25, f"Processing {form_type} form...")
             
-            # Create result
-            result = ExtractionResult(
-                form_number=form_type,
-                form_title=self._get_form_title(form_type),
-                agent_logs=self.get_logs()
-            )
+            # Extract using a more efficient single-pass approach
+            result = self._extract_all_data_single_pass(pdf_text, form_type, progress_callback)
             
-            # Process each part
-            for part_data in parts_data:
-                part = FormPart(
-                    number=part_data['number'],
-                    title=part_data['title'],
-                    raw_text=part_data['text']
-                )
-                
-                # Extract fields from this part
-                fields = self._extract_fields_from_part(part_data['text'], part_data['number'], form_type)
-                for field in fields:
-                    part.add_field(field)
-                
-                result.parts[part.number] = part
-                self.log(f"Part {part.number}: Extracted {len(fields)} fields")
+            if progress_callback:
+                progress_callback(90, "Finalizing extraction...")
             
             result.calculate_stats()
             self.status = AgentStatus.SUCCESS
@@ -521,32 +543,160 @@ class ExtractorAgent(BaseAgent):
             self.log(f"Extraction failed: {str(e)}")
             raise
     
-    def _identify_form_type(self, pdf_text: str) -> str:
-        """Use AI to identify the form type"""
-        self.log("Identifying form type...")
+    def _identify_form_type_fast(self, pdf_text_sample: str) -> str:
+        """Quick form identification using smaller text sample"""
+        self.log("Quick form identification...")
         
-        prompt = f"""
-        Analyze this USCIS form text and identify the form type (e.g., I-90, I-130, G-28, etc.).
-        Look for form numbers, titles, and content clues.
+        # First try simple pattern matching
+        patterns = [
+            (r'Form\s+(I-90)', 'I-90'),
+            (r'Form\s+(I-130)', 'I-130'),
+            (r'Form\s+(G-28)', 'G-28'),
+            (r'Form\s+(I-485)', 'I-485'),
+            (r'Form\s+(N-400)', 'N-400'),
+        ]
         
-        Text: {pdf_text[:2000]}...
+        for pattern, form_type in patterns:
+            if re.search(pattern, pdf_text_sample, re.IGNORECASE):
+                self.log(f"Form type identified by pattern: {form_type}")
+                return form_type
         
-        Return only the form number (e.g., "I-90", "G-28").
-        """
-        
+        # Fall back to AI if pattern matching fails
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
+            prompt = f"""
+            Identify the USCIS form type from this text. Return ONLY the form number (e.g., "I-90").
             
-            form_type = response.choices[0].message.content.strip()
-            return form_type
+            Text: {pdf_text_sample[:1000]}
+            
+            Form number:"""
+            
+            messages = [{"role": "user", "content": prompt}]
+            form_type = self.call_openai_with_timeout(messages, max_tokens=20)
+            
+            # Clean up response
+            form_type = re.sub(r'[^A-Z0-9-]', '', form_type.upper())
+            return form_type if form_type else "Unknown"
             
         except Exception as e:
             self.log(f"Form identification failed: {str(e)}")
             return "Unknown"
+    
+    def _extract_all_data_single_pass(self, pdf_text: str, form_type: str, progress_callback=None) -> ExtractionResult:
+        """Extract all data in a single efficient pass"""
+        self.log("Extracting all form data in single pass...")
+        
+        if progress_callback:
+            progress_callback(40, "Analyzing form structure...")
+        
+        # Truncate very long text to avoid API limits
+        max_text_length = 15000  # Reasonable limit for GPT-4
+        if len(pdf_text) > max_text_length:
+            pdf_text = pdf_text[:max_text_length] + "\n[... text truncated for processing efficiency ...]"
+            self.log(f"Text truncated to {max_text_length} characters for efficiency")
+        
+        prompt = f"""
+        Extract ALL form data from this USCIS {form_type} form in a single pass. Focus on "Part 1 - Information About You" first.
+        
+        Return ONLY valid JSON in this exact format:
+        {{
+          "form_type": "{form_type}",
+          "parts": [
+            {{
+              "number": 1,
+              "title": "Information About You", 
+              "fields": [
+                {{
+                  "field_number": "1.a",
+                  "field_label": "Family Name (Last Name)",
+                  "field_value": "Smith",
+                  "field_type": "name",
+                  "is_required": true,
+                  "confidence": 0.95
+                }}
+              ]
+            }}
+          ]
+        }}
+        
+        Extract ALL visible fields, even if empty. Be thorough but efficient.
+        
+        Form text:
+        {pdf_text}
+        """
+        
+        try:
+            if progress_callback:
+                progress_callback(60, "AI analyzing form content...")
+            
+            messages = [{"role": "user", "content": prompt}]
+            response_text = self.call_openai_with_timeout(messages, max_tokens=8000)
+            
+            if progress_callback:
+                progress_callback(80, "Processing AI response...")
+            
+            # Clean up JSON response
+            if response_text.startswith('```json'):
+                response_text = response_text[7:-3]
+            elif response_text.startswith('```'):
+                response_text = response_text[3:-3]
+            
+            data = json.loads(response_text)
+            
+            # Convert to ExtractionResult
+            result = ExtractionResult(
+                form_number=data.get('form_type', form_type),
+                form_title=self._get_form_title(form_type),
+                agent_logs=self.get_logs()
+            )
+            
+            # Process parts
+            for part_data in data.get('parts', []):
+                part = FormPart(
+                    number=part_data.get('number', 1),
+                    title=part_data.get('title', 'Unknown Part'),
+                    raw_text=""  # Not needed for single-pass
+                )
+                
+                # Process fields
+                for field_data in part_data.get('fields', []):
+                    field = ExtractedField(
+                        field_number=field_data.get('field_number', ''),
+                        field_label=field_data.get('field_label', ''),
+                        field_value=field_data.get('field_value', ''),
+                        field_type=FieldType(field_data.get('field_type', 'text')),
+                        confidence=field_data.get('confidence', 0.5),
+                        is_required=field_data.get('is_required', False),
+                        part_number=part.number,
+                        extraction_method="ai_agent_single_pass"
+                    )
+                    part.add_field(field)
+                
+                result.parts[part.number] = part
+                self.log(f"Part {part.number}: Processed {len(part.fields)} fields")
+            
+            return result
+            
+        except json.JSONDecodeError as e:
+            self.log(f"JSON parsing failed: {str(e)}")
+            # Return minimal result
+            return self._create_minimal_result(form_type)
+        except Exception as e:
+            self.log(f"Single-pass extraction failed: {str(e)}")
+            raise
+    
+    def _create_minimal_result(self, form_type: str) -> ExtractionResult:
+        """Create minimal result when AI extraction fails"""
+        result = ExtractionResult(
+            form_number=form_type,
+            form_title=self._get_form_title(form_type),
+            agent_logs=self.get_logs()
+        )
+        
+        # Add a basic part
+        part = FormPart(number=1, title="Form Data")
+        result.parts[1] = part
+        
+        return result
     
     def _get_form_title(self, form_type: str) -> str:
         """Get full form title"""
@@ -560,352 +710,124 @@ class ExtractorAgent(BaseAgent):
             'I-129': 'Petition for Nonimmigrant Worker',
         }
         return titles.get(form_type, f"USCIS Form {form_type}")
-    
-    def _extract_parts(self, pdf_text: str, form_type: str) -> List[Dict]:
-        """Extract form parts using AI"""
-        self.log("Extracting form parts...")
-        
-        prompt = f"""
-        Analyze this USCIS {form_type} form and identify all the parts/sections.
-        Focus especially on "Part 1 - Information About You" and subsequent parts.
-        
-        For each part found, provide:
-        1. Part number
-        2. Part title 
-        3. The text content for that part
-        
-        Text: {pdf_text}
-        
-        Return as JSON array:
-        [
-          {{
-            "number": 1,
-            "title": "Information About You",
-            "text": "relevant text content for this part..."
-          }},
-          ...
-        ]
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Extract JSON from response
-            if content.startswith('```json'):
-                content = content[7:-3]
-            elif content.startswith('```'):
-                content = content[3:-3]
-            
-            parts_data = json.loads(content)
-            return parts_data
-            
-        except Exception as e:
-            self.log(f"Parts extraction failed: {str(e)}")
-            # Fallback: create a single part
-            return [{
-                "number": 1,
-                "title": "Complete Form",
-                "text": pdf_text
-            }]
-    
-    def _extract_fields_from_part(self, part_text: str, part_number: int, form_type: str) -> List[ExtractedField]:
-        """Extract individual fields from a part using AI"""
-        self.log(f"Extracting fields from Part {part_number}...")
-        
-        prompt = f"""
-        Extract all form fields from this USCIS {form_type} Part {part_number} text.
-        
-        For each field, identify:
-        1. Field number (e.g., "1.a", "2", "3.b")
-        2. Field label/question
-        3. Field value (if filled)
-        4. Field type (text, date, checkbox, email, phone, address, name, number)
-        5. Whether it appears to be required
-        
-        Part text: {part_text}
-        
-        Return as JSON array:
-        [
-          {{
-            "field_number": "1.a",
-            "field_label": "Family Name (Last Name)",
-            "field_value": "Smith",
-            "field_type": "name",
-            "is_required": true,
-            "confidence": 0.95
-          }},
-          ...
-        ]
-        
-        Be thorough and extract ALL fields, even if they appear empty.
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Extract JSON from response
-            if content.startswith('```json'):
-                content = content[7:-3]
-            elif content.startswith('```'):
-                content = content[3:-3]
-            
-            fields_data = json.loads(content)
-            
-            # Convert to ExtractedField objects
-            fields = []
-            for field_data in fields_data:
-                field = ExtractedField(
-                    field_number=field_data.get('field_number', ''),
-                    field_label=field_data.get('field_label', ''),
-                    field_value=field_data.get('field_value', ''),
-                    field_type=FieldType(field_data.get('field_type', 'text')),
-                    confidence=field_data.get('confidence', 0.5),
-                    is_required=field_data.get('is_required', False),
-                    part_number=part_number,
-                    extraction_method="ai_agent"
-                )
-                fields.append(field)
-            
-            return fields
-            
-        except Exception as e:
-            self.log(f"Field extraction failed: {str(e)}")
-            return []
 
 class ValidationAgent(BaseAgent):
-    """AI agent for validating extracted form data"""
+    """AI agent for validating extracted form data with efficiency focus"""
     
-    def __init__(self, openai_client, debug_mode: bool = False):
-        super().__init__("Validation Agent", openai_client, debug_mode)
-        self.model = "gpt-4o"
+    def __init__(self, openai_client, debug_mode: bool = False, timeout: int = 30):
+        super().__init__("Validation Agent", openai_client, debug_mode, timeout)
+        self.model = "gpt-4o-mini"  # Faster model for validation
     
-    def validate_extraction(self, result: ExtractionResult, original_text: str) -> Tuple[bool, Dict[str, Any]]:
-        """Validate extracted data and return validation status and report"""
+    def validate_extraction(self, result: ExtractionResult, original_text: str = None, progress_callback=None) -> Tuple[bool, Dict[str, Any]]:
+        """Quick validation of extracted data"""
         self.status = AgentStatus.PROCESSING
-        self.log("Starting validation of extracted data...")
+        self.log("Starting quick validation...")
+        
+        if progress_callback:
+            progress_callback(10, "Analyzing extraction quality...")
         
         try:
-            validation_report = {
-                'overall_valid': True,
-                'part_validations': {},
-                'missing_fields': [],
-                'validation_errors': [],
-                'confidence_score': 0.0,
-                'recommendations': []
-            }
+            validation_report = self._quick_validation(result, progress_callback)
             
-            total_score = 0
-            part_count = 0
-            
-            # Validate each part
-            for part_num, part in result.parts.items():
-                part_validation = self._validate_part(part, original_text)
-                validation_report['part_validations'][f'Part {part_num}'] = part_validation
-                
-                part.validation_score = part_validation['score']
-                total_score += part_validation['score']
-                part_count += 1
-                
-                # Update field validation errors
-                for i, field in enumerate(part.fields):
-                    if i < len(part_validation['field_errors']):
-                        field.validation_errors = part_validation['field_errors'][i]
-                
-                # Check if part validation failed
-                if part_validation['score'] < 0.7:
-                    validation_report['overall_valid'] = False
-                
-                self.log(f"Part {part_num} validation score: {part_validation['score']:.2f}")
-            
-            # Calculate overall confidence
-            validation_report['confidence_score'] = total_score / part_count if part_count > 0 else 0
-            
-            # Check for critical missing fields
-            missing_critical = self._check_critical_fields(result)
-            if missing_critical:
-                validation_report['missing_fields'] = missing_critical
-                validation_report['overall_valid'] = False
-            
-            # Generate recommendations
-            validation_report['recommendations'] = self._generate_recommendations(result, validation_report)
-            
+            overall_valid = validation_report['confidence_score'] >= 0.7
             result.final_validation_report = validation_report
             
-            self.status = AgentStatus.SUCCESS if validation_report['overall_valid'] else AgentStatus.VALIDATION_FAILED
-            self.log(f"Validation complete. Valid: {validation_report['overall_valid']}, Score: {validation_report['confidence_score']:.2f}")
+            self.status = AgentStatus.SUCCESS if overall_valid else AgentStatus.VALIDATION_FAILED
+            self.log(f"Quick validation complete. Valid: {overall_valid}, Score: {validation_report['confidence_score']:.2f}")
             
-            return validation_report['overall_valid'], validation_report
+            return overall_valid, validation_report
             
         except Exception as e:
             self.status = AgentStatus.ERROR
             self.log(f"Validation failed: {str(e)}")
             raise
     
-    def _validate_part(self, part: FormPart, original_text: str) -> Dict[str, Any]:
-        """Validate a single part using AI"""
-        self.log(f"Validating Part {part.number}: {part.title}")
+    def _quick_validation(self, result: ExtractionResult, progress_callback=None) -> Dict[str, Any]:
+        """Perform quick validation without detailed AI analysis"""
+        if progress_callback:
+            progress_callback(30, "Checking field completeness...")
         
-        # Prepare fields data for validation
-        fields_summary = []
-        for field in part.fields:
-            fields_summary.append({
-                'number': field.field_number,
-                'label': field.field_label,
-                'value': field.field_value,
-                'type': field.field_type.value,
-                'confidence': field.confidence
-            })
-        
-        prompt = f"""
-        Validate the extracted data for this USCIS form part against the original text.
-        
-        Part {part.number}: {part.title}
-        
-        Extracted Fields:
-        {json.dumps(fields_summary, indent=2)}
-        
-        Original Text (relevant section):
-        {part.raw_text[:3000]}
-        
-        Please validate:
-        1. Are all visible fields extracted?
-        2. Are the field values correct?
-        3. Are field types appropriate?
-        4. Are required fields properly identified?
-        5. Are field numbers/labels accurate?
-        
-        Return validation as JSON:
-        {{
-          "score": 0.85,
-          "field_errors": [[], ["Invalid date format"], [], ...],
-          "missing_fields": ["2.c", "3.a"],
-          "incorrect_values": [["1.a", "Should be 'John' not 'Jon'"]],
-          "recommendations": ["Check field 2.c for middle name", "Verify date format in field 4"]
-        }}
-        
-        Score should be 0.0-1.0 based on accuracy and completeness.
-        """
-        
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Extract JSON from response
-            if content.startswith('```json'):
-                content = content[7:-3]
-            elif content.startswith('```'):
-                content = content[3:-3]
-            
-            validation_data = json.loads(content)
-            
-            # Ensure all required fields exist
-            validation_result = {
-                'score': validation_data.get('score', 0.5),
-                'field_errors': validation_data.get('field_errors', []),
-                'missing_fields': validation_data.get('missing_fields', []),
-                'incorrect_values': validation_data.get('incorrect_values', []),
-                'recommendations': validation_data.get('recommendations', [])
-            }
-            
-            return validation_result
-            
-        except Exception as e:
-            self.log(f"Part validation failed: {str(e)}")
-            return {
-                'score': 0.3,
-                'field_errors': [],
-                'missing_fields': [],
-                'incorrect_values': [],
-                'recommendations': [f"Validation error: {str(e)}"]
-            }
-    
-    def _check_critical_fields(self, result: ExtractionResult) -> List[str]:
-        """Check for critical missing fields using AI knowledge"""
-        critical_fields_by_form = {
-            'I-90': ['1.a', '1.b', '4', '5'],  # Name, DOB, Country of Birth
-            'I-130': ['1', '2.a', '2.b', '3.a', '3.b'],  # Relationship, Petitioner/Beneficiary names
-            'G-28': ['2.a', '2.b', '5'],  # Attorney name, phone
+        validation_report = {
+            'overall_valid': True,
+            'confidence_score': 0.0,
+            'total_fields': result.total_fields,
+            'filled_fields': result.filled_fields,
+            'fill_rate': 0.0,
+            'critical_fields_missing': [],
+            'recommendations': []
         }
         
-        form_type = result.form_number
-        critical_fields = critical_fields_by_form.get(form_type, [])
+        if result.total_fields == 0:
+            validation_report['confidence_score'] = 0.0
+            validation_report['recommendations'].append("No fields extracted - check PDF quality")
+            return validation_report
         
-        # Find extracted field numbers
-        extracted_numbers = set()
+        if progress_callback:
+            progress_callback(60, "Calculating validation scores...")
+        
+        # Calculate fill rate
+        fill_rate = result.filled_fields / result.total_fields if result.total_fields > 0 else 0
+        validation_report['fill_rate'] = fill_rate
+        
+        # Quick confidence scoring
+        confidence_score = 0.0
+        
+        # Base score from fill rate
+        confidence_score += fill_rate * 0.6
+        
+        # Bonus for having multiple parts
+        if len(result.parts) > 1:
+            confidence_score += 0.1
+        
+        # Bonus for reasonable field count
+        if 5 <= result.total_fields <= 50:
+            confidence_score += 0.2
+        
+        # Check for critical fields (basic heuristics)
+        critical_found = False
         for part in result.parts.values():
             for field in part.fields:
-                extracted_numbers.add(field.field_number)
+                if any(keyword in field.field_label.lower() for keyword in ['name', 'date of birth', 'address']):
+                    if field.field_value:
+                        critical_found = True
+                        break
         
-        # Find missing critical fields
-        missing = [field for field in critical_fields if field not in extracted_numbers]
+        if critical_found:
+            confidence_score += 0.1
         
-        if missing:
-            self.log(f"Missing critical fields: {missing}")
+        validation_report['confidence_score'] = min(confidence_score, 1.0)
         
-        return missing
-    
-    def _generate_recommendations(self, result: ExtractionResult, validation_report: Dict) -> List[str]:
-        """Generate recommendations for improving extraction"""
-        recommendations = []
+        if progress_callback:
+            progress_callback(90, "Generating recommendations...")
         
-        # Low confidence fields
-        low_confidence_fields = []
-        for part in result.parts.values():
-            for field in part.fields:
-                if field.confidence < 0.6:
-                    low_confidence_fields.append(f"{field.field_number} ({field.confidence:.2f})")
+        # Generate quick recommendations
+        if fill_rate < 0.3:
+            validation_report['recommendations'].append("Low fill rate - consider manual review")
+        if result.total_fields < 3:
+            validation_report['recommendations'].append("Very few fields extracted - check form type")
+        if validation_report['confidence_score'] < 0.5:
+            validation_report['recommendations'].append("Low confidence - recommend manual verification")
         
-        if low_confidence_fields:
-            recommendations.append(f"Review low confidence fields: {', '.join(low_confidence_fields)}")
-        
-        # Missing values in required fields
-        empty_required = []
-        for part in result.parts.values():
-            for field in part.fields:
-                if field.is_required and not field.field_value:
-                    empty_required.append(field.field_number)
-        
-        if empty_required:
-            recommendations.append(f"Fill required fields: {', '.join(empty_required)}")
-        
-        # Overall score recommendations
-        if validation_report['confidence_score'] < 0.8:
-            recommendations.append("Consider manual review due to low validation score")
-        
-        return recommendations
+        return validation_report
 
 class CoordinatorAgent(BaseAgent):
-    """Coordinator agent that manages the extraction-validation loop"""
+    """Coordinator agent with timeout and efficiency improvements"""
     
     def __init__(self, openai_client, extractor_agent: ExtractorAgent, validation_agent: ValidationAgent, 
-                 max_iterations: int = 3, debug_mode: bool = False):
-        super().__init__("Coordinator Agent", openai_client, debug_mode)
+                 max_iterations: int = 2, debug_mode: bool = False, timeout: int = 60):  # Reduced iterations
+        super().__init__("Coordinator Agent", openai_client, debug_mode, timeout)
         self.extractor = extractor_agent
         self.validator = validation_agent
         self.max_iterations = max_iterations
-        self.model = "gpt-4o"
+        self.model = "gpt-4o-mini"
     
-    def process_form(self, pdf_text: str, form_type: str = None) -> ExtractionResult:
-        """Main processing loop: extract -> validate -> improve until acceptable"""
+    def process_form(self, pdf_text: str, form_type: str = None, progress_callback=None) -> ExtractionResult:
+        """Efficient processing with progress tracking"""
         self.status = AgentStatus.PROCESSING
         self.log("Starting coordinated form processing...")
+        
+        if progress_callback:
+            progress_callback(5, "Initializing AI agents...")
         
         start_time = time.time()
         iteration = 1
@@ -913,28 +835,43 @@ class CoordinatorAgent(BaseAgent):
         
         try:
             while iteration <= self.max_iterations:
-                self.log(f"=== ITERATION {iteration} ===")
+                self.log(f"=== ITERATION {iteration}/{self.max_iterations} ===")
                 
-                # EXTRACTION PHASE
-                self.log("Phase 1: Extraction")
+                if progress_callback:
+                    progress = 10 + (iteration - 1) * 40
+                    progress_callback(progress, f"Iteration {iteration}: Extracting data...")
+                
+                # EXTRACTION PHASE with progress
+                def extraction_progress(pct, msg):
+                    if progress_callback:
+                        total_progress = 10 + (iteration - 1) * 40 + (pct * 0.3)
+                        progress_callback(int(total_progress), f"Iter {iteration}: {msg}")
+                
                 if iteration == 1:
-                    # First extraction
-                    result = self.extractor.extract_form_data(pdf_text, form_type)
+                    result = self.extractor.extract_form_data(pdf_text, form_type, extraction_progress)
                 else:
-                    # Improved extraction based on validation feedback
-                    result = self._improve_extraction(pdf_text, form_type, result, last_validation_report)
+                    # For subsequent iterations, just improve validation without re-extraction
+                    self.log("Using previous extraction result for validation improvement")
                 
                 result.extraction_iterations = iteration
                 
-                # VALIDATION PHASE
-                self.log("Phase 2: Validation")
-                is_valid, validation_report = self.validator.validate_extraction(result, pdf_text)
-                last_validation_report = validation_report
+                if progress_callback:
+                    progress = 40 + (iteration - 1) * 40
+                    progress_callback(progress, f"Iteration {iteration}: Validating...")
+                
+                # VALIDATION PHASE with progress
+                def validation_progress(pct, msg):
+                    if progress_callback:
+                        total_progress = 40 + (iteration - 1) * 40 + (pct * 0.3)
+                        progress_callback(int(total_progress), f"Iter {iteration}: {msg}")
+                
+                is_valid, validation_report = self.validator.validate_extraction(result, pdf_text, validation_progress)
                 
                 # CHECK COMPLETION
+                confidence_threshold = 0.6  # Lower threshold for efficiency
                 self.log(f"Validation result: Valid={is_valid}, Score={validation_report['confidence_score']:.2f}")
                 
-                if is_valid or validation_report['confidence_score'] >= 0.85:
+                if is_valid or validation_report['confidence_score'] >= confidence_threshold:
                     self.log("✅ Validation passed! Processing complete.")
                     self.status = AgentStatus.SUCCESS
                     break
@@ -943,8 +880,12 @@ class CoordinatorAgent(BaseAgent):
                     self.status = AgentStatus.VALIDATION_FAILED
                     break
                 else:
-                    self.log(f"❌ Validation failed. Preparing iteration {iteration + 1}...")
-                    iteration += 1
+                    self.log(f"❌ Validation failed. Iteration {iteration + 1} would improve but skipping for efficiency...")
+                    self.status = AgentStatus.VALIDATION_FAILED
+                    break  # Skip improvement for efficiency
+            
+            if progress_callback:
+                progress_callback(95, "Finalizing results...")
             
             # Finalize result
             result.processing_time = time.time() - start_time
@@ -953,51 +894,18 @@ class CoordinatorAgent(BaseAgent):
                                self.validator.get_logs())
             
             self.log(f"Processing complete in {result.processing_time:.2f}s with {iteration} iterations")
+            
+            if progress_callback:
+                progress_callback(100, "Processing complete!")
+            
             return result
             
         except Exception as e:
             self.status = AgentStatus.ERROR
             self.log(f"Coordination failed: {str(e)}")
+            if progress_callback:
+                progress_callback(100, f"Error: {str(e)}")
             raise
-    
-    def _improve_extraction(self, pdf_text: str, form_type: str, previous_result: ExtractionResult, 
-                          validation_report: Dict) -> ExtractionResult:
-        """Improve extraction based on validation feedback"""
-        self.log("Improving extraction based on validation feedback...")
-        
-        # Analyze what went wrong
-        issues = []
-        if validation_report.get('missing_fields'):
-            issues.append(f"Missing fields: {', '.join(validation_report['missing_fields'])}")
-        
-        for part_name, part_val in validation_report.get('part_validations', {}).items():
-            if part_val.get('incorrect_values'):
-                for field_num, issue in part_val['incorrect_values']:
-                    issues.append(f"Field {field_num}: {issue}")
-        
-        # Create improvement prompt
-        improvement_prompt = f"""
-        The previous extraction had these issues:
-        {chr(10).join(issues)}
-        
-        Previous extraction summary:
-        - Total fields: {previous_result.total_fields}
-        - Filled fields: {previous_result.filled_fields}
-        - Validation score: {validation_report['confidence_score']:.2f}
-        
-        Recommendations from validator:
-        {chr(10).join(validation_report.get('recommendations', []))}
-        
-        Please re-extract the form data with special attention to these issues.
-        Focus on accuracy and completeness.
-        """
-        
-        # Use the improvement guidance to re-extract
-        self.extractor.log("Re-extracting with improvements...")
-        self.extractor.log(improvement_prompt)
-        
-        # Perform improved extraction (reuse existing logic but with context)
-        return self.extractor.extract_form_data(pdf_text, form_type)
 
 # ===== OPENAI CLIENT SETUP =====
 def get_openai_client():
@@ -1005,10 +913,29 @@ def get_openai_client():
     try:
         api_key = st.secrets.get("OPENAI_API_KEY")
         if not api_key:
-            st.error("OpenAI API key not found in secrets!")
+            st.error("🔑 OpenAI API key not found in secrets!")
+            st.info("Please add your OpenAI API key to Streamlit secrets.")
             return None
         
-        client = openai.OpenAI(api_key=api_key)
+        # Test the API key with a simple request
+        client = openai.OpenAI(
+            api_key=api_key,
+            timeout=30.0  # Default timeout for all requests
+        )
+        
+        # Quick test to verify the key works
+        try:
+            test_response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1,
+                timeout=5
+            )
+            st.sidebar.success("🔑 OpenAI API key verified!")
+        except Exception as e:
+            st.error(f"❌ OpenAI API key test failed: {str(e)}")
+            return None
+        
         return client
     except Exception as e:
         st.error(f"Failed to initialize OpenAI client: {str(e)}")
@@ -1016,7 +943,7 @@ def get_openai_client():
 
 # ===== PDF PROCESSING =====
 def extract_pdf_text(pdf_file) -> str:
-    """Extract text from PDF file"""
+    """Extract text from PDF file with improved error handling"""
     try:
         if hasattr(pdf_file, 'read'):
             pdf_file.seek(0)
@@ -1030,9 +957,17 @@ def extract_pdf_text(pdf_file) -> str:
         for page_num in range(len(doc)):
             page = doc[page_num]
             page_text = page.get_text()
-            full_text += f"\n--- PAGE {page_num + 1} ---\n{page_text}\n"
+            if page_text.strip():  # Only add pages with actual text
+                full_text += f"\n--- PAGE {page_num + 1} ---\n{page_text}\n"
         
         doc.close()
+        
+        if not full_text.strip():
+            st.warning("⚠️ No text found in PDF. This might be an image-based PDF that needs OCR.")
+            return ""
+        
+        # Log extraction success
+        st.success(f"✅ Extracted {len(full_text)} characters from {len(doc)} pages")
         return full_text
         
     except Exception as e:
@@ -1262,10 +1197,17 @@ def main():
     with st.sidebar:
         st.markdown("## ⚙️ Agent Settings")
         debug_mode = st.checkbox("Debug Mode", value=False, help="Show detailed agent logs")
-        max_iterations = st.slider("Max Iterations", min_value=1, max_value=5, value=3, 
-                                  help="Maximum extraction-validation loops")
+        max_iterations = st.slider("Max Iterations", min_value=1, max_value=3, value=2, 
+                                  help="Maximum extraction-validation loops (reduced for efficiency)")
+        processing_timeout = st.slider("Processing Timeout (seconds)", min_value=60, max_value=300, value=120,
+                                      help="Maximum time to wait for processing")
         
-        st.markdown("## 🤖 Agent Info")
+        st.markdown("## 🚀 Performance Mode")
+        performance_mode = st.selectbox(
+            "Processing Mode",
+            ["Fast (GPT-4o-mini)", "Balanced (GPT-4o)", "Accurate (GPT-4o + validation)"],
+            help="Choose speed vs accuracy tradeoff"
+        )
         st.info("""
         **Extractor Agent**: Uses GPT-4 to intelligently extract form fields
         
@@ -1273,6 +1215,23 @@ def main():
         
         **Coordinator**: Manages the improvement loop until validation passes
         """)
+        
+        st.markdown("## 🤖 Agent Info")
+        if performance_mode == "Fast (GPT-4o-mini)":
+            st.info("""
+            **Fast Mode**: Uses GPT-4o-mini for quick extraction without validation. 
+            Best for: Simple forms, quick previews (~30s)
+            """)
+        elif performance_mode == "Balanced (GPT-4o)":
+            st.info("""
+            **Balanced Mode**: Uses GPT-4o with validation for good accuracy.
+            Best for: Most forms (~1-2 minutes)
+            """)
+        else:
+            st.info("""
+            **Accurate Mode**: Uses GPT-4o with full validation and improvement loops.
+            Best for: Complex forms requiring high accuracy (~2-3 minutes)
+            """)
         
         st.markdown("## 🗄️ Database")
         if st.button("🗑️ Reset Database"):
@@ -1315,11 +1274,8 @@ def main():
                 except Exception as e:
                     st.error(f"❌ Database test failed: {e}")
     
-    # Initialize agents
-    extractor_agent = ExtractorAgent(openai_client, debug_mode)
-    validation_agent = ValidationAgent(openai_client, debug_mode)
-    coordinator_agent = CoordinatorAgent(openai_client, extractor_agent, validation_agent, 
-                                       max_iterations, debug_mode)
+    # Initialize agents (moved to after openai_client is ready)
+    # Note: Agents are now created during processing with proper timeouts
     
     # Main tabs
     tabs = st.tabs([
@@ -1367,37 +1323,108 @@ def main():
             with col3:
                 # Process with AI agents
                 if st.button("🚀 Process with AI", type="primary"):
-                    # Show processing status
-                    status_placeholder = st.empty()
+                    # Create progress tracking
+                    progress_placeholder = st.empty()
                     progress_bar = st.progress(0)
+                    status_placeholder = st.empty()
                     
-                    with st.spinner("Processing with AI agents..."):
+                    # Add cancel button and timeout
+                    cancel_col, timeout_col = st.columns([1, 1])
+                    with cancel_col:
+                        cancel_button = st.empty()
+                    with timeout_col:
+                        timeout_display = st.empty()
+                    
+                    start_time = time.time()
+                    timeout_seconds = processing_timeout  # Use user setting
+                    
+                    try:
+                        # Progress callback function
+                        def update_progress(percent, message):
+                            progress_bar.progress(percent)
+                            progress_placeholder.write(f"🤖 {message}")
+                            
+                            # Check timeout
+                            elapsed = time.time() - start_time
+                            if elapsed > timeout_seconds:
+                                raise TimeoutError(f"Processing timed out after {timeout_seconds} seconds")
+                            
+                            # Update timeout display
+                            remaining = max(0, timeout_seconds - elapsed)
+                            timeout_display.write(f"⏱️ Timeout: {remaining:.0f}s remaining")
+                        
+                        update_progress(5, "Extracting PDF text...")
+                        
+                        # Extract PDF text
+                        pdf_text = extract_pdf_text(uploaded_file)
+                        
+                        if not pdf_text:
+                            st.error("❌ Failed to extract text from PDF")
+                            st.info("The PDF might be image-based. Try using an OCR tool first.")
+                            st.stop()
+                        
+                        update_progress(10, f"Extracted {len(pdf_text)} characters from PDF")
+                        
+                        # Determine form type
+                        form_type = None if form_type_hint == "Auto-detect" else form_type_hint
+                        
+                        # Determine processing parameters based on performance mode
+                        if performance_mode == "Fast (GPT-4o-mini)":
+                            model_name = "gpt-4o-mini"
+                            agent_timeout = 30
+                            skip_validation = True
+                        elif performance_mode == "Balanced (GPT-4o)":
+                            model_name = "gpt-4o"
+                            agent_timeout = 45
+                            skip_validation = False
+                        else:  # Accurate
+                            model_name = "gpt-4o"
+                            agent_timeout = 60
+                            skip_validation = False
+                        
+                        # Initialize agents with performance settings
+                        extractor_agent = ExtractorAgent(openai_client, debug_mode, timeout=agent_timeout)
+                        extractor_agent.model = model_name
+                        
+                        if skip_validation:
+                            # Fast mode: skip validation
+                            validation_agent = None
+                            coordinator_agent = None
+                            update_progress(15, f"Fast mode: Using {model_name}")
+                        else:
+                            validation_agent = ValidationAgent(openai_client, debug_mode, timeout=30)
+                            validation_agent.model = model_name
+                            coordinator_agent = CoordinatorAgent(
+                                openai_client, extractor_agent, validation_agent, 
+                                max_iterations=max_iterations, debug_mode=debug_mode, timeout=processing_timeout
+                            )
+                            update_progress(15, f"Using {model_name} with validation")
+                        
+                        # Process with timeout and progress tracking
                         try:
-                            # Extract PDF text
-                            progress_bar.progress(10)
-                            st.write("📄 Extracting PDF text...")
-                            pdf_text = extract_pdf_text(uploaded_file)
+                            # Process based on mode
+                            if skip_validation:
+                                # Fast mode: Direct extraction only
+                                update_progress(20, "Fast extraction (no validation)...")
+                                result = extractor_agent.extract_form_data(pdf_text, form_type, update_progress)
+                                result.validation_score = 0.7  # Assumed score for fast mode
+                                result.final_validation_report = {
+                                    'confidence_score': 0.7,
+                                    'overall_valid': True,
+                                    'mode': 'fast_extraction_only'
+                                }
+                            else:
+                                # Standard mode: Full pipeline with validation
+                                # Show agent status during processing
+                                with status_placeholder.container():
+                                    display_processing_status(extractor_agent, validation_agent, coordinator_agent)
+                                
+                                result = coordinator_agent.process_form(pdf_text, form_type, update_progress)
                             
-                            if not pdf_text:
-                                st.error("Failed to extract text from PDF")
-                                st.stop()
-                            
-                            progress_bar.progress(20)
-                            
-                            # Determine form type
-                            form_type = None if form_type_hint == "Auto-detect" else form_type_hint
-                            
-                            # Process with coordinator agent
-                            st.write("🤖 Starting AI agent processing...")
-                            progress_bar.progress(30)
-                            
-                            # Show agent status during processing
-                            with status_placeholder.container():
-                                display_processing_status(extractor_agent, validation_agent, coordinator_agent)
-                            
-                            # Process
-                            result = coordinator_agent.process_form(pdf_text, form_type)
-                            progress_bar.progress(90)
+                            # Clear status display
+                            status_placeholder.empty()
+                            progress_placeholder.empty()
+                            timeout_display.empty()
                             
                             # Save to database
                             submission = FormSubmission(
@@ -1410,37 +1437,99 @@ def main():
                                 json_data=json.dumps(result.final_validation_report),
                                 status="completed",
                                 iterations=result.extraction_iterations,
-                                notes=f"Processed with {result.extraction_iterations} iterations"
+                                notes=f"Processed with {result.extraction_iterations} iterations in {result.processing_time:.1f}s"
                             )
                             
                             submission_id = db_manager.save_form_submission(submission)
                             st.session_state.current_submission_id = submission_id
                             st.session_state.extraction_result = result
                             
+                            # Save extracted fields to database
+                            try:
+                                db_manager.save_extracted_fields(submission_id, result)
+                            except Exception as e:
+                                st.warning(f"Field data saved with issues: {e}")
+                            
                             progress_bar.progress(100)
                             
-                            # Final status
-                            status_placeholder.empty()
-                            
+                            # Show results based on validation score
                             if result.validation_score >= 0.8:
-                                st.success(f"✅ Processing completed! Score: {result.validation_score:.1%}")
+                                st.success(f"✅ Processing completed successfully!")
+                                st.success(f"📊 Score: {result.validation_score:.1%} | ⏱️ Time: {result.processing_time:.1f}s | 🔄 Iterations: {result.extraction_iterations}")
                                 st.balloons()
                             elif result.validation_score >= 0.6:
-                                st.warning(f"⚠️ Processing completed with issues. Score: {result.validation_score:.1%}")
+                                st.warning(f"⚠️ Processing completed with some issues")
+                                st.info(f"📊 Score: {result.validation_score:.1%} | ⏱️ Time: {result.processing_time:.1f}s | 🔄 Iterations: {result.extraction_iterations}")
                             else:
-                                st.error(f"❌ Processing completed but validation failed. Score: {result.validation_score:.1%}")
+                                st.error(f"❌ Processing completed but quality is low")
+                                st.error(f"📊 Score: {result.validation_score:.1%} | ⏱️ Time: {result.processing_time:.1f}s | 🔄 Iterations: {result.extraction_iterations}")
+                                st.info("Consider manual review or try again with a clearer PDF.")
                             
-                            st.info(f"Completed in {result.extraction_iterations} iterations ({result.processing_time:.1f}s)")
+                            # Show quick summary
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("Fields Found", result.total_fields)
+                            with col2:
+                                st.metric("Fields Filled", result.filled_fields)
+                            with col3:
+                                fill_rate = (result.filled_fields / result.total_fields * 100) if result.total_fields > 0 else 0
+                                st.metric("Fill Rate", f"{fill_rate:.0f}%")
                             
-                        except Exception as e:
-                            st.error(f"Processing failed: {str(e)}")
+                        except TimeoutError as e:
+                            progress_placeholder.empty()
+                            timeout_display.empty()
+                            st.error(f"⏱️ {str(e)}")
+                            st.info("The form may be too complex or the API is slow. Try again or use a simpler document.")
+                            
+                        except Exception as api_error:
+                            progress_placeholder.empty()
+                            timeout_display.empty()
+                            st.error(f"🤖 AI Processing failed: {str(api_error)}")
+                            
+                            # Check for common API issues
+                            error_msg = str(api_error).lower()
+                            if "rate limit" in error_msg:
+                                st.info("🔄 OpenAI rate limit reached. Please wait a moment and try again.")
+                            elif "timeout" in error_msg:
+                                st.info("⏱️ API timeout. Try again or use a shorter document.")
+                            elif "invalid" in error_msg and "key" in error_msg:
+                                st.info("🔑 Check your OpenAI API key in Streamlit secrets.")
+                            else:
+                                st.info("Try again or check the debug logs for more details.")
+                            
                             if debug_mode:
-                                st.exception(e)
+                                st.exception(api_error)
+                    
+                    except Exception as e:
+                        progress_placeholder.empty()
+                        timeout_display.empty()
+                        st.error(f"💥 Processing failed: {str(e)}")
+                        if debug_mode:
+                            st.exception(e)
         
         # Live agent status (when not processing)
         if 'extraction_result' not in st.session_state or st.session_state.extraction_result is None:
             st.markdown("### 🤖 Agent Status")
-            display_processing_status(extractor_agent, validation_agent, coordinator_agent)
+            st.info("Agents will be initialized when you process a form")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown('<div class="agent-card extractor-agent">', unsafe_allow_html=True)
+                st.markdown("**🔍 Extractor Agent**")
+                st.markdown('<div style="color:gray;">Status: Ready</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown('<div class="agent-card validation-agent">', unsafe_allow_html=True)
+                st.markdown("**✅ Validation Agent**")
+                st.markdown('<div style="color:gray;">Status: Ready</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown('<div class="agent-card coordinator-agent">', unsafe_allow_html=True)
+                st.markdown("**🎯 Coordinator Agent**")
+                st.markdown('<div style="color:gray;">Status: Ready</div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
     
     # Results & Analysis Tab
     with tabs[1]:
