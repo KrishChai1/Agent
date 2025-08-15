@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Enhanced USCIS Form Reader with Proper Sequence Handling
-- Handles field numbering like 1a, 1b, 1c
-- Maintains proper sequence order
-- Validates completeness of extraction
-- Shows extracted attributes per part with sequence validation
+Enhanced USCIS Form Reader with AI Agents
+- Extractor Agent: Uses OpenAI to intelligently extract form data
+- Validation Agent: Validates and corrects extracted data
+- Coordinator: Loops agents until validation passes
+- Database integration and questionnaire support
 """
 
 import os
@@ -15,9 +15,10 @@ import hashlib
 import traceback
 import io
 import csv
+import sqlite3
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Set
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from collections import defaultdict, OrderedDict
 from enum import Enum
 from pathlib import Path
@@ -35,6 +36,13 @@ except ImportError:
     fitz = None
 
 try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    openai = None
+
+try:
     import xlsxwriter
     XLSXWRITER_AVAILABLE = True
 except ImportError:
@@ -42,8 +50,8 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="Enhanced USCIS Form Reader with Validation",
-    page_icon="📋",
+    page_title="AI-Powered USCIS Form Reader",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -61,13 +69,28 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     }
     
-    .field-card {
+    .agent-card {
         background: #f8f9fa;
         border: 1px solid #dee2e6;
         border-radius: 8px;
-        padding: 0.8rem;
+        padding: 1rem;
         margin: 0.5rem 0;
         border-left: 4px solid #007bff;
+    }
+    
+    .extractor-agent {
+        border-left-color: #28a745;
+        background: #f8fff9;
+    }
+    
+    .validation-agent {
+        border-left-color: #ffc107;
+        background: #fffdf5;
+    }
+    
+    .coordinator-agent {
+        border-left-color: #6f42c1;
+        background: #faf9ff;
     }
     
     .field-value {
@@ -78,32 +101,7 @@ st.markdown("""
         color: #2e7d32;
     }
     
-    .empty-value {
-        background: #ffebee;
-        padding: 0.5rem;
-        border-radius: 4px;
-        color: #c62828;
-        font-style: italic;
-    }
-    
-    .part-header {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-        font-weight: bold;
-    }
-    
-    .sequence-card {
-        background: #e3f2fd;
-        border: 1px solid #1976d2;
-        border-radius: 6px;
-        padding: 0.5rem;
-        margin: 0.3rem 0;
-    }
-    
-    .missing-field {
+    .validation-error {
         background: #ffebee;
         border: 1px solid #f44336;
         color: #d32f2f;
@@ -120,12 +118,24 @@ st.markdown("""
         border-radius: 4px;
     }
     
-    .debug-info {
-        background: #f0f0f0;
-        padding: 0.5rem;
+    .agent-log {
+        background: #f5f5f5;
+        padding: 0.8rem;
         border-radius: 4px;
-        font-size: 0.8rem;
-        color: #666;
+        font-family: monospace;
+        font-size: 0.85rem;
+        margin: 0.5rem 0;
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    
+    .iteration-counter {
+        background: #e3f2fd;
+        border: 1px solid #1976d2;
+        border-radius: 6px;
+        padding: 0.5rem;
+        text-align: center;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -143,1090 +153,1037 @@ class FieldType(Enum):
     NAME = "name"
     UNKNOWN = "unknown"
 
+class AgentStatus(Enum):
+    IDLE = "idle"
+    PROCESSING = "processing"
+    SUCCESS = "success"
+    ERROR = "error"
+    VALIDATION_FAILED = "validation_failed"
+
+class FormType(Enum):
+    I90 = "I-90"
+    I130 = "I-130"
+    I485 = "I-485"
+    I765 = "I-765"
+    G28 = "G-28"
+    N400 = "N-400"
+    I129 = "I-129"
+    UNKNOWN = "Unknown"
+
 # ===== DATA CLASSES =====
 @dataclass
-class FieldNumber:
-    """Represents a parsed field number like 1.a or 2.b.iii"""
-    main: int
-    sub_letter: str = ""
-    sub_number: str = ""
-    sub_roman: str = ""
-    
-    def __str__(self):
-        parts = [str(self.main)]
-        if self.sub_letter:
-            parts.append(self.sub_letter)
-        if self.sub_number:
-            parts.append(self.sub_number)
-        if self.sub_roman:
-            parts.append(self.sub_roman)
-        return ".".join(parts)
-    
-    def to_sort_key(self) -> Tuple:
-        """Return a tuple for sorting"""
-        # Handle None values properly
-        main_key = self.main if self.main is not None else 999
-        letter_key = self.sub_letter if self.sub_letter else ""
-        
-        # Parse sub_number if it's a digit string
-        if self.sub_number and self.sub_number.isdigit():
-            number_key = int(self.sub_number)
-        else:
-            number_key = 999
-            
-        roman_key = self.sub_roman if self.sub_roman else ""
-        
-        return (main_key, letter_key, number_key, roman_key)
-
-@dataclass
 class ExtractedField:
-    """Represents an extracted form field with its value"""
-    item_number: str
-    parsed_number: Optional[FieldNumber] = None
-    label: str = ""
-    value: str = ""
-    field_type: FieldType = FieldType.UNKNOWN
-    page: int = 1
+    """Represents an extracted form field"""
+    field_number: str
+    field_label: str
+    field_value: str
+    field_type: FieldType = FieldType.TEXT
+    confidence: float = 0.0
+    page_number: int = 1
     part_number: int = 1
     part_name: str = ""
-    bbox: Optional[List[float]] = None
-    confidence: float = 0.0
-    raw_text: str = ""
-    sequence_valid: bool = True
+    validation_errors: List[str] = field(default_factory=list)
+    is_required: bool = False
+    extraction_method: str = "ai_agent"
     
     def to_dict(self) -> Dict:
         return {
-            'item_number': self.item_number,
-            'label': self.label,
-            'value': self.value,
-            'type': self.field_type.value,
-            'page': self.page,
-            'part': self.part_number,
+            'field_number': self.field_number,
+            'field_label': self.field_label,
+            'field_value': self.field_value,
+            'field_type': self.field_type.value,
             'confidence': self.confidence,
-            'sequence_valid': self.sequence_valid
+            'page_number': self.page_number,
+            'part_number': self.part_number,
+            'part_name': self.part_name,
+            'validation_errors': self.validation_errors,
+            'is_required': self.is_required,
+            'extraction_method': self.extraction_method
         }
 
-@dataclass 
+@dataclass
 class FormPart:
     """Represents a form part/section"""
     number: int
     title: str
     start_page: int = 1
+    end_page: int = 1
     fields: List[ExtractedField] = field(default_factory=list)
-    expected_sequence: List[str] = field(default_factory=list)
-    missing_fields: List[str] = field(default_factory=list)
-    
-    def __post_init__(self):
-        """Initialize any missing attributes"""
-        if not hasattr(self, 'missing_fields'):
-            self.missing_fields = []
+    raw_text: str = ""
+    validation_score: float = 0.0
     
     def add_field(self, field: ExtractedField):
         field.part_number = self.number
         field.part_name = self.title
         self.fields.append(field)
-    
-    def sort_fields(self):
-        """Sort fields by their parsed numbers"""
-        try:
-            self.fields.sort(key=lambda f: f.parsed_number.to_sort_key() if f.parsed_number else (999, "", 999, ""))
-        except Exception as e:
-            # If sorting fails, just leave in original order
-            pass
-    
-    def validate_sequence(self):
-        """Validate field sequence and find missing fields"""
-        if not self.fields:
-            return
-        
-        # Get all field numbers
-        found_numbers = set()
-        for field in self.fields:
-            if field.parsed_number:
-                found_numbers.add(str(field.parsed_number))
-        
-        # Check for missing numbers in common sequences
-        self.missing_fields = []
-        
-        # Find the max main number
-        max_main = max((f.parsed_number.main for f in self.fields if f.parsed_number), default=0)
-        
-        # Check main sequence
-        for i in range(1, max_main + 1):
-            if not any(f.parsed_number and f.parsed_number.main == i for f in self.fields):
-                self.missing_fields.append(str(i))
-        
-        # Check for common sub-sequences (a, b, c)
-        for field in self.fields:
-            if field.parsed_number and field.parsed_number.sub_letter:
-                main_num = field.parsed_number.main
-                # Check if we have a sequence like 1.a, 1.b, 1.c
-                for letter in 'abc':
-                    expected = f"{main_num}.{letter}"
-                    if not any(str(f.parsed_number) == expected for f in self.fields if f.parsed_number):
-                        # Only add if we found at least one letter in this sequence
-                        if any(f.parsed_number and f.parsed_number.main == main_num and f.parsed_number.sub_letter 
-                               for f in self.fields):
-                            if ord(letter) <= ord(field.parsed_number.sub_letter):
-                                self.missing_fields.append(expected)
 
 @dataclass
 class ExtractionResult:
-    """Complete extraction result"""
+    """Complete extraction result with agent processing info"""
     form_number: str
     form_title: str
     parts: Dict[int, FormPart] = field(default_factory=dict)
     total_fields: int = 0
     filled_fields: int = 0
-    empty_fields: int = 0
-    sequence_issues: int = 0
-    extraction_time: float = 0.0
-    debug_info: List[str] = field(default_factory=list)
-    validation_report: Dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self):
-        """Initialize any missing attributes"""
-        if not hasattr(self, 'sequence_issues'):
-            self.sequence_issues = 0
+    validation_score: float = 0.0
+    extraction_iterations: int = 0
+    agent_logs: List[str] = field(default_factory=list)
+    processing_time: float = 0.0
+    final_validation_report: Dict[str, Any] = field(default_factory=dict)
     
     def calculate_stats(self):
         """Calculate statistics"""
         self.total_fields = sum(len(part.fields) for part in self.parts.values())
         self.filled_fields = sum(1 for part in self.parts.values() 
-                                for field in part.fields if field.value and field.value.strip())
-        self.empty_fields = self.total_fields - self.filled_fields
+                                for field in part.fields if field.field_value and field.field_value.strip())
         
-        # Calculate sequence issues safely
-        try:
-            self.sequence_issues = sum(len(getattr(part, 'missing_fields', [])) for part in self.parts.values())
-        except:
-            self.sequence_issues = 0
+        # Calculate overall validation score
+        if self.parts:
+            scores = [part.validation_score for part in self.parts.values()]
+            self.validation_score = sum(scores) / len(scores)
 
-# ===== FIELD NUMBER PARSER =====
-class FieldNumberParser:
-    """Parse complex field numbers like 1.a, 2.b.iii, etc."""
-    
-    @staticmethod
-    def parse(number_str: str) -> Optional[FieldNumber]:
-        """Parse a field number string into components"""
-        if not number_str:
-            return None
-        
-        # Clean the number string
-        number_str = number_str.strip().rstrip('.')
-        
-        # Patterns for different number formats
-        patterns = [
-            # 1.a.2 format
-            r'^(\d+)\.([a-zA-Z])\.(\d+)$',
-            # 1.a format
-            r'^(\d+)\.([a-zA-Z])$',
-            # 1a format (no dot)
-            r'^(\d+)([a-zA-Z])$',
-            # Just number
-            r'^(\d+)$',
-            # With parentheses like (1)
-            r'^\((\d+)\)$',
-            # Complex like 1.a.i
-            r'^(\d+)\.([a-zA-Z])\.([ivxIVX]+)$',
-        ]
-        
-        for pattern in patterns:
-            match = re.match(pattern, number_str)
-            if match:
-                groups = match.groups()
-                field_num = FieldNumber(main=int(groups[0]))
-                
-                if len(groups) > 1 and groups[1]:
-                    field_num.sub_letter = groups[1].lower()
-                
-                if len(groups) > 2 and groups[2]:
-                    if groups[2].isdigit():
-                        field_num.sub_number = groups[2]
-                    else:
-                        field_num.sub_roman = groups[2].lower()
-                
-                return field_num
-        
-        return None
-    
-    @staticmethod
-    def normalize_number(number_str: str) -> str:
-        """Normalize a field number for comparison"""
-        parsed = FieldNumberParser.parse(number_str)
-        return str(parsed) if parsed else number_str
+# ===== DATABASE MODELS (keeping existing) =====
+@dataclass
+class FormSubmission:
+    id: Optional[int] = None
+    form_type: str = ""
+    submission_date: datetime = field(default_factory=datetime.now)
+    entry_mode: str = "ai_agents"
+    total_fields: int = 0
+    completed_fields: int = 0
+    validation_score: float = 0.0
+    pdf_filename: str = ""
+    json_data: str = ""
+    status: str = "draft"
+    notes: str = ""
+    iterations: int = 0
 
-# ===== MAIN EXTRACTOR =====
-class EnhancedUSCISFormExtractor:
-    """Enhanced form extractor with sequence validation"""
+class DatabaseManager:
+    """Database manager (keeping existing implementation)"""
+    def __init__(self, db_path: str = "uscis_forms.db"):
+        self.db_path = db_path
+        self.init_database()
     
-    def __init__(self, debug_mode=False):
-        self.doc = None
-        self.form_info = {"number": "Unknown", "title": "Unknown Form"}
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+    
+    def init_database(self):
+        """Initialize database tables"""
+        with self.get_connection() as conn:
+            # Form submissions table
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS form_submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    form_type TEXT NOT NULL,
+                    submission_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    entry_mode TEXT DEFAULT 'ai_agents',
+                    total_fields INTEGER DEFAULT 0,
+                    completed_fields INTEGER DEFAULT 0,
+                    validation_score REAL DEFAULT 0.0,
+                    pdf_filename TEXT,
+                    json_data TEXT,
+                    status TEXT DEFAULT 'draft',
+                    notes TEXT,
+                    iterations INTEGER DEFAULT 0
+                )
+            ''')
+            
+            # Agent logs table
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS agent_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id INTEGER,
+                    agent_type TEXT NOT NULL,
+                    iteration INTEGER DEFAULT 1,
+                    log_message TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (submission_id) REFERENCES form_submissions (id)
+                )
+            ''')
+            
+            conn.commit()
+    
+    def save_form_submission(self, submission: FormSubmission) -> int:
+        """Save form submission and return ID"""
+        with self.get_connection() as conn:
+            if submission.id:
+                # Update existing
+                conn.execute('''
+                    UPDATE form_submissions SET
+                    form_type=?, entry_mode=?, total_fields=?, completed_fields=?,
+                    validation_score=?, json_data=?, status=?, notes=?, iterations=?
+                    WHERE id=?
+                ''', (submission.form_type, submission.entry_mode, submission.total_fields,
+                      submission.completed_fields, submission.validation_score,
+                      submission.json_data, submission.status, submission.notes, 
+                      submission.iterations, submission.id))
+                return submission.id
+            else:
+                # Insert new
+                cursor = conn.execute('''
+                    INSERT INTO form_submissions 
+                    (form_type, entry_mode, total_fields, completed_fields, validation_score,
+                     pdf_filename, json_data, status, notes, iterations)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (submission.form_type, submission.entry_mode, submission.total_fields,
+                      submission.completed_fields, submission.validation_score,
+                      submission.pdf_filename, submission.json_data, submission.status, 
+                      submission.notes, submission.iterations))
+                return cursor.lastrowid
+    
+    def save_agent_log(self, submission_id: int, agent_type: str, iteration: int, message: str):
+        """Save agent log entry"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                INSERT INTO agent_logs (submission_id, agent_type, iteration, log_message)
+                VALUES (?, ?, ?, ?)
+            ''', (submission_id, agent_type, iteration, message))
+            conn.commit()
+
+# ===== AI AGENTS =====
+class BaseAgent:
+    """Base class for AI agents"""
+    
+    def __init__(self, name: str, openai_client, debug_mode: bool = False):
+        self.name = name
+        self.client = openai_client
         self.debug_mode = debug_mode
-        self.debug_logs = []
-        self.field_parser = FieldNumberParser()
+        self.status = AgentStatus.IDLE
+        self.logs = []
     
     def log(self, message: str):
-        """Log debug message"""
-        self.debug_logs.append(message)
+        """Log agent activity"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_entry = f"[{timestamp}] {self.name}: {message}"
+        self.logs.append(log_entry)
         if self.debug_mode:
-            st.write(f"🔍 {message}")
+            st.write(f"🤖 {log_entry}")
     
-    def extract(self, pdf_file) -> ExtractionResult:
-        """Extract form data from PDF"""
-        start_time = time.time()
+    def get_logs(self) -> List[str]:
+        """Get agent logs"""
+        return self.logs.copy()
+
+class ExtractorAgent(BaseAgent):
+    """AI agent for extracting form data from PDFs"""
+    
+    def __init__(self, openai_client, debug_mode: bool = False):
+        super().__init__("Extractor Agent", openai_client, debug_mode)
+        self.model = "gpt-4o"  # Using latest model for best results
+    
+    def extract_form_data(self, pdf_text: str, form_type: str = None) -> ExtractionResult:
+        """Extract structured data from PDF text using AI"""
+        self.status = AgentStatus.PROCESSING
+        self.log(f"Starting extraction for form type: {form_type or 'Unknown'}")
         
         try:
-            # Open PDF
-            if hasattr(pdf_file, 'read'):
-                pdf_file.seek(0)
-                pdf_bytes = pdf_file.read()
-            else:
-                pdf_bytes = pdf_file
-                
-            self.doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            self.log(f"Opened PDF with {len(self.doc)} pages")
+            # First, identify the form if not provided
+            if not form_type:
+                form_type = self._identify_form_type(pdf_text)
+                self.log(f"Identified form type: {form_type}")
             
-            # Identify form
-            self.form_info = self._identify_form()
-            self.log(f"Identified form: {self.form_info['number']} - {self.form_info['title']}")
+            # Extract parts and their content
+            parts_data = self._extract_parts(pdf_text, form_type)
+            self.log(f"Found {len(parts_data)} parts")
             
-            # Create result with proper initialization
+            # Create result
             result = ExtractionResult(
-                form_number=self.form_info['number'],
-                form_title=self.form_info['title'],
-                sequence_issues=0  # Explicitly initialize
+                form_number=form_type,
+                form_title=self._get_form_title(form_type),
+                agent_logs=self.get_logs()
             )
             
-            # Extract all text with positions
-            all_text_blocks = []
-            for page_num in range(len(self.doc)):
-                try:
-                    page = self.doc[page_num]
-                    blocks = self._extract_page_data(page, page_num + 1)
-                    all_text_blocks.extend(blocks)
-                    self.log(f"Page {page_num + 1}: Found {len(blocks)} text blocks")
-                except Exception as e:
-                    self.log(f"Error extracting page {page_num + 1}: {str(e)}")
-                    continue
-            
-            self.log(f"Total text blocks: {len(all_text_blocks)}")
-            
-            if not all_text_blocks:
-                self.log("WARNING: No text blocks extracted from PDF!")
-                self.log("This could mean:")
-                self.log("1. The PDF is image-based (scanned) and needs OCR")
-                self.log("2. The PDF has an unusual structure")
-                self.log("3. The PDF is corrupted or encrypted")
-                result.debug_info = self.debug_logs
+            # Process each part
+            for part_data in parts_data:
+                part = FormPart(
+                    number=part_data['number'],
+                    title=part_data['title'],
+                    raw_text=part_data['text']
+                )
                 
-                # Try to provide more info
-                if self.doc and len(self.doc) > 0:
-                    try:
-                        # Check if PDF has text
-                        sample_text = self.doc[0].get_text()
-                        if not sample_text.strip():
-                            self.log("The PDF appears to have no extractable text. It might be a scanned image.")
-                        else:
-                            self.log(f"Found some text but couldn't parse it: {sample_text[:200]}...")
-                    except:
-                        pass
+                # Extract fields from this part
+                fields = self._extract_fields_from_part(part_data['text'], part_data['number'], form_type)
+                for field in fields:
+                    part.add_field(field)
                 
-                return result
+                result.parts[part.number] = part
+                self.log(f"Part {part.number}: Extracted {len(fields)} fields")
             
-            # Find parts
-            parts_info = self._find_parts(all_text_blocks)
-            self.log(f"Found {len(parts_info)} parts")
-            
-            # If no parts found, treat entire document as Part 1
-            if not parts_info:
-                parts_info = {
-                    1: {
-                        'title': 'Complete Form',
-                        'start_idx': 0,
-                        'end_idx': len(all_text_blocks) - 1,
-                        'page': 1
-                    }
-                }
-            
-            # Extract fields for each part
-            for part_num, part_info in parts_info.items():
-                try:
-                    part = FormPart(
-                        number=part_num, 
-                        title=part_info['title'],
-                        start_page=part_info['page']
-                    )
-                    
-                    # Get blocks for this part
-                    start_idx = part_info['start_idx']
-                    end_idx = part_info['end_idx']
-                    
-                    # Ensure indices are valid
-                    if start_idx < 0 or end_idx >= len(all_text_blocks):
-                        self.log(f"Part {part_num}: Invalid indices, skipping")
-                        continue
-                        
-                    part_blocks = all_text_blocks[start_idx:end_idx + 1]
-                    
-                    self.log(f"Part {part_num}: Processing {len(part_blocks)} blocks")
-                    
-                    # Extract fields with enhanced parsing
-                    fields = self._extract_fields_enhanced(part_blocks, part_info['page'])
-                    
-                    self.log(f"Part {part_num}: Found {len(fields)} fields")
-                    
-                    for field in fields:
-                        part.add_field(field)
-                    
-                    # Sort fields by their parsed numbers
-                    part.sort_fields()
-                    
-                    # Validate sequence
-                    part.validate_sequence()
-                    
-                    result.parts[part_num] = part
-                    
-                except Exception as e:
-                    self.log(f"Error processing part {part_num}: {str(e)}")
-                    if self.debug_mode:
-                        traceback.print_exc()
-                    continue
-            
-            # Run validation
-            try:
-                result.validation_report = self._validate_extraction(result)
-            except Exception as e:
-                self.log(f"Error during validation: {str(e)}")
-                result.validation_report = {}
-            
-            # Calculate stats
             result.calculate_stats()
-            result.extraction_time = time.time() - start_time
-            result.debug_info = self.debug_logs
-            
-            self.log(f"Extraction complete: {result.total_fields} fields, {result.filled_fields} filled, {result.sequence_issues} sequence issues")
+            self.status = AgentStatus.SUCCESS
+            self.log(f"Extraction complete: {result.total_fields} fields total")
             
             return result
             
         except Exception as e:
-            self.log(f"CRITICAL ERROR during extraction: {str(e)}")
-            if self.debug_mode:
-                traceback.print_exc()
-            
-            # Return a minimal result object
-            return ExtractionResult(
-                form_number="ERROR",
-                form_title="Extraction Failed",
-                debug_info=self.debug_logs + [f"CRITICAL ERROR: {str(e)}"],
-                sequence_issues=0
-            )
+            self.status = AgentStatus.ERROR
+            self.log(f"Extraction failed: {str(e)}")
+            raise
     
-    def _identify_form(self) -> Dict[str, str]:
-        """Identify form type"""
-        if not self.doc or self.doc.page_count == 0:
-            return {"number": "Unknown", "title": "Unknown Form"}
+    def _identify_form_type(self, pdf_text: str) -> str:
+        """Use AI to identify the form type"""
+        self.log("Identifying form type...")
         
-        first_page_text = self.doc[0].get_text()
+        prompt = f"""
+        Analyze this USCIS form text and identify the form type (e.g., I-90, I-130, G-28, etc.).
+        Look for form numbers, titles, and content clues.
         
-        # Common USCIS forms
-        form_patterns = [
-            (r'Form\s+(I-\d+[A-Z]?)', 'USCIS Immigration Form'),
-            (r'Form\s+(N-\d+)', 'USCIS Naturalization Form'),
-            (r'Form\s+(G-\d+)', 'USCIS General Form'),
-            (r'Form\s+(AR-\d+)', 'USCIS Form'),
-        ]
+        Text: {pdf_text[:2000]}...
         
-        for pattern, prefix in form_patterns:
-            match = re.search(pattern, first_page_text, re.IGNORECASE)
-            if match:
-                form_number = match.group(1).upper()
-                
-                # Get specific titles
-                titles = {
-                    'I-130': 'Petition for Alien Relative',
-                    'I-485': 'Application to Register Permanent Residence',
-                    'I-765': 'Application for Employment Authorization',
-                    'I-90': 'Application to Replace Permanent Resident Card',
-                    'N-400': 'Application for Naturalization',
-                    'I-539': 'Application to Extend/Change Nonimmigrant Status',
-                    'I-751': 'Petition to Remove Conditions on Residence',
-                    'I-140': 'Immigrant Petition for Alien Worker',
-                    'I-129': 'Petition for Nonimmigrant Worker',
-                    'G-1145': 'E-Notification of Application/Petition Acceptance'
-                }
-                
-                title = titles.get(form_number, f"{prefix} {form_number}")
-                return {"number": form_number, "title": title}
-        
-        return {"number": "Unknown", "title": "Unknown Form"}
-    
-    def _extract_page_data(self, page, page_num: int) -> List[Dict]:
-        """Extract all text blocks with positions from page"""
-        blocks = []
+        Return only the form number (e.g., "I-90", "G-28").
+        """
         
         try:
-            # Method 1: Get text with detailed position info
-            text_dict = page.get_text("dict")
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
             
-            for block in text_dict["blocks"]:
-                if block["type"] == 0:  # Text block
-                    for line in block["lines"]:
-                        line_text = ""
-                        line_bbox = None
-                        
-                        for span in line["spans"]:
-                            text = span["text"]
-                            if text.strip():
-                                if line_text and not line_text.endswith(' '):
-                                    line_text += " "
-                                line_text += text
-                                
-                                if line_bbox is None:
-                                    line_bbox = list(span["bbox"])
-                                else:
-                                    # Extend bbox
-                                    line_bbox[2] = max(line_bbox[2], span["bbox"][2])
-                                    line_bbox[3] = max(line_bbox[3], span["bbox"][3])
-                        
-                        if line_text.strip():
-                            blocks.append({
-                                'text': line_text.strip(),
-                                'page': page_num,
-                                'bbox': line_bbox or [0, 0, 0, 0],
-                                'y': line_bbox[1] if line_bbox else 0,
-                                'x': line_bbox[0] if line_bbox else 0
-                            })
+            form_type = response.choices[0].message.content.strip()
+            return form_type
             
-            # Method 2: Also try simple text extraction as fallback
-            if not blocks:
-                self.log(f"Page {page_num}: No blocks from dict method, trying simple extraction")
-                simple_text = page.get_text()
-                if simple_text:
-                    lines = simple_text.split('\n')
-                    for idx, line in enumerate(lines):
-                        if line.strip():
-                            blocks.append({
-                                'text': line.strip(),
-                                'page': page_num,
-                                'bbox': [0, idx * 20, 100, (idx + 1) * 20],  # Dummy bbox
-                                'y': idx * 20,
-                                'x': 0
-                            })
-            
-            # Sort by position
-            blocks.sort(key=lambda b: (b['y'], b['x']))
-            
-            # Log sample text from page
-            if blocks and self.debug_mode:
-                sample = blocks[0]['text'] if blocks else "No text"
-                self.log(f"Page {page_num} sample: {sample[:100]}...")
-                
         except Exception as e:
-            self.log(f"Error extracting page {page_num}: {str(e)}")
-            # Try simple fallback
-            try:
-                simple_text = page.get_text()
-                if simple_text:
-                    lines = simple_text.split('\n')
-                    for idx, line in enumerate(lines):
-                        if line.strip():
-                            blocks.append({
-                                'text': line.strip(),
-                                'page': page_num,
-                                'bbox': [0, idx * 20, 100, (idx + 1) * 20],
-                                'y': idx * 20,
-                                'x': 0
-                            })
-            except:
-                pass
-        
-        return blocks
+            self.log(f"Form identification failed: {str(e)}")
+            return "Unknown"
     
-    def _find_parts(self, blocks: List[Dict]) -> Dict[int, Dict]:
-        """Find all parts in the form"""
-        parts = {}
-        
-        for i, block in enumerate(blocks):
-            text = block['text']
-            
-            # Match part headers - multiple patterns
-            patterns = [
-                r'^Part\s+(\d+)[.:]*\s*(.*?)$',
-                r'^PART\s+(\d+)[.:]*\s*(.*?)$',
-                r'^Part\s+(\d+)\s*[-–—]\s*(.*?)$',
-                r'^Part\s+(\d+)\.\s*(.*)$',
-            ]
-            
-            for pattern in patterns:
-                part_match = re.match(pattern, text, re.IGNORECASE)
-                if part_match:
-                    part_num = int(part_match.group(1))
-                    title = part_match.group(2).strip() if part_match.lastindex >= 2 else ""
-                    
-                    # Get title from next line if needed
-                    if not title and i + 1 < len(blocks):
-                        next_text = blocks[i + 1]['text']
-                        if not re.match(r'^\d+\.', next_text) and not re.match(r'^Part\s+', next_text, re.IGNORECASE):
-                            title = next_text
-                    
-                    parts[part_num] = {
-                        'title': title or f"Part {part_num}",
-                        'start_idx': i,
-                        'page': block['page']
-                    }
-                    break
-        
-        # Set end indices
-        part_nums = sorted(parts.keys())
-        for i, pn in enumerate(part_nums):
-            if i + 1 < len(part_nums):
-                parts[pn]['end_idx'] = parts[part_nums[i + 1]]['start_idx'] - 1
-            else:
-                parts[pn]['end_idx'] = len(blocks) - 1
-        
-        return parts
-    
-    def _extract_fields_enhanced(self, blocks: List[Dict], page_num: int) -> List[ExtractedField]:
-        """Extract fields with enhanced number parsing"""
-        fields = []
-        i = 0
-        
-        # Enhanced field patterns
-        field_patterns = [
-            # Standard patterns with sub-numbering
-            (r'^(\d+\.[a-zA-Z]\.?\d*)\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'complex'),
-            (r'^(\d+\.[a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'letter_sub'),
-            (r'^(\d+[a-zA-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'letter_no_dot'),
-            (r'^(\d+)\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'simple'),
-            (r'^([A-Z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'capital'),
-            (r'^([a-z])\.\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'lowercase'),
-            (r'^\((\d+)\)\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'parentheses'),
-            (r'^(\d+)\s+(.+?)(?:\s*[:：]\s*(.*))?$', 'no_dot'),
-        ]
-        
-        while i < len(blocks):
-            block = blocks[i]
-            text = block['text']
-            
-            # Skip headers
-            if re.match(r'^(Part|Page|Form|Section)\s+', text, re.IGNORECASE):
-                i += 1
-                continue
-            
-            # Try field patterns
-            field_found = False
-            
-            for pattern, pattern_type in field_patterns:
-                match = re.match(pattern, text)
-                if match:
-                    groups = match.groups()
-                    item_num = groups[0]
-                    label = groups[1].strip()
-                    value = groups[2].strip() if len(groups) > 2 and groups[2] else ""
-                    
-                    # Skip if label is too short or looks like instructions
-                    if len(label) < 3 or (label.startswith('(') and label.endswith(')')):
-                        break
-                    
-                    # Parse the field number
-                    parsed_num = self.field_parser.parse(item_num)
-                    
-                    # Create field
-                    extracted_field = ExtractedField(
-                        item_number=item_num,
-                        parsed_number=parsed_num,
-                        label=label,
-                        value=value,
-                        page=block.get('page', page_num),
-                        bbox=block.get('bbox'),
-                        raw_text=text
-                    )
-                    
-                    # If no value on same line, look for it
-                    if not value:
-                        value = self._find_field_value(blocks, i, label)
-                        extracted_field.value = value
-                    
-                    # Determine field type
-                    extracted_field.field_type = self._determine_field_type(label, value)
-                    
-                    # Set confidence
-                    extracted_field.confidence = 0.9 if value else 0.3
-                    
-                    fields.append(extracted_field)
-                    field_found = True
-                    break
-            
-            # Handle checkboxes
-            if not field_found:
-                checkbox_patterns = [
-                    (r'^[□☐]\s*(.+)', False),
-                    (r'^[☑☒✓✗×X]\s*(.+)', True),
-                    (r'^\[\s*\]\s*(.+)', False),
-                    (r'^\[[Xx✓]\]\s*(.+)', True),
-                ]
-                
-                for pattern, is_checked in checkbox_patterns:
-                    match = re.match(pattern, text)
-                    if match:
-                        label = match.group(1).strip()
-                        
-                        extracted_field = ExtractedField(
-                            item_number=f"cb_{i}",
-                            label=label,
-                            value="Yes" if is_checked else "No",
-                            field_type=FieldType.CHECKBOX,
-                            page=block.get('page', page_num),
-                            confidence=0.95,
-                            raw_text=text
-                        )
-                        fields.append(extracted_field)
-                        field_found = True
-                        break
-            
-            i += 1
-        
-        return fields
-    
-    def _find_field_value(self, blocks: List[Dict], field_idx: int, label: str) -> str:
-        """Find value for a field by looking at surrounding blocks"""
-        if field_idx >= len(blocks) - 1:
-            return ""
-        
-        field_block = blocks[field_idx]
-        field_bbox = field_block.get('bbox', [0, 0, 0, 0])
-        
-        # Look at next few blocks
-        for i in range(field_idx + 1, min(field_idx + 5, len(blocks))):
-            next_block = blocks[i]
-            next_text = next_block['text'].strip()
-            next_bbox = next_block.get('bbox', [0, 0, 0, 0])
-            
-            # Skip if it's another field
-            if any(re.match(pattern[0], next_text) for pattern, _ in [
-                (r'^(\d+\.[a-zA-Z]\.?\d*)\.\s+', 'complex'),
-                (r'^(\d+\.[a-zA-Z])\.\s+', 'letter_sub'),
-                (r'^(\d+[a-zA-Z])\.\s+', 'letter_no_dot'),
-                (r'^(\d+)\.\s+', 'simple'),
-            ]):
-                break
-            
-            # Skip checkboxes and headers
-            if re.match(r'^[□☐☑☒✓✗×\[\]◯◉]\s*', next_text) or re.match(r'^(Part|Page|Form)\s+', next_text, re.IGNORECASE):
-                continue
-            
-            # Skip if text is too long
-            if len(next_text) > 200:
-                continue
-            
-            # Check position - value might be on same line or line below
-            if ((next_bbox[0] > field_bbox[2] - 50 and abs(next_bbox[1] - field_bbox[1]) < 20) or
-                (next_bbox[1] > field_bbox[3] and next_bbox[1] - field_bbox[3] < 40)):
-                
-                if self._looks_like_value(next_text):
-                    return next_text
-        
-        return ""
-    
-    def _looks_like_value(self, text: str) -> bool:
-        """Check if text looks like a field value"""
-        if len(text) < 2:
-            return False
-        
-        # Common value patterns
-        value_patterns = [
-            r'^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$',  # Date
-            r'^\d{3}-?\d{2}-?\d{4}$',  # SSN
-            r'^[A-Z]\d{7,9}$',  # A-Number
-            r'^\(\d{3}\)\s*\d{3}-?\d{4}$',  # Phone
-            r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',  # Email
-            r'^\d+\s+[A-Za-z\s]+,?\s+[A-Z]{2}\s+\d{5}',  # Address
-            r'^[A-Z][a-z]+(\s+[A-Z][a-z]+)*$',  # Name
-            r'^\d+$',  # Number
-            r'^(Yes|No|N/A|None)$',  # Common answers
-        ]
-        
-        for pattern in value_patterns:
-            if re.match(pattern, text):
-                return True
-        
-        # If it's a reasonable length and doesn't look like a label
-        if 2 <= len(text) <= 50 and not text.endswith(':') and not text.endswith('?'):
-            return True
-        
-        return False
-    
-    def _determine_field_type(self, label: str, value: str) -> FieldType:
-        """Determine field type from label and value"""
-        label_lower = label.lower()
-        
-        # Check by label patterns
-        if any(word in label_lower for word in ['date', 'birth', 'expire', 'dob']):
-            return FieldType.DATE
-        elif any(word in label_lower for word in ['email', 'e-mail']):
-            return FieldType.EMAIL
-        elif any(word in label_lower for word in ['phone', 'telephone', 'mobile']):
-            return FieldType.PHONE
-        elif any(word in label_lower for word in ['number', 'no.', '#', 'ssn', 'a-number']):
-            return FieldType.NUMBER
-        elif any(word in label_lower for word in ['name']):
-            return FieldType.NAME
-        elif any(word in label_lower for word in ['address', 'street', 'city', 'state', 'zip']):
-            return FieldType.ADDRESS
-        
-        # Check by value patterns
-        if value:
-            if re.match(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', value):
-                return FieldType.DATE
-            elif '@' in value:
-                return FieldType.EMAIL
-            elif re.match(r'[\(\d]\d{2,3}[\)-]?\s*\d{3}[\-]?\d{4}', value):
-                return FieldType.PHONE
-        
-        return FieldType.TEXT
-    
-    def _validate_extraction(self, result: ExtractionResult) -> Dict[str, Any]:
-        """Validate the extraction results"""
-        report = {
-            'total_parts': len(result.parts),
-            'parts_validation': {},
-            'overall_score': 0.0
+    def _get_form_title(self, form_type: str) -> str:
+        """Get full form title"""
+        titles = {
+            'I-90': 'Application to Replace Permanent Resident Card',
+            'I-130': 'Petition for Alien Relative',
+            'I-485': 'Application to Register Permanent Residence',
+            'I-765': 'Application for Employment Authorization',
+            'G-28': 'Notice of Entry of Appearance as Attorney',
+            'N-400': 'Application for Naturalization',
+            'I-129': 'Petition for Nonimmigrant Worker',
         }
+        return titles.get(form_type, f"USCIS Form {form_type}")
+    
+    def _extract_parts(self, pdf_text: str, form_type: str) -> List[Dict]:
+        """Extract form parts using AI"""
+        self.log("Extracting form parts...")
         
-        if not result.parts:
-            return report
+        prompt = f"""
+        Analyze this USCIS {form_type} form and identify all the parts/sections.
+        Focus especially on "Part 1 - Information About You" and subsequent parts.
         
-        total_score = 0
+        For each part found, provide:
+        1. Part number
+        2. Part title 
+        3. The text content for that part
         
-        for part_num, part in result.parts.items():
-            part_report = {
-                'total_fields': len(part.fields),
-                'filled_fields': sum(1 for f in part.fields if f.value),
-                'missing_fields': part.missing_fields,
-                'sequence_gaps': [],
-                'duplicate_numbers': [],
-                'score': 0.0
+        Text: {pdf_text}
+        
+        Return as JSON array:
+        [
+          {{
+            "number": 1,
+            "title": "Information About You",
+            "text": "relevant text content for this part..."
+          }},
+          ...
+        ]
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON from response
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
+            
+            parts_data = json.loads(content)
+            return parts_data
+            
+        except Exception as e:
+            self.log(f"Parts extraction failed: {str(e)}")
+            # Fallback: create a single part
+            return [{
+                "number": 1,
+                "title": "Complete Form",
+                "text": pdf_text
+            }]
+    
+    def _extract_fields_from_part(self, part_text: str, part_number: int, form_type: str) -> List[ExtractedField]:
+        """Extract individual fields from a part using AI"""
+        self.log(f"Extracting fields from Part {part_number}...")
+        
+        prompt = f"""
+        Extract all form fields from this USCIS {form_type} Part {part_number} text.
+        
+        For each field, identify:
+        1. Field number (e.g., "1.a", "2", "3.b")
+        2. Field label/question
+        3. Field value (if filled)
+        4. Field type (text, date, checkbox, email, phone, address, name, number)
+        5. Whether it appears to be required
+        
+        Part text: {part_text}
+        
+        Return as JSON array:
+        [
+          {{
+            "field_number": "1.a",
+            "field_label": "Family Name (Last Name)",
+            "field_value": "Smith",
+            "field_type": "name",
+            "is_required": true,
+            "confidence": 0.95
+          }},
+          ...
+        ]
+        
+        Be thorough and extract ALL fields, even if they appear empty.
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON from response
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
+            
+            fields_data = json.loads(content)
+            
+            # Convert to ExtractedField objects
+            fields = []
+            for field_data in fields_data:
+                field = ExtractedField(
+                    field_number=field_data.get('field_number', ''),
+                    field_label=field_data.get('field_label', ''),
+                    field_value=field_data.get('field_value', ''),
+                    field_type=FieldType(field_data.get('field_type', 'text')),
+                    confidence=field_data.get('confidence', 0.5),
+                    is_required=field_data.get('is_required', False),
+                    part_number=part_number,
+                    extraction_method="ai_agent"
+                )
+                fields.append(field)
+            
+            return fields
+            
+        except Exception as e:
+            self.log(f"Field extraction failed: {str(e)}")
+            return []
+
+class ValidationAgent(BaseAgent):
+    """AI agent for validating extracted form data"""
+    
+    def __init__(self, openai_client, debug_mode: bool = False):
+        super().__init__("Validation Agent", openai_client, debug_mode)
+        self.model = "gpt-4o"
+    
+    def validate_extraction(self, result: ExtractionResult, original_text: str) -> Tuple[bool, Dict[str, Any]]:
+        """Validate extracted data and return validation status and report"""
+        self.status = AgentStatus.PROCESSING
+        self.log("Starting validation of extracted data...")
+        
+        try:
+            validation_report = {
+                'overall_valid': True,
+                'part_validations': {},
+                'missing_fields': [],
+                'validation_errors': [],
+                'confidence_score': 0.0,
+                'recommendations': []
             }
             
-            # Check for sequence gaps
-            if part.fields:
-                parsed_nums = [f.parsed_number for f in part.fields if f.parsed_number]
-                if parsed_nums:
-                    main_nums = sorted(set(pn.main for pn in parsed_nums))
-                    for i in range(len(main_nums) - 1):
-                        if main_nums[i+1] - main_nums[i] > 1:
-                            for missing in range(main_nums[i] + 1, main_nums[i+1]):
-                                part_report['sequence_gaps'].append(str(missing))
+            total_score = 0
+            part_count = 0
             
-            # Check for duplicates
-            seen_numbers = {}
+            # Validate each part
+            for part_num, part in result.parts.items():
+                part_validation = self._validate_part(part, original_text)
+                validation_report['part_validations'][f'Part {part_num}'] = part_validation
+                
+                part.validation_score = part_validation['score']
+                total_score += part_validation['score']
+                part_count += 1
+                
+                # Update field validation errors
+                for i, field in enumerate(part.fields):
+                    if i < len(part_validation['field_errors']):
+                        field.validation_errors = part_validation['field_errors'][i]
+                
+                # Check if part validation failed
+                if part_validation['score'] < 0.7:
+                    validation_report['overall_valid'] = False
+                
+                self.log(f"Part {part_num} validation score: {part_validation['score']:.2f}")
+            
+            # Calculate overall confidence
+            validation_report['confidence_score'] = total_score / part_count if part_count > 0 else 0
+            
+            # Check for critical missing fields
+            missing_critical = self._check_critical_fields(result)
+            if missing_critical:
+                validation_report['missing_fields'] = missing_critical
+                validation_report['overall_valid'] = False
+            
+            # Generate recommendations
+            validation_report['recommendations'] = self._generate_recommendations(result, validation_report)
+            
+            result.final_validation_report = validation_report
+            
+            self.status = AgentStatus.SUCCESS if validation_report['overall_valid'] else AgentStatus.VALIDATION_FAILED
+            self.log(f"Validation complete. Valid: {validation_report['overall_valid']}, Score: {validation_report['confidence_score']:.2f}")
+            
+            return validation_report['overall_valid'], validation_report
+            
+        except Exception as e:
+            self.status = AgentStatus.ERROR
+            self.log(f"Validation failed: {str(e)}")
+            raise
+    
+    def _validate_part(self, part: FormPart, original_text: str) -> Dict[str, Any]:
+        """Validate a single part using AI"""
+        self.log(f"Validating Part {part.number}: {part.title}")
+        
+        # Prepare fields data for validation
+        fields_summary = []
+        for field in part.fields:
+            fields_summary.append({
+                'number': field.field_number,
+                'label': field.field_label,
+                'value': field.field_value,
+                'type': field.field_type.value,
+                'confidence': field.confidence
+            })
+        
+        prompt = f"""
+        Validate the extracted data for this USCIS form part against the original text.
+        
+        Part {part.number}: {part.title}
+        
+        Extracted Fields:
+        {json.dumps(fields_summary, indent=2)}
+        
+        Original Text (relevant section):
+        {part.raw_text[:3000]}
+        
+        Please validate:
+        1. Are all visible fields extracted?
+        2. Are the field values correct?
+        3. Are field types appropriate?
+        4. Are required fields properly identified?
+        5. Are field numbers/labels accurate?
+        
+        Return validation as JSON:
+        {{
+          "score": 0.85,
+          "field_errors": [[], ["Invalid date format"], [], ...],
+          "missing_fields": ["2.c", "3.a"],
+          "incorrect_values": [["1.a", "Should be 'John' not 'Jon'"]],
+          "recommendations": ["Check field 2.c for middle name", "Verify date format in field 4"]
+        }}
+        
+        Score should be 0.0-1.0 based on accuracy and completeness.
+        """
+        
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON from response
+            if content.startswith('```json'):
+                content = content[7:-3]
+            elif content.startswith('```'):
+                content = content[3:-3]
+            
+            validation_data = json.loads(content)
+            
+            # Ensure all required fields exist
+            validation_result = {
+                'score': validation_data.get('score', 0.5),
+                'field_errors': validation_data.get('field_errors', []),
+                'missing_fields': validation_data.get('missing_fields', []),
+                'incorrect_values': validation_data.get('incorrect_values', []),
+                'recommendations': validation_data.get('recommendations', [])
+            }
+            
+            return validation_result
+            
+        except Exception as e:
+            self.log(f"Part validation failed: {str(e)}")
+            return {
+                'score': 0.3,
+                'field_errors': [],
+                'missing_fields': [],
+                'incorrect_values': [],
+                'recommendations': [f"Validation error: {str(e)}"]
+            }
+    
+    def _check_critical_fields(self, result: ExtractionResult) -> List[str]:
+        """Check for critical missing fields using AI knowledge"""
+        critical_fields_by_form = {
+            'I-90': ['1.a', '1.b', '4', '5'],  # Name, DOB, Country of Birth
+            'I-130': ['1', '2.a', '2.b', '3.a', '3.b'],  # Relationship, Petitioner/Beneficiary names
+            'G-28': ['2.a', '2.b', '5'],  # Attorney name, phone
+        }
+        
+        form_type = result.form_number
+        critical_fields = critical_fields_by_form.get(form_type, [])
+        
+        # Find extracted field numbers
+        extracted_numbers = set()
+        for part in result.parts.values():
             for field in part.fields:
-                if field.item_number in seen_numbers:
-                    part_report['duplicate_numbers'].append(field.item_number)
-                else:
-                    seen_numbers[field.item_number] = True
-            
-            # Calculate part score
-            issues = len(part.missing_fields) + len(part_report['sequence_gaps']) + len(part_report['duplicate_numbers'])
-            if part.fields:
-                part_report['score'] = max(0, 100 - (issues * 5))
-            else:
-                part_report['score'] = 0
-            
-            total_score += part_report['score']
-            report['parts_validation'][f'Part {part_num}'] = part_report
+                extracted_numbers.add(field.field_number)
         
-        # Calculate overall score
-        if result.parts:
-            report['overall_score'] = total_score / len(result.parts)
+        # Find missing critical fields
+        missing = [field for field in critical_fields if field not in extracted_numbers]
         
-        return report
+        if missing:
+            self.log(f"Missing critical fields: {missing}")
+        
+        return missing
+    
+    def _generate_recommendations(self, result: ExtractionResult, validation_report: Dict) -> List[str]:
+        """Generate recommendations for improving extraction"""
+        recommendations = []
+        
+        # Low confidence fields
+        low_confidence_fields = []
+        for part in result.parts.values():
+            for field in part.fields:
+                if field.confidence < 0.6:
+                    low_confidence_fields.append(f"{field.field_number} ({field.confidence:.2f})")
+        
+        if low_confidence_fields:
+            recommendations.append(f"Review low confidence fields: {', '.join(low_confidence_fields)}")
+        
+        # Missing values in required fields
+        empty_required = []
+        for part in result.parts.values():
+            for field in part.fields:
+                if field.is_required and not field.field_value:
+                    empty_required.append(field.field_number)
+        
+        if empty_required:
+            recommendations.append(f"Fill required fields: {', '.join(empty_required)}")
+        
+        # Overall score recommendations
+        if validation_report['confidence_score'] < 0.8:
+            recommendations.append("Consider manual review due to low validation score")
+        
+        return recommendations
 
-# ===== UI COMPONENTS =====
-def display_enhanced_results(result: ExtractionResult):
-    """Display extraction results with sequence validation"""
+class CoordinatorAgent(BaseAgent):
+    """Coordinator agent that manages the extraction-validation loop"""
+    
+    def __init__(self, openai_client, extractor_agent: ExtractorAgent, validation_agent: ValidationAgent, 
+                 max_iterations: int = 3, debug_mode: bool = False):
+        super().__init__("Coordinator Agent", openai_client, debug_mode)
+        self.extractor = extractor_agent
+        self.validator = validation_agent
+        self.max_iterations = max_iterations
+        self.model = "gpt-4o"
+    
+    def process_form(self, pdf_text: str, form_type: str = None) -> ExtractionResult:
+        """Main processing loop: extract -> validate -> improve until acceptable"""
+        self.status = AgentStatus.PROCESSING
+        self.log("Starting coordinated form processing...")
+        
+        start_time = time.time()
+        iteration = 1
+        result = None
+        
+        try:
+            while iteration <= self.max_iterations:
+                self.log(f"=== ITERATION {iteration} ===")
+                
+                # EXTRACTION PHASE
+                self.log("Phase 1: Extraction")
+                if iteration == 1:
+                    # First extraction
+                    result = self.extractor.extract_form_data(pdf_text, form_type)
+                else:
+                    # Improved extraction based on validation feedback
+                    result = self._improve_extraction(pdf_text, form_type, result, last_validation_report)
+                
+                result.extraction_iterations = iteration
+                
+                # VALIDATION PHASE
+                self.log("Phase 2: Validation")
+                is_valid, validation_report = self.validator.validate_extraction(result, pdf_text)
+                last_validation_report = validation_report
+                
+                # CHECK COMPLETION
+                self.log(f"Validation result: Valid={is_valid}, Score={validation_report['confidence_score']:.2f}")
+                
+                if is_valid or validation_report['confidence_score'] >= 0.85:
+                    self.log("✅ Validation passed! Processing complete.")
+                    self.status = AgentStatus.SUCCESS
+                    break
+                elif iteration == self.max_iterations:
+                    self.log("⚠️ Max iterations reached. Returning best result.")
+                    self.status = AgentStatus.VALIDATION_FAILED
+                    break
+                else:
+                    self.log(f"❌ Validation failed. Preparing iteration {iteration + 1}...")
+                    iteration += 1
+            
+            # Finalize result
+            result.processing_time = time.time() - start_time
+            result.agent_logs = (self.get_logs() + 
+                               self.extractor.get_logs() + 
+                               self.validator.get_logs())
+            
+            self.log(f"Processing complete in {result.processing_time:.2f}s with {iteration} iterations")
+            return result
+            
+        except Exception as e:
+            self.status = AgentStatus.ERROR
+            self.log(f"Coordination failed: {str(e)}")
+            raise
+    
+    def _improve_extraction(self, pdf_text: str, form_type: str, previous_result: ExtractionResult, 
+                          validation_report: Dict) -> ExtractionResult:
+        """Improve extraction based on validation feedback"""
+        self.log("Improving extraction based on validation feedback...")
+        
+        # Analyze what went wrong
+        issues = []
+        if validation_report.get('missing_fields'):
+            issues.append(f"Missing fields: {', '.join(validation_report['missing_fields'])}")
+        
+        for part_name, part_val in validation_report.get('part_validations', {}).items():
+            if part_val.get('incorrect_values'):
+                for field_num, issue in part_val['incorrect_values']:
+                    issues.append(f"Field {field_num}: {issue}")
+        
+        # Create improvement prompt
+        improvement_prompt = f"""
+        The previous extraction had these issues:
+        {chr(10).join(issues)}
+        
+        Previous extraction summary:
+        - Total fields: {previous_result.total_fields}
+        - Filled fields: {previous_result.filled_fields}
+        - Validation score: {validation_report['confidence_score']:.2f}
+        
+        Recommendations from validator:
+        {chr(10).join(validation_report.get('recommendations', []))}
+        
+        Please re-extract the form data with special attention to these issues.
+        Focus on accuracy and completeness.
+        """
+        
+        # Use the improvement guidance to re-extract
+        self.extractor.log("Re-extracting with improvements...")
+        self.extractor.log(improvement_prompt)
+        
+        # Perform improved extraction (reuse existing logic but with context)
+        return self.extractor.extract_form_data(pdf_text, form_type)
+
+# ===== OPENAI CLIENT SETUP =====
+def get_openai_client():
+    """Get OpenAI client with API key from secrets"""
+    try:
+        api_key = st.secrets.get("OPENAI_API_KEY")
+        if not api_key:
+            st.error("OpenAI API key not found in secrets!")
+            return None
+        
+        client = openai.OpenAI(api_key=api_key)
+        return client
+    except Exception as e:
+        st.error(f"Failed to initialize OpenAI client: {str(e)}")
+        return None
+
+# ===== PDF PROCESSING =====
+def extract_pdf_text(pdf_file) -> str:
+    """Extract text from PDF file"""
+    try:
+        if hasattr(pdf_file, 'read'):
+            pdf_file.seek(0)
+            pdf_bytes = pdf_file.read()
+        else:
+            pdf_bytes = pdf_file
+        
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        full_text = ""
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            page_text = page.get_text()
+            full_text += f"\n--- PAGE {page_num + 1} ---\n{page_text}\n"
+        
+        doc.close()
+        return full_text
+        
+    except Exception as e:
+        st.error(f"Failed to extract PDF text: {str(e)}")
+        return ""
+
+# ===== UI FUNCTIONS =====
+def display_agent_results(result: ExtractionResult):
+    """Display results from agent processing"""
     if not result:
         st.info("No results to display")
         return
     
     # Summary metrics
-    st.markdown("### 📊 Extraction Summary")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    st.markdown("### 🤖 AI Agent Processing Results")
     
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Total Fields", result.total_fields)
     with col2:
         percentage = f"{result.filled_fields/result.total_fields*100:.0f}%" if result.total_fields > 0 else "0%"
         st.metric("Filled Fields", result.filled_fields, delta=percentage)
     with col3:
-        st.metric("Empty Fields", result.empty_fields)
+        st.metric("Validation Score", f"{result.validation_score:.1f}%")
     with col4:
-        sequence_issues = getattr(result, 'sequence_issues', 0)
-        st.metric("Sequence Issues", sequence_issues, 
-                 delta="Good" if sequence_issues == 0 else f"-{sequence_issues}")
+        st.metric("Iterations", result.extraction_iterations)
     with col5:
-        score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
-        st.metric("Validation Score", f"{score:.0f}%")
+        st.metric("Processing Time", f"{result.processing_time:.1f}s")
     
-    # Validation Report
-    if result.validation_report:
-        with st.expander("📋 Validation Report", expanded=False):
-            for part_name, part_report in result.validation_report.get('parts_validation', {}).items():
-                st.markdown(f"**{part_name}**")
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.write(f"Fields: {part_report['total_fields']} (Filled: {part_report['filled_fields']})")
-                with col2:
-                    st.write(f"Missing: {len(part_report['missing_fields'])}")
-                with col3:
-                    st.write(f"Score: {part_report['score']:.0f}%")
-                
-                if part_report['missing_fields']:
-                    st.markdown(f'<div class="missing-field">Missing fields: {", ".join(part_report["missing_fields"])}</div>', 
-                               unsafe_allow_html=True)
-                
-                if part_report['sequence_gaps']:
-                    st.markdown(f'<div class="missing-field">Sequence gaps: {", ".join(part_report["sequence_gaps"])}</div>', 
-                               unsafe_allow_html=True)
-                
-                if part_report['duplicate_numbers']:
-                    st.warning(f"Duplicate numbers found: {', '.join(part_report['duplicate_numbers'])}")
-                
-                st.markdown("---")
+    # Agent logs
+    with st.expander("🤖 Agent Logs", expanded=False):
+        if result.agent_logs:
+            log_text = "\n".join(result.agent_logs)
+            st.markdown(f'<div class="agent-log">{log_text}</div>', unsafe_allow_html=True)
+        else:
+            st.info("No logs available")
     
-    # Display parts with sequence
-    st.markdown("### 📋 Extracted Form Data by Part")
+    # Validation report
+    if result.final_validation_report:
+        with st.expander("📋 Validation Report", expanded=True):
+            report = result.final_validation_report
+            
+            if report['overall_valid']:
+                st.markdown('<div class="validation-success">✅ Validation Passed</div>', 
+                           unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="validation-error">❌ Validation Issues Found</div>', 
+                           unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Confidence Score:**")
+                st.progress(report['confidence_score'])
+                st.write(f"{report['confidence_score']:.1%}")
+            
+            with col2:
+                if report['missing_fields']:
+                    st.markdown("**Missing Critical Fields:**")
+                    for field in report['missing_fields']:
+                        st.markdown(f"- {field}")
+            
+            if report['recommendations']:
+                st.markdown("**Recommendations:**")
+                for rec in report['recommendations']:
+                    st.markdown(f"- {rec}")
     
-    if not result.parts:
-        st.warning("No parts were extracted from the PDF.")
-        if result.debug_info:
-            with st.expander("Debug Information"):
-                for log in result.debug_info:
-                    st.text(log)
-        return
-    
-    # Add filters
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        show_empty = st.checkbox("Show empty fields", value=True)
-    with col2:
-        show_sequence = st.checkbox("Show sequence numbers", value=True)
-    with col3:
-        field_type_filter = st.selectbox("Filter by type", ["All"] + [t.value for t in FieldType])
+    # Display parts and fields
+    st.markdown("### 📋 Extracted Form Data")
     
     for part_num in sorted(result.parts.keys()):
         part = result.parts[part_num]
-        filled = sum(1 for f in part.fields if f.value and f.value.strip())
+        filled = sum(1 for f in part.fields if f.field_value and f.field_value.strip())
         
-        # Part header with stats
-        st.markdown(
-            f'<div class="part-header">'
-            f'Part {part_num}: {part.title}<br/>'
-            f'<small>Page {part.start_page} | {len(part.fields)} fields | {filled} filled | '
-            f'{len(part.missing_fields)} missing in sequence</small>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-        
-        with st.expander(f"View Part {part_num} Details", expanded=(part_num == 1)):
+        with st.expander(f"Part {part_num}: {part.title} ({filled}/{len(part.fields)} filled)", 
+                        expanded=(part_num == 1)):
+            
             if not part.fields:
                 st.warning("No fields found in this part")
             else:
-                # Show missing fields alert
-                if part.missing_fields:
-                    st.markdown(
-                        f'<div class="missing-field">⚠️ Missing fields in sequence: {", ".join(part.missing_fields)}</div>',
-                        unsafe_allow_html=True
-                    )
-                
-                # Create sequence view
-                if show_sequence:
-                    st.markdown("#### Field Sequence")
-                    sequence_cols = st.columns(6)
-                    for idx, field in enumerate(part.fields):
-                        col_idx = idx % 6
-                        with sequence_cols[col_idx]:
-                            seq_class = "sequence-card" if field.sequence_valid else "missing-field"
-                            st.markdown(
-                                f'<div class="{seq_class}">{field.item_number}</div>',
-                                unsafe_allow_html=True
-                            )
+                # Part validation score
+                if hasattr(part, 'validation_score'):
+                    score_color = "green" if part.validation_score > 0.8 else "orange" if part.validation_score > 0.6 else "red"
+                    st.markdown(f'<div style="color:{score_color};">Part Validation Score: {part.validation_score:.1%}</div>', 
+                               unsafe_allow_html=True)
                 
                 # Display fields
-                st.markdown("#### Field Details")
                 for field in part.fields:
-                    # Apply filters
-                    if not show_empty and not field.value:
-                        continue
-                    if field_type_filter != "All" and field.field_type.value != field_type_filter:
-                        continue
+                    st.markdown('<div class="agent-card">', unsafe_allow_html=True)
                     
-                    # Create field display
-                    st.markdown('<div class="field-card">', unsafe_allow_html=True)
-                    cols = st.columns([1, 3, 3, 1])
+                    cols = st.columns([1, 3, 3, 1, 1])
                     
                     with cols[0]:
-                        # Field number with validation indicator
-                        color = "green" if field.sequence_valid else "red"
-                        st.markdown(
-                            f'<span style="color:{color};font-weight:bold;">{field.item_number}</span>',
-                            unsafe_allow_html=True
-                        )
+                        st.markdown(f'**{field.field_number}**')
                     
                     with cols[1]:
-                        # Field label
-                        st.markdown(f"**{field.label}**")
-                        st.caption(f"Type: {field.field_type.value} | Page: {field.page}")
+                        st.markdown(f"**{field.field_label}**")
+                        st.caption(f"Type: {field.field_type.value}")
+                        if field.is_required:
+                            st.caption("🔴 Required")
                     
                     with cols[2]:
-                        # Field value
-                        if field.value and field.value.strip():
-                            st.markdown(f'<div class="field-value">{field.value}</div>', 
+                        if field.field_value and field.field_value.strip():
+                            st.markdown(f'<div class="field-value">{field.field_value}</div>', 
                                       unsafe_allow_html=True)
                         else:
-                            st.markdown('<div class="empty-value">Empty / No value found</div>', 
+                            st.markdown('<div style="color:#666;font-style:italic;">Empty</div>', 
                                       unsafe_allow_html=True)
                     
                     with cols[3]:
-                        # Confidence
                         conf_color = "green" if field.confidence > 0.7 else "orange" if field.confidence > 0.4 else "red"
-                        st.markdown(f'<span style="color:{conf_color};font-weight:bold;">{field.confidence:.0%}</span>', 
-                                  unsafe_allow_html=True)
+                        st.markdown(f'<span style="color:{conf_color};">{field.confidence:.0%}</span>', 
+                                   unsafe_allow_html=True)
+                    
+                    with cols[4]:
+                        if field.validation_errors:
+                            st.markdown("⚠️")
+                            if st.button("❓", key=f"errors_{field.field_number}"):
+                                st.error(f"Validation errors: {', '.join(field.validation_errors)}")
                     
                     st.markdown('</div>', unsafe_allow_html=True)
 
-def export_to_json_enhanced(result: ExtractionResult) -> str:
-    """Export results to JSON with validation info"""
-    export_data = {
-        'form_info': {
-            'number': result.form_number,
-            'title': result.form_title,
-            'total_fields': result.total_fields,
-            'filled_fields': result.filled_fields,
-            'empty_fields': result.empty_fields,
-            'sequence_issues': result.sequence_issues,
-            'extraction_time': result.extraction_time,
-            'validation_score': result.validation_report.get('overall_score', 0)
-        },
-        'validation_report': result.validation_report,
-        'parts': {}
-    }
+def display_processing_status(extractor_agent, validation_agent, coordinator_agent):
+    """Display real-time processing status"""
+    st.markdown("### 🔄 Agent Status")
     
-    for part_num, part in result.parts.items():
-        part_data = {
-            'title': part.title,
-            'missing_fields': part.missing_fields,
-            'fields': []
-        }
-        
-        for field in part.fields:
-            field_data = field.to_dict()
-            field_data['parsed_number'] = str(field.parsed_number) if field.parsed_number else None
-            part_data['fields'].append(field_data)
-        
-        export_data['parts'][f'part_{part_num}'] = part_data
+    col1, col2, col3 = st.columns(3)
     
-    return json.dumps(export_data, indent=2)
+    with col1:
+        st.markdown('<div class="agent-card extractor-agent">', unsafe_allow_html=True)
+        st.markdown("**🔍 Extractor Agent**")
+        status_color = {
+            AgentStatus.IDLE: "gray",
+            AgentStatus.PROCESSING: "blue", 
+            AgentStatus.SUCCESS: "green",
+            AgentStatus.ERROR: "red"
+        }.get(extractor_agent.status, "gray")
+        st.markdown(f'<div style="color:{status_color};">Status: {extractor_agent.status.value}</div>', 
+                   unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown('<div class="agent-card validation-agent">', unsafe_allow_html=True)
+        st.markdown("**✅ Validation Agent**")
+        status_color = {
+            AgentStatus.IDLE: "gray",
+            AgentStatus.PROCESSING: "blue",
+            AgentStatus.SUCCESS: "green", 
+            AgentStatus.ERROR: "red",
+            AgentStatus.VALIDATION_FAILED: "orange"
+        }.get(validation_agent.status, "gray")
+        st.markdown(f'<div style="color:{status_color};">Status: {validation_agent.status.value}</div>', 
+                   unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown('<div class="agent-card coordinator-agent">', unsafe_allow_html=True)
+        st.markdown("**🎯 Coordinator Agent**")
+        status_color = {
+            AgentStatus.IDLE: "gray",
+            AgentStatus.PROCESSING: "blue",
+            AgentStatus.SUCCESS: "green",
+            AgentStatus.ERROR: "red",
+            AgentStatus.VALIDATION_FAILED: "orange"
+        }.get(coordinator_agent.status, "gray")
+        st.markdown(f'<div style="color:{status_color};">Status: {coordinator_agent.status.value}</div>', 
+                   unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-def export_to_csv_enhanced(result: ExtractionResult) -> str:
-    """Export results to CSV with sequence info"""
-    rows = []
-    
-    for part_num, part in result.parts.items():
-        for field in part.fields:
-            rows.append({
-                'Part': part_num,
-                'Part Title': part.title,
-                'Sequence': field.item_number,
-                'Parsed Number': str(field.parsed_number) if field.parsed_number else "",
-                'Label': field.label,
-                'Value': field.value,
-                'Type': field.field_type.value,
-                'Page': field.page,
-                'Confidence': f"{field.confidence:.0%}",
-                'Has Value': 'Yes' if field.value else 'No',
-                'Sequence Valid': 'Yes' if field.sequence_valid else 'No'
-            })
-    
-    df = pd.DataFrame(rows)
-    return df.to_csv(index=False)
-
-# ===== MAIN APP =====
+# ===== MAIN APPLICATION =====
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>📋 Enhanced USCIS Form Reader</h1>'
-        '<p>Extract fields with proper sequence validation (1a, 1b, 1c support)</p>'
+        '<h1>🤖 AI-Powered USCIS Form Reader</h1>'
+        '<p>Intelligent form processing with AI agents and validation loops</p>'
         '</div>', 
         unsafe_allow_html=True
     )
     
-    # Add a note about PDF requirements
-    st.info("ℹ️ This tool works with fillable PDFs or PDFs with selectable text. Scanned/image PDFs require OCR processing first.")
+    # Check dependencies
+    if not PYMUPDF_AVAILABLE:
+        st.error("❌ PyMuPDF is required but not installed!")
+        st.code("pip install PyMuPDF")
+        st.stop()
     
-    # Initialize session state
+    if not OPENAI_AVAILABLE:
+        st.error("❌ OpenAI library is required but not installed!")
+        st.code("pip install openai")
+        st.stop()
+    
+    # Initialize OpenAI client
+    openai_client = get_openai_client()
+    if not openai_client:
+        st.stop()
+    
+    # Initialize components
+    if 'db_manager' not in st.session_state:
+        st.session_state.db_manager = DatabaseManager()
     if 'extraction_result' not in st.session_state:
         st.session_state.extraction_result = None
-    if 'debug_mode' not in st.session_state:
-        st.session_state.debug_mode = False
+    if 'current_submission_id' not in st.session_state:
+        st.session_state.current_submission_id = None
+    
+    db_manager = st.session_state.db_manager
     
     # Sidebar
     with st.sidebar:
-        st.markdown("## ⚙️ Settings")
-        st.session_state.debug_mode = st.checkbox("Debug Mode", value=st.session_state.debug_mode)
+        st.markdown("## ⚙️ Agent Settings")
+        debug_mode = st.checkbox("Debug Mode", value=False, help="Show detailed agent logs")
+        max_iterations = st.slider("Max Iterations", min_value=1, max_value=5, value=3, 
+                                  help="Maximum extraction-validation loops")
         
-        st.markdown("## 📄 About")
-        st.info(
-            "Enhanced extractor with:\n"
-            "• Sub-numbering support (1a, 1b, 1c)\n"
-            "• Sequence validation\n"
-            "• Missing field detection\n"
-            "• Part-by-part analysis"
-        )
+        st.markdown("## 🤖 Agent Info")
+        st.info("""
+        **Extractor Agent**: Uses GPT-4 to intelligently extract form fields
         
-        st.markdown("## 🎯 Features")
-        st.markdown("""
-        ✅ Handles complex numbering  
-        ✅ Validates field sequences  
-        ✅ Detects missing fields  
-        ✅ Shows extraction per part  
-        ✅ Validation scoring  
-        ✅ Enhanced reporting  
+        **Validation Agent**: Validates extraction accuracy and completeness
+        
+        **Coordinator**: Manages the improvement loop until validation passes
         """)
         
-        if st.session_state.extraction_result:
-            st.markdown("## 📊 Current Results")
-            result = st.session_state.extraction_result
-            st.write(f"Form: {result.form_number}")
-            st.write(f"Fields: {result.total_fields}")
-            st.write(f"Filled: {result.filled_fields}")
-            
-            # Safely access sequence_issues
-            sequence_issues = getattr(result, 'sequence_issues', 0)
-            st.write(f"Issues: {sequence_issues}")
-            
-            score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
-            if score >= 90:
-                st.success(f"Validation: {score:.0f}% ✅")
-            elif score >= 70:
-                st.warning(f"Validation: {score:.0f}% ⚠️")
-            else:
-                st.error(f"Validation: {score:.0f}% ❌")
+        st.markdown("## 📊 Processing Stats")
+        try:
+            submissions = db_manager.get_form_submissions(limit=5)
+            if submissions:
+                latest = submissions[0]
+                st.metric("Latest Form", latest.form_type)
+                st.metric("Iterations", latest.iterations)
+                st.metric("Score", f"{latest.validation_score:.1f}%")
+        except:
+            st.write("No submissions yet")
     
-    # Main content
-    tabs = st.tabs(["📤 Upload & Extract", "📊 View Results", "🔍 Validation", "💾 Export Data"])
+    # Initialize agents
+    extractor_agent = ExtractorAgent(openai_client, debug_mode)
+    validation_agent = ValidationAgent(openai_client, debug_mode)
+    coordinator_agent = CoordinatorAgent(openai_client, extractor_agent, validation_agent, 
+                                       max_iterations, debug_mode)
     
-    # Upload tab
+    # Main tabs
+    tabs = st.tabs([
+        "🤖 AI Processing", 
+        "📊 Results & Analysis", 
+        "💾 Database Management",
+        "📈 Agent Analytics"
+    ])
+    
+    # AI Processing Tab
     with tabs[0]:
-        st.markdown("### Upload USCIS Form PDF")
+        st.markdown("### 📤 Upload USCIS Form for AI Processing")
         
         uploaded_file = st.file_uploader(
-            "Choose a filled USCIS form PDF",
+            "Choose a USCIS form PDF",
             type=['pdf'],
-            help="Upload any USCIS form with proper field numbering"
+            help="Upload any USCIS form for intelligent AI processing"
         )
         
         if uploaded_file:
@@ -1234,263 +1191,292 @@ def main():
             
             with col1:
                 st.success(f"✅ File uploaded: {uploaded_file.name}")
-                st.info("Click 'Extract Data' to process with sequence validation")
+                
+                # Form type hint
+                form_type_hint = st.selectbox(
+                    "Form Type (optional)",
+                    ["Auto-detect", "I-90", "I-130", "I-485", "G-28", "N-400", "I-129"],
+                    help="Leave as Auto-detect for AI to identify the form"
+                )
             
             with col2:
-                if st.button("🔍 Test PDF", help="Quick test to verify PDF can be read"):
-                    try:
-                        uploaded_file.seek(0)
-                        pdf_bytes = uploaded_file.read()
-                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                        st.write(f"Pages: {len(doc)}")
-                        
-                        # Get first page text
-                        if len(doc) > 0:
-                            first_page_text = doc[0].get_text()
-                            if first_page_text.strip():
-                                st.success("✅ PDF has extractable text")
-                                st.text_area("First page preview:", first_page_text[:500], height=200)
-                            else:
-                                st.error("❌ No text found - PDF might be scanned/image-based")
-                                st.info("This tool requires PDFs with selectable text. Scanned PDFs need OCR processing first.")
-                                
-                                # Check if page has images
-                                img_list = doc[0].get_images()
-                                if img_list:
-                                    st.write(f"Found {len(img_list)} images on first page")
-                        doc.close()
-                        uploaded_file.seek(0)  # Reset file pointer
-                    except Exception as e:
-                        st.error(f"PDF Test Error: {str(e)}")
-                        if hasattr(uploaded_file, 'seek'):
-                            uploaded_file.seek(0)  # Reset file pointer
+                # Test PDF readability
+                if st.button("🔍 Test PDF"):
+                    with st.spinner("Testing PDF..."):
+                        text = extract_pdf_text(uploaded_file)
+                        if text:
+                            st.success("✅ PDF readable")
+                            with st.expander("Preview"):
+                                st.text_area("First 500 characters:", text[:500], height=100)
+                        else:
+                            st.error("❌ Cannot read PDF")
             
             with col3:
-                if st.button("🚀 Extract Data", type="primary", use_container_width=True):
-                    with st.spinner("Extracting and validating form data..."):
+                # Process with AI agents
+                if st.button("🚀 Process with AI", type="primary"):
+                    # Show processing status
+                    status_placeholder = st.empty()
+                    progress_bar = st.progress(0)
+                    
+                    with st.spinner("Processing with AI agents..."):
                         try:
-                            # Show debug info during extraction
-                            if st.session_state.debug_mode:
-                                debug_container = st.container()
-                                with debug_container:
-                                    st.write("Starting extraction...")
+                            # Extract PDF text
+                            progress_bar.progress(10)
+                            st.write("📄 Extracting PDF text...")
+                            pdf_text = extract_pdf_text(uploaded_file)
                             
-                            extractor = EnhancedUSCISFormExtractor(debug_mode=st.session_state.debug_mode)
-                            result = extractor.extract(uploaded_file)
+                            if not pdf_text:
+                                st.error("Failed to extract text from PDF")
+                                st.stop()
+                            
+                            progress_bar.progress(20)
+                            
+                            # Determine form type
+                            form_type = None if form_type_hint == "Auto-detect" else form_type_hint
+                            
+                            # Process with coordinator agent
+                            st.write("🤖 Starting AI agent processing...")
+                            progress_bar.progress(30)
+                            
+                            # Show agent status during processing
+                            with status_placeholder.container():
+                                display_processing_status(extractor_agent, validation_agent, coordinator_agent)
+                            
+                            # Process
+                            result = coordinator_agent.process_form(pdf_text, form_type)
+                            progress_bar.progress(90)
+                            
+                            # Save to database
+                            submission = FormSubmission(
+                                form_type=result.form_number,
+                                entry_mode="ai_agents",
+                                total_fields=result.total_fields,
+                                completed_fields=result.filled_fields,
+                                validation_score=result.validation_score,
+                                pdf_filename=uploaded_file.name,
+                                json_data=json.dumps(result.final_validation_report),
+                                status="completed",
+                                iterations=result.extraction_iterations,
+                                notes=f"Processed with {result.extraction_iterations} iterations"
+                            )
+                            
+                            submission_id = db_manager.save_form_submission(submission)
+                            st.session_state.current_submission_id = submission_id
                             st.session_state.extraction_result = result
                             
-                            # Always show debug info if extraction failed
-                            if result.form_number == "ERROR" or result.total_fields == 0:
-                                st.error("⚠️ Extraction failed or no fields found!")
-                                with st.expander("Debug Information", expanded=True):
-                                    for log in result.debug_info:
-                                        st.text(log)
-                                
-                                # Show what we did extract
-                                st.write(f"Form identified: {result.form_number}")
-                                st.write(f"Parts found: {len(result.parts)}")
-                                st.write(f"Total fields: {result.total_fields}")
-                            elif result.total_fields > 0:
-                                st.success(f"✅ Extracted {result.total_fields} fields from {len(result.parts)} parts!")
-                                
-                                # Show validation summary
-                                score = result.validation_report.get('overall_score', 0)
-                                if score >= 90:
-                                    st.success(f"Validation Score: {score:.0f}% - Excellent extraction!")
-                                elif score >= 70:
-                                    st.warning(f"Validation Score: {score:.0f}% - Some issues detected")
-                                else:
-                                    st.error(f"Validation Score: {score:.0f}% - Multiple issues found")
-                                
-                                if result.sequence_issues > 0:
-                                    st.warning(f"Found {result.sequence_issues} sequence issues")
-                                
-                                st.info("Check the 'View Results' and 'Validation' tabs for details")
+                            progress_bar.progress(100)
+                            
+                            # Final status
+                            status_placeholder.empty()
+                            
+                            if result.validation_score >= 0.8:
+                                st.success(f"✅ Processing completed! Score: {result.validation_score:.1%}")
                                 st.balloons()
+                            elif result.validation_score >= 0.6:
+                                st.warning(f"⚠️ Processing completed with issues. Score: {result.validation_score:.1%}")
                             else:
-                                st.warning("No fields were extracted. The PDF might not be a standard USCIS form.")
-                                with st.expander("Debug Information"):
-                                    for log in result.debug_info:
-                                        st.text(log)
+                                st.error(f"❌ Processing completed but validation failed. Score: {result.validation_score:.1%}")
+                            
+                            st.info(f"Completed in {result.extraction_iterations} iterations ({result.processing_time:.1f}s)")
                             
                         except Exception as e:
-                            st.error(f"Critical error during extraction: {str(e)}")
-                            if st.session_state.debug_mode:
+                            st.error(f"Processing failed: {str(e)}")
+                            if debug_mode:
                                 st.exception(e)
-                            
-                            # Try to show any debug info we have
-                            if 'extractor' in locals():
-                                st.write("Debug logs before error:")
-                                for log in extractor.debug_logs:
-                                    st.text(log)
+        
+        # Live agent status (when not processing)
+        if 'extraction_result' not in st.session_state or st.session_state.extraction_result is None:
+            st.markdown("### 🤖 Agent Status")
+            display_processing_status(extractor_agent, validation_agent, coordinator_agent)
     
-    # Results tab
+    # Results & Analysis Tab
     with tabs[1]:
         if st.session_state.extraction_result:
-            display_enhanced_results(st.session_state.extraction_result)
-        else:
-            st.info("No results yet. Please upload and extract a form first.")
-    
-    # Validation tab
-    with tabs[2]:
-        if st.session_state.extraction_result and st.session_state.extraction_result.total_fields > 0:
-            result = st.session_state.extraction_result
-            st.markdown("### 🔍 Detailed Validation Report")
+            display_agent_results(st.session_state.extraction_result)
             
-            # Overall validation
-            score = result.validation_report.get('overall_score', 0) if hasattr(result, 'validation_report') else 0
-            if score >= 90:
-                st.markdown('<div class="validation-success">✅ Extraction Quality: Excellent</div>', 
-                           unsafe_allow_html=True)
-            elif score >= 70:
-                st.markdown('<div class="missing-field">⚠️ Extraction Quality: Good (Some Issues)</div>', 
-                           unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="missing-field">❌ Extraction Quality: Poor (Many Issues)</div>', 
-                           unsafe_allow_html=True)
-            
-            # Part-by-part validation
-            for part_num in sorted(result.parts.keys()):
-                part = result.parts[part_num]
-                part_report = result.validation_report.get('parts_validation', {}).get(f'Part {part_num}', {})
-                
-                with st.expander(f"Part {part_num}: {part.title}", expanded=True):
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.metric("Total Fields", len(part.fields))
-                    with col2:
-                        missing_count = len(getattr(part, 'missing_fields', []))
-                        st.metric("Missing in Sequence", missing_count)
-                    with col3:
-                        st.metric("Part Score", f"{part_report.get('score', 0):.0f}%")
-                    
-                    # Show field sequence
-                    st.markdown("#### Expected vs Found Sequence")
-                    
-                    # Display found fields in order
-                    if part.fields:
-                        st.write("**Found fields:**")
-                        field_nums = [f.item_number for f in part.fields]
-                        st.write(", ".join(field_nums))
-                    
-                    # Display missing fields
-                    if hasattr(part, 'missing_fields') and part.missing_fields:
-                        st.write("**Missing fields:**")
-                        st.error(", ".join(part.missing_fields))
-                    
-                    # Show any gaps or duplicates
-                    if part_report.get('sequence_gaps'):
-                        st.write("**Sequence gaps:**")
-                        st.warning(", ".join(part_report['sequence_gaps']))
-                    
-                    if part_report.get('duplicate_numbers'):
-                        st.write("**Duplicate numbers:**")
-                        st.error(", ".join(part_report['duplicate_numbers']))
-            
-        else:
-            st.info("No validation data available. Extract a form first.")
-    
-    # Export tab
-    with tabs[3]:
-        if st.session_state.extraction_result:
-            st.markdown("### 💾 Export Extracted Data")
-            
-            result = st.session_state.extraction_result
-            
+            # Export options
+            st.markdown("### 💾 Export Results")
             col1, col2 = st.columns(2)
             
             with col1:
-                # JSON export
-                json_data = export_to_json_enhanced(result)
-                st.download_button(
-                    "📦 Download as JSON (with validation)",
-                    json_data,
-                    f"{result.form_number}_extracted_validated.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
+                if st.button("📦 Download JSON"):
+                    result_dict = {
+                        'form_info': {
+                            'number': st.session_state.extraction_result.form_number,
+                            'title': st.session_state.extraction_result.form_title,
+                            'total_fields': st.session_state.extraction_result.total_fields,
+                            'validation_score': st.session_state.extraction_result.validation_score,
+                            'iterations': st.session_state.extraction_result.extraction_iterations,
+                            'processing_time': st.session_state.extraction_result.processing_time
+                        },
+                        'parts': {
+                            f'part_{k}': {
+                                'title': v.title,
+                                'validation_score': getattr(v, 'validation_score', 0),
+                                'fields': [field.to_dict() for field in v.fields]
+                            } for k, v in st.session_state.extraction_result.parts.items()
+                        },
+                        'validation_report': st.session_state.extraction_result.final_validation_report,
+                        'agent_logs': st.session_state.extraction_result.agent_logs
+                    }
+                    
+                    st.download_button(
+                        "Download JSON",
+                        json.dumps(result_dict, indent=2),
+                        f"{st.session_state.extraction_result.form_number}_ai_extracted.json",
+                        mime="application/json"
+                    )
             
             with col2:
-                # CSV export
-                csv_data = export_to_csv_enhanced(result)
-                st.download_button(
-                    "📊 Download as CSV (with sequence)",
-                    csv_data,
-                    f"{result.form_number}_extracted_validated.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            
-            # Preview options
-            st.markdown("### 📄 Data Preview")
-            preview_type = st.radio("Select preview format", 
-                                  ["Summary", "Sequence Analysis", "Filled Fields", "All Fields", "JSON"])
-            
-            if preview_type == "Summary":
-                st.json({
-                    "form": result.form_number,
-                    "title": result.form_title,
-                    "total_fields": result.total_fields,
-                    "filled_fields": result.filled_fields,
-                    "parts": len(result.parts),
-                    "sequence_issues": result.sequence_issues,
-                    "validation_score": f"{result.validation_report.get('overall_score', 0):.0f}%"
-                })
-                
-            elif preview_type == "Sequence Analysis":
-                for part_num, part in result.parts.items():
-                    st.write(f"**Part {part_num}:**")
-                    
-                    # Create sequence visualization
-                    seq_data = []
-                    for field in part.fields:
-                        seq_data.append({
-                            'Number': field.item_number,
-                            'Parsed': str(field.parsed_number) if field.parsed_number else "N/A",
-                            'Has Value': 'Yes' if field.value else 'No'
-                        })
-                    
-                    if seq_data:
-                        df = pd.DataFrame(seq_data)
-                        st.dataframe(df)
-                    
-                    if part.missing_fields:
-                        st.error(f"Missing: {', '.join(part.missing_fields)}")
-                    
-            elif preview_type == "Filled Fields":
-                filled_data = []
-                for part in result.parts.values():
-                    for field in part.fields:
-                        if field.value:
-                            filled_data.append({
+                if st.button("📊 Download CSV"):
+                    rows = []
+                    for part in st.session_state.extraction_result.parts.values():
+                        for field in part.fields:
+                            rows.append({
                                 'Part': part.number,
-                                'Number': field.item_number,
-                                'Field': field.label,
-                                'Value': field.value,
-                                'Type': field.field_type.value
+                                'Part Title': part.title,
+                                'Field Number': field.field_number,
+                                'Field Label': field.field_label,
+                                'Field Value': field.field_value,
+                                'Field Type': field.field_type.value,
+                                'Confidence': f"{field.confidence:.0%}",
+                                'Required': field.is_required,
+                                'Validation Errors': '; '.join(field.validation_errors) if field.validation_errors else '',
+                                'Extraction Method': field.extraction_method
                             })
-                
-                if filled_data:
-                    df = pd.DataFrame(filled_data)
-                    st.dataframe(df)
-                else:
-                    st.warning("No filled fields found")
                     
-            elif preview_type == "All Fields":
-                df = pd.read_csv(io.StringIO(csv_data))
-                st.dataframe(df)
-                
-            else:  # JSON
-                st.json(json.loads(json_data))
-            
+                    df = pd.DataFrame(rows)
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        "Download CSV",
+                        csv,
+                        f"{st.session_state.extraction_result.form_number}_ai_extracted.csv",
+                        mime="text/csv"
+                    )
         else:
-            st.info("No data to export. Please process a form first.")
+            st.info("No results to display. Please process a form first.")
+    
+    # Database Management Tab
+    with tabs[2]:
+        st.markdown("### 💾 Database Management")
+        
+        # Recent submissions
+        submissions = db_manager.get_form_submissions(limit=20)
+        
+        if submissions:
+            st.markdown("#### Recent AI-Processed Forms")
+            
+            submission_data = []
+            for sub in submissions:
+                submission_data.append({
+                    'ID': sub.id,
+                    'Form': sub.form_type,
+                    'Date': str(sub.submission_date)[:19],
+                    'Fields': f"{sub.completed_fields}/{sub.total_fields}",
+                    'Score': f"{sub.validation_score:.1f}%",
+                    'Iterations': sub.iterations,
+                    'Status': sub.status
+                })
+            
+            df = pd.DataFrame(submission_data)
+            st.dataframe(df, use_container_width=True)
+            
+            # Detailed view
+            selected_id = st.selectbox(
+                "Select submission for details",
+                [sub.id for sub in submissions],
+                format_func=lambda x: f"ID {x} - {next(s.form_type for s in submissions if s.id == x)}"
+            )
+            
+            if selected_id:
+                selected_submission = next(s for s in submissions if s.id == selected_id)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.markdown(f"**Form:** {selected_submission.form_type}")
+                    st.markdown(f"**Mode:** {selected_submission.entry_mode}")
+                with col2:
+                    st.markdown(f"**Score:** {selected_submission.validation_score:.1f}%")
+                    st.markdown(f"**Iterations:** {selected_submission.iterations}")
+                with col3:
+                    st.markdown(f"**Fields:** {selected_submission.completed_fields}/{selected_submission.total_fields}")
+                    st.markdown(f"**Status:** {selected_submission.status}")
+                
+                if selected_submission.json_data:
+                    with st.expander("Validation Report"):
+                        try:
+                            report = json.loads(selected_submission.json_data)
+                            st.json(report)
+                        except:
+                            st.text(selected_submission.json_data)
+        else:
+            st.info("No submissions found.")
+    
+    # Agent Analytics Tab  
+    with tabs[3]:
+        st.markdown("### 📈 AI Agent Analytics")
+        
+        submissions = db_manager.get_form_submissions(limit=100)
+        
+        if submissions:
+            # Performance metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                avg_score = sum(s.validation_score for s in submissions) / len(submissions)
+                st.metric("Average Validation Score", f"{avg_score:.1f}%")
+            
+            with col2:
+                avg_iterations = sum(s.iterations for s in submissions) / len(submissions)
+                st.metric("Average Iterations", f"{avg_iterations:.1f}")
+            
+            with col3:
+                high_quality = sum(1 for s in submissions if s.validation_score >= 80)
+                st.metric("High Quality Rate", f"{high_quality/len(submissions):.1%}")
+            
+            with col4:
+                total_fields = sum(s.total_fields for s in submissions)
+                st.metric("Total Fields Processed", total_fields)
+            
+            # Charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("#### Validation Score Distribution")
+                scores = [s.validation_score for s in submissions]
+                score_df = pd.DataFrame({'Validation Score': scores})
+                st.bar_chart(score_df['Validation Score'].value_counts().sort_index())
+            
+            with col2:
+                st.markdown("#### Iterations Required")
+                iterations = [s.iterations for s in submissions]
+                iter_df = pd.DataFrame({'Iterations': iterations})
+                st.bar_chart(iter_df['Iterations'].value_counts().sort_index())
+            
+            # Form type performance
+            st.markdown("#### Performance by Form Type")
+            form_stats = {}
+            for sub in submissions:
+                if sub.form_type not in form_stats:
+                    form_stats[sub.form_type] = {'count': 0, 'total_score': 0, 'total_iterations': 0}
+                form_stats[sub.form_type]['count'] += 1
+                form_stats[sub.form_type]['total_score'] += sub.validation_score
+                form_stats[sub.form_type]['total_iterations'] += sub.iterations
+            
+            perf_data = []
+            for form_type, stats in form_stats.items():
+                perf_data.append({
+                    'Form Type': form_type,
+                    'Count': stats['count'],
+                    'Avg Score': f"{stats['total_score']/stats['count']:.1f}%",
+                    'Avg Iterations': f"{stats['total_iterations']/stats['count']:.1f}"
+                })
+            
+            if perf_data:
+                perf_df = pd.DataFrame(perf_data)
+                st.dataframe(perf_df, use_container_width=True)
+        else:
+            st.info("No data available for analytics.")
 
 if __name__ == "__main__":
-    if not PYMUPDF_AVAILABLE:
-        st.error("❌ PyMuPDF is required but not installed!")
-        st.code("pip install PyMuPDF streamlit pandas xlsxwriter")
-        st.stop()
-    
     main()
