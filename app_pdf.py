@@ -259,7 +259,7 @@ class FormSubmission:
     iterations: int = 0
 
 class DatabaseManager:
-    """Database manager (keeping existing implementation)"""
+    """Complete database manager for AI agent system"""
     def __init__(self, db_path: str = "uscis_forms.db"):
         self.db_path = db_path
         self.init_database()
@@ -301,6 +301,24 @@ class DatabaseManager:
                 )
             ''')
             
+            # Form fields table
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS form_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id INTEGER NOT NULL,
+                    field_number TEXT NOT NULL,
+                    field_label TEXT,
+                    field_value TEXT,
+                    field_type TEXT DEFAULT 'text',
+                    confidence REAL DEFAULT 0.0,
+                    is_required BOOLEAN DEFAULT 0,
+                    validation_errors TEXT,
+                    part_number INTEGER DEFAULT 1,
+                    extraction_method TEXT DEFAULT 'ai_agent',
+                    FOREIGN KEY (submission_id) REFERENCES form_submissions (id)
+                )
+            ''')
+            
             conn.commit()
     
     def save_form_submission(self, submission: FormSubmission) -> int:
@@ -331,14 +349,98 @@ class DatabaseManager:
                       submission.notes, submission.iterations))
                 return cursor.lastrowid
     
+    def get_form_submissions(self, limit: int = 50) -> List[FormSubmission]:
+        """Get recent form submissions"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                SELECT id, form_type, submission_date, entry_mode, total_fields, 
+                       completed_fields, validation_score, pdf_filename, json_data, 
+                       status, notes, iterations
+                FROM form_submissions 
+                ORDER BY submission_date DESC LIMIT ?
+            ''', (limit,))
+            
+            results = []
+            for row in cursor.fetchall():
+                # Handle datetime parsing
+                submission_date = row[2]
+                if isinstance(submission_date, str):
+                    try:
+                        submission_date = datetime.fromisoformat(submission_date.replace('Z', '+00:00'))
+                    except:
+                        submission_date = datetime.now()
+                
+                results.append(FormSubmission(
+                    id=row[0],
+                    form_type=row[1] or "Unknown",
+                    submission_date=submission_date,
+                    entry_mode=row[3] or "ai_agents",
+                    total_fields=row[4] or 0,
+                    completed_fields=row[5] or 0,
+                    validation_score=row[6] or 0.0,
+                    pdf_filename=row[7] or "",
+                    json_data=row[8] or "",
+                    status=row[9] or "draft",
+                    notes=row[10] or "",
+                    iterations=row[11] if len(row) > 11 and row[11] is not None else 0
+                ))
+            return results
+    
     def save_agent_log(self, submission_id: int, agent_type: str, iteration: int, message: str):
         """Save agent log entry"""
-        with self.get_connection() as conn:
-            conn.execute('''
-                INSERT INTO agent_logs (submission_id, agent_type, iteration, log_message)
-                VALUES (?, ?, ?, ?)
-            ''', (submission_id, agent_type, iteration, message))
-            conn.commit()
+        try:
+            with self.get_connection() as conn:
+                conn.execute('''
+                    INSERT INTO agent_logs (submission_id, agent_type, iteration, log_message)
+                    VALUES (?, ?, ?, ?)
+                ''', (submission_id, agent_type, iteration, message))
+                conn.commit()
+        except Exception as e:
+            # Silently handle log errors to not break main processing
+            pass
+    
+    def save_extracted_fields(self, submission_id: int, extraction_result: 'ExtractionResult'):
+        """Save extracted fields to database"""
+        try:
+            with self.get_connection() as conn:
+                # Clear existing fields for this submission
+                conn.execute('DELETE FROM form_fields WHERE submission_id = ?', (submission_id,))
+                
+                # Insert new fields
+                for part in extraction_result.parts.values():
+                    for field in part.fields:
+                        validation_errors_json = json.dumps(field.validation_errors) if field.validation_errors else ""
+                        
+                        conn.execute('''
+                            INSERT INTO form_fields 
+                            (submission_id, field_number, field_label, field_value, field_type, 
+                             confidence, is_required, validation_errors, part_number, extraction_method)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (submission_id, field.field_number, field.field_label, field.field_value,
+                              field.field_type.value, field.confidence, field.is_required,
+                              validation_errors_json, field.part_number, field.extraction_method))
+                
+                conn.commit()
+        except Exception as e:
+            # Log error but don't break main process
+            print(f"Error saving fields: {e}")
+    
+    def get_agent_logs(self, submission_id: int) -> List[Dict]:
+        """Get agent logs for a submission"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.execute('''
+                    SELECT agent_type, iteration, log_message, timestamp
+                    FROM agent_logs 
+                    WHERE submission_id = ?
+                    ORDER BY timestamp
+                ''', (submission_id,))
+                
+                return [{'agent_type': row[0], 'iteration': row[1], 
+                        'message': row[2], 'timestamp': row[3]} 
+                       for row in cursor.fetchall()]
+        except:
+            return []
 
 # ===== AI AGENTS =====
 class BaseAgent:
@@ -1127,7 +1229,21 @@ def main():
     
     # Initialize components
     if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
+        try:
+            st.session_state.db_manager = DatabaseManager()
+        except Exception as e:
+            st.error(f"Database initialization failed: {str(e)}")
+            st.info("Creating a new database...")
+            try:
+                # Try to remove corrupted database and create new one
+                if os.path.exists("uscis_forms.db"):
+                    os.remove("uscis_forms.db")
+                st.session_state.db_manager = DatabaseManager()
+                st.success("Database created successfully!")
+            except Exception as e2:
+                st.error(f"Could not create database: {str(e2)}")
+                st.stop()
+    
     if 'extraction_result' not in st.session_state:
         st.session_state.extraction_result = None
     if 'current_submission_id' not in st.session_state:
@@ -1151,16 +1267,29 @@ def main():
         **Coordinator**: Manages the improvement loop until validation passes
         """)
         
+        st.markdown("## 🗄️ Database")
+        if st.button("🗑️ Reset Database"):
+            try:
+                if os.path.exists(db_manager.db_path):
+                    os.remove(db_manager.db_path)
+                st.session_state.db_manager = DatabaseManager()
+                st.success("Database reset successfully!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error resetting database: {e}")
+        
         st.markdown("## 📊 Processing Stats")
         try:
             submissions = db_manager.get_form_submissions(limit=5)
             if submissions:
                 latest = submissions[0]
                 st.metric("Latest Form", latest.form_type)
-                st.metric("Iterations", latest.iterations)
+                st.metric("Iterations", getattr(latest, 'iterations', 0))
                 st.metric("Score", f"{latest.validation_score:.1f}%")
-        except:
-            st.write("No submissions yet")
+            else:
+                st.write("No submissions yet")
+        except Exception as e:
+            st.write("Database initializing...")
     
     # Initialize agents
     extractor_agent = ExtractorAgent(openai_client, debug_mode)
@@ -1360,123 +1489,153 @@ def main():
     with tabs[2]:
         st.markdown("### 💾 Database Management")
         
-        # Recent submissions
-        submissions = db_manager.get_form_submissions(limit=20)
+        try:
+            # Recent submissions
+            submissions = db_manager.get_form_submissions(limit=20)
+            
+            if submissions:
+                st.markdown("#### Recent AI-Processed Forms")
+                
+                submission_data = []
+                for sub in submissions:
+                    # Handle datetime formatting
+                    date_str = str(sub.submission_date)[:19] if hasattr(sub.submission_date, 'strftime') else str(sub.submission_date)[:19]
+                    
+                    submission_data.append({
+                        'ID': sub.id,
+                        'Form': sub.form_type,
+                        'Date': date_str,
+                        'Fields': f"{sub.completed_fields}/{sub.total_fields}",
+                        'Score': f"{sub.validation_score:.1f}%",
+                        'Iterations': getattr(sub, 'iterations', 0),
+                        'Status': sub.status
+                    })
+                
+                df = pd.DataFrame(submission_data)
+                st.dataframe(df, use_container_width=True)
+                
+                # Detailed view
+                selected_id = st.selectbox(
+                    "Select submission for details",
+                    [sub.id for sub in submissions],
+                    format_func=lambda x: f"ID {x} - {next(s.form_type for s in submissions if s.id == x)}"
+                )
+                
+                if selected_id:
+                    selected_submission = next(s for s in submissions if s.id == selected_id)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.markdown(f"**Form:** {selected_submission.form_type}")
+                        st.markdown(f"**Mode:** {selected_submission.entry_mode}")
+                    with col2:
+                        st.markdown(f"**Score:** {selected_submission.validation_score:.1f}%")
+                        st.markdown(f"**Iterations:** {getattr(selected_submission, 'iterations', 0)}")
+                    with col3:
+                        st.markdown(f"**Fields:** {selected_submission.completed_fields}/{selected_submission.total_fields}")
+                        st.markdown(f"**Status:** {selected_submission.status}")
+                    
+                    if selected_submission.json_data:
+                        with st.expander("Validation Report"):
+                            try:
+                                report = json.loads(selected_submission.json_data)
+                                st.json(report)
+                            except:
+                                st.text(selected_submission.json_data)
+            else:
+                st.info("No submissions found.")
         
-        if submissions:
-            st.markdown("#### Recent AI-Processed Forms")
-            
-            submission_data = []
-            for sub in submissions:
-                submission_data.append({
-                    'ID': sub.id,
-                    'Form': sub.form_type,
-                    'Date': str(sub.submission_date)[:19],
-                    'Fields': f"{sub.completed_fields}/{sub.total_fields}",
-                    'Score': f"{sub.validation_score:.1f}%",
-                    'Iterations': sub.iterations,
-                    'Status': sub.status
-                })
-            
-            df = pd.DataFrame(submission_data)
-            st.dataframe(df, use_container_width=True)
-            
-            # Detailed view
-            selected_id = st.selectbox(
-                "Select submission for details",
-                [sub.id for sub in submissions],
-                format_func=lambda x: f"ID {x} - {next(s.form_type for s in submissions if s.id == x)}"
-            )
-            
-            if selected_id:
-                selected_submission = next(s for s in submissions if s.id == selected_id)
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.markdown(f"**Form:** {selected_submission.form_type}")
-                    st.markdown(f"**Mode:** {selected_submission.entry_mode}")
-                with col2:
-                    st.markdown(f"**Score:** {selected_submission.validation_score:.1f}%")
-                    st.markdown(f"**Iterations:** {selected_submission.iterations}")
-                with col3:
-                    st.markdown(f"**Fields:** {selected_submission.completed_fields}/{selected_submission.total_fields}")
-                    st.markdown(f"**Status:** {selected_submission.status}")
-                
-                if selected_submission.json_data:
-                    with st.expander("Validation Report"):
-                        try:
-                            report = json.loads(selected_submission.json_data)
-                            st.json(report)
-                        except:
-                            st.text(selected_submission.json_data)
-        else:
-            st.info("No submissions found.")
+        except Exception as e:
+            st.error(f"Database error: {str(e)}")
+            st.info("If this persists, try clearing the database from the sidebar.")
     
     # Agent Analytics Tab  
     with tabs[3]:
         st.markdown("### 📈 AI Agent Analytics")
         
-        submissions = db_manager.get_form_submissions(limit=100)
+        try:
+            submissions = db_manager.get_form_submissions(limit=100)
+            
+            if submissions:
+                # Performance metrics
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    avg_score = sum(s.validation_score for s in submissions) / len(submissions)
+                    st.metric("Average Validation Score", f"{avg_score:.1f}%")
+                
+                with col2:
+                    iterations_list = [getattr(s, 'iterations', 1) for s in submissions]
+                    avg_iterations = sum(iterations_list) / len(iterations_list)
+                    st.metric("Average Iterations", f"{avg_iterations:.1f}")
+                
+                with col3:
+                    high_quality = sum(1 for s in submissions if s.validation_score >= 80)
+                    st.metric("High Quality Rate", f"{high_quality/len(submissions):.1%}")
+                
+                with col4:
+                    total_fields = sum(s.total_fields for s in submissions)
+                    st.metric("Total Fields Processed", total_fields)
+                
+                # Charts
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("#### Validation Score Distribution")
+                    scores = [s.validation_score for s in submissions]
+                    if scores:
+                        # Create score ranges for better visualization
+                        score_ranges = []
+                        for score in scores:
+                            if score >= 90:
+                                score_ranges.append("90-100%")
+                            elif score >= 80:
+                                score_ranges.append("80-89%")
+                            elif score >= 70:
+                                score_ranges.append("70-79%")
+                            elif score >= 60:
+                                score_ranges.append("60-69%")
+                            else:
+                                score_ranges.append("Below 60%")
+                        
+                        score_df = pd.DataFrame({'Score Range': score_ranges})
+                        st.bar_chart(score_df['Score Range'].value_counts())
+                
+                with col2:
+                    st.markdown("#### Iterations Required")
+                    iterations = [getattr(s, 'iterations', 1) for s in submissions]
+                    if iterations:
+                        iter_df = pd.DataFrame({'Iterations': iterations})
+                        st.bar_chart(iter_df['Iterations'].value_counts().sort_index())
+                
+                # Form type performance
+                st.markdown("#### Performance by Form Type")
+                form_stats = {}
+                for sub in submissions:
+                    if sub.form_type not in form_stats:
+                        form_stats[sub.form_type] = {'count': 0, 'total_score': 0, 'total_iterations': 0}
+                    form_stats[sub.form_type]['count'] += 1
+                    form_stats[sub.form_type]['total_score'] += sub.validation_score
+                    form_stats[sub.form_type]['total_iterations'] += getattr(sub, 'iterations', 1)
+                
+                perf_data = []
+                for form_type, stats in form_stats.items():
+                    perf_data.append({
+                        'Form Type': form_type,
+                        'Count': stats['count'],
+                        'Avg Score': f"{stats['total_score']/stats['count']:.1f}%",
+                        'Avg Iterations': f"{stats['total_iterations']/stats['count']:.1f}"
+                    })
+                
+                if perf_data:
+                    perf_df = pd.DataFrame(perf_data)
+                    st.dataframe(perf_df, use_container_width=True)
+            else:
+                st.info("No data available for analytics.")
         
-        if submissions:
-            # Performance metrics
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                avg_score = sum(s.validation_score for s in submissions) / len(submissions)
-                st.metric("Average Validation Score", f"{avg_score:.1f}%")
-            
-            with col2:
-                avg_iterations = sum(s.iterations for s in submissions) / len(submissions)
-                st.metric("Average Iterations", f"{avg_iterations:.1f}")
-            
-            with col3:
-                high_quality = sum(1 for s in submissions if s.validation_score >= 80)
-                st.metric("High Quality Rate", f"{high_quality/len(submissions):.1%}")
-            
-            with col4:
-                total_fields = sum(s.total_fields for s in submissions)
-                st.metric("Total Fields Processed", total_fields)
-            
-            # Charts
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("#### Validation Score Distribution")
-                scores = [s.validation_score for s in submissions]
-                score_df = pd.DataFrame({'Validation Score': scores})
-                st.bar_chart(score_df['Validation Score'].value_counts().sort_index())
-            
-            with col2:
-                st.markdown("#### Iterations Required")
-                iterations = [s.iterations for s in submissions]
-                iter_df = pd.DataFrame({'Iterations': iterations})
-                st.bar_chart(iter_df['Iterations'].value_counts().sort_index())
-            
-            # Form type performance
-            st.markdown("#### Performance by Form Type")
-            form_stats = {}
-            for sub in submissions:
-                if sub.form_type not in form_stats:
-                    form_stats[sub.form_type] = {'count': 0, 'total_score': 0, 'total_iterations': 0}
-                form_stats[sub.form_type]['count'] += 1
-                form_stats[sub.form_type]['total_score'] += sub.validation_score
-                form_stats[sub.form_type]['total_iterations'] += sub.iterations
-            
-            perf_data = []
-            for form_type, stats in form_stats.items():
-                perf_data.append({
-                    'Form Type': form_type,
-                    'Count': stats['count'],
-                    'Avg Score': f"{stats['total_score']/stats['count']:.1f}%",
-                    'Avg Iterations': f"{stats['total_iterations']/stats['count']:.1f}"
-                })
-            
-            if perf_data:
-                perf_df = pd.DataFrame(perf_data)
-                st.dataframe(perf_df, use_container_width=True)
-        else:
-            st.info("No data available for analytics.")
+        except Exception as e:
+            st.error(f"Analytics error: {str(e)}")
+            st.info("Database may be initializing. Try again in a moment.")
 
 if __name__ == "__main__":
     main()
