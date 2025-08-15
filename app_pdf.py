@@ -242,7 +242,7 @@ class ExtractionResult:
             scores = [part.validation_score for part in self.parts.values()]
             self.validation_score = sum(scores) / len(scores)
 
-# ===== DATABASE MODELS (keeping existing) =====
+# ===== DATABASE MODELS =====
 @dataclass
 class FormSubmission:
     id: Optional[int] = None
@@ -1227,22 +1227,29 @@ def main():
     if not openai_client:
         st.stop()
     
-    # Initialize components
+    # Initialize components with debugging
     if 'db_manager' not in st.session_state:
         try:
-            st.session_state.db_manager = DatabaseManager()
+            # Create database manager
+            db_manager_test = DatabaseManager()
+            
+            # Verify critical methods exist
+            if not hasattr(db_manager_test, 'get_form_submissions'):
+                st.error("❌ DatabaseManager class not properly loaded. Please refresh the page.")
+                st.code("The class definition may not be updated. Try hard refresh (Ctrl+F5)")
+                st.stop()
+            
+            st.session_state.db_manager = db_manager_test
+            
+            # Only show success message once
+            if 'db_initialized' not in st.session_state:
+                st.session_state.db_initialized = True
+                st.sidebar.success("✅ Database ready!")
+            
         except Exception as e:
             st.error(f"Database initialization failed: {str(e)}")
-            st.info("Creating a new database...")
-            try:
-                # Try to remove corrupted database and create new one
-                if os.path.exists("uscis_forms.db"):
-                    os.remove("uscis_forms.db")
-                st.session_state.db_manager = DatabaseManager()
-                st.success("Database created successfully!")
-            except Exception as e2:
-                st.error(f"Could not create database: {str(e2)}")
-                st.stop()
+            st.info("Try refreshing the page. If this persists, check the error logs.")
+            st.stop()
     
     if 'extraction_result' not in st.session_state:
         st.session_state.extraction_result = None
@@ -1280,16 +1287,33 @@ def main():
         
         st.markdown("## 📊 Processing Stats")
         try:
+            # Test database connection
             submissions = db_manager.get_form_submissions(limit=5)
-            if submissions:
+            if submissions and len(submissions) > 0:
                 latest = submissions[0]
                 st.metric("Latest Form", latest.form_type)
                 st.metric("Iterations", getattr(latest, 'iterations', 0))
                 st.metric("Score", f"{latest.validation_score:.1f}%")
             else:
                 st.write("No submissions yet")
+                st.caption("Upload a form to see stats here")
+        except AttributeError as e:
+            st.error(f"❌ Method missing: {str(e)}")
+            st.info("Please refresh the page to reload the latest code")
         except Exception as e:
-            st.write("Database initializing...")
+            st.write("Database loading...")
+            st.caption(f"Status: {str(e)[:50]}...")
+        
+        # Debug info in expander
+        with st.expander("🔧 Debug Info", expanded=False):
+            st.write(f"Database path: {getattr(db_manager, 'db_path', 'Unknown')}")
+            st.write(f"Methods available: {[m for m in dir(db_manager) if not m.startswith('_')]}")
+            if st.button("Test Database"):
+                try:
+                    result = db_manager.get_form_submissions(limit=1)
+                    st.success(f"✅ Database working! Found {len(result)} records")
+                except Exception as e:
+                    st.error(f"❌ Database test failed: {e}")
     
     # Initialize agents
     extractor_agent = ExtractorAgent(openai_client, debug_mode)
