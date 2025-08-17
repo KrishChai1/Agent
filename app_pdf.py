@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-🤖 AGENTIC USCIS FORM READER - FIXED VERSION
-============================================
-
-A fully autonomous AI-powered system that can intelligently read, parse, 
-and map ANY USCIS form with minimal human intervention.
+🤖 AGENTIC USCIS FORM READER - CORRECTED VERSION
+================================================
 
 Fixed Issues:
-- Simplified PDF part extraction
-- Streamlined manual mapping interface
-- Proper OpenAI integration
-- Better error handling
-- Improved agentic processing
+- Proper part-by-part extraction
+- Reduced API calls 
+- Fixed database dropdown
+- Improved PDF extraction
+- Better form structure parsing
 
 Author: AI Assistant
-Version: 2.0.0
+Version: 3.0.0
 """
 
 import os
@@ -22,10 +19,9 @@ import json
 import re
 import time
 import logging
-import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple, Union
-from dataclasses import dataclass, field, asdict
+from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass, field
 from enum import Enum
 
 import streamlit as st
@@ -47,8 +43,9 @@ except ImportError:
     OPENAI_AVAILABLE = False
     openai = None
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging to reduce noise
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Page config
@@ -88,13 +85,21 @@ st.markdown("""
         100% { box-shadow: 0 0 0 0 rgba(56, 239, 125, 0); }
     }
     
+    .part-header {
+        background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+        border: 1px solid #f39c12;
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
     .field-card {
         background: white;
         border: 1px solid #e0e0e0;
-        border-radius: 10px;
+        border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     }
     
     .field-mapped {
@@ -114,10 +119,10 @@ st.markdown("""
     
     .confidence-bar {
         background: #e0e0e0;
-        border-radius: 10px;
-        height: 8px;
+        border-radius: 5px;
+        height: 6px;
         overflow: hidden;
-        margin: 0.5rem 0;
+        margin: 0.3rem 0;
     }
     
     .confidence-fill {
@@ -126,21 +131,36 @@ st.markdown("""
         transition: width 0.3s ease;
     }
     
-    .processing-stage {
+    .mapping-interface {
         background: #f8f9fa;
         border: 1px solid #dee2e6;
         border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
-        border-left: 4px solid #007bff;
     }
     
-    .simple-mapping {
-        background: #f8f9fa;
-        border: 1px solid #dee2e6;
+    .db-object-card {
+        background: white;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 0.8rem;
+        margin: 0.3rem 0;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    
+    .db-object-card:hover {
+        border-color: #667eea;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    .progress-text {
+        background: #e3f2fd;
+        border: 1px solid #2196f3;
         border-radius: 8px;
         padding: 1rem;
-        margin: 0.5rem 0;
+        margin: 1rem 0;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -152,7 +172,6 @@ class ProcessingStage(Enum):
     ANALYZING = "analyzing"
     EXTRACTING = "extracting"
     MAPPING = "mapping"
-    VALIDATING = "validating"
     COMPLETED = "completed"
     ERROR = "error"
 
@@ -203,6 +222,15 @@ class SmartPart:
     def add_field(self, field: SmartField):
         field.part_number = self.number
         self.fields.append(field)
+    
+    def get_mapped_count(self) -> int:
+        return sum(1 for f in self.fields if f.is_mapped and not f.in_questionnaire)
+    
+    def get_unmapped_count(self) -> int:
+        return sum(1 for f in self.fields if not f.is_mapped and not f.in_questionnaire)
+    
+    def get_questionnaire_count(self) -> int:
+        return sum(1 for f in self.fields if f.in_questionnaire)
 
 @dataclass
 class SmartForm:
@@ -241,91 +269,195 @@ class SmartForm:
         confidences = [f.extraction_confidence for f in all_fields]
         self.overall_confidence = np.mean(confidences) if confidences else 0.0
 
-# ===== SIMPLIFIED DATABASE SCHEMA =====
+# ===== DATABASE SCHEMA =====
 
 DATABASE_OBJECTS = {
     "attorney": {
         "label": "Attorney Information",
         "description": "Legal representative details",
-        "icon": "⚖️"
+        "icon": "⚖️",
+        "paths": [
+            "firstName", "lastName", "middleName", "workPhone", "mobilePhone", 
+            "emailAddress", "stateBarNumber", "addressStreet", "addressCity", 
+            "addressState", "addressZip", "addressCountry", "licensingAuthority",
+            "uscisRepresentation", "receiptNumber"
+        ]
     },
     "beneficiary": {
         "label": "Beneficiary Information", 
         "description": "Primary applicant details",
-        "icon": "👤"
+        "icon": "👤",
+        "paths": [
+            "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName",
+            "beneficiaryGender", "beneficiaryDateOfBirth", "beneficiarySsn",
+            "alienNumber", "beneficiaryCountryOfBirth", "beneficiaryCellNumber",
+            "beneficiaryPrimaryEmailAddress", "uscisOnlineAccount", "nameChanged",
+            "previousFirstName", "previousLastName", "addressStreet", "addressCity",
+            "addressState", "addressZip", "addressCountry"
+        ]
     },
     "customer": {
         "label": "Company/Customer Information",
         "description": "Employer or petitioning organization",
-        "icon": "🏢"
+        "icon": "🏢",
+        "paths": [
+            "customer_name", "customer_tax_id", "customer_website_url",
+            "signatory_first_name", "signatory_last_name", "signatory_middle_name",
+            "signatory_work_phone", "signatory_mobile_phone", "signatory_email_id",
+            "signatory_job_title", "address_street", "address_city", 
+            "address_state", "address_zip", "address_country"
+        ]
     },
     "lawfirm": {
         "label": "Law Firm Information",
         "description": "Law firm details and contacts",
-        "icon": "🏛️"
+        "icon": "🏛️",
+        "paths": [
+            "lawFirmName", "uscisOnlineAccountNumber", "lawFirmFein",
+            "companyPhone", "addressStreet", "addressCity", "addressState",
+            "addressZip", "addressCountry"
+        ]
     }
 }
 
-# Common field paths for each object
-DATABASE_PATHS = {
-    "attorney": [
-        "firstName", "lastName", "middleName", "workPhone", "mobilePhone", 
-        "emailAddress", "stateBarNumber", "addressStreet", "addressCity", 
-        "addressState", "addressZip", "addressCountry"
-    ],
-    "beneficiary": [
-        "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName",
-        "beneficiaryGender", "beneficiaryDateOfBirth", "beneficiarySsn",
-        "alienNumber", "beneficiaryCountryOfBirth", "beneficiaryCellNumber",
-        "beneficiaryPrimaryEmailAddress", "addressStreet", "addressCity",
-        "addressState", "addressZip", "addressCountry"
-    ],
-    "customer": [
-        "customer_name", "customer_tax_id", "customer_website_url",
-        "signatory_first_name", "signatory_last_name", "signatory_work_phone",
-        "signatory_email_id", "address_street", "address_city", 
-        "address_state", "address_zip", "address_country"
-    ],
-    "lawfirm": [
-        "lawFirmName", "uscisOnlineAccountNumber", "lawFirmFein",
-        "companyPhone", "addressStreet", "addressCity", "addressState",
-        "addressZip", "addressCountry"
-    ]
-}
+# ===== PDF PROCESSING =====
+
+def extract_pdf_text_properly(pdf_file) -> str:
+    """Proper PDF text extraction with structure preservation"""
+    try:
+        st.info(f"📄 Processing: {pdf_file.name}")
+        
+        # Reset file pointer
+        pdf_file.seek(0)
+        pdf_bytes = pdf_file.read()
+        
+        # Basic validation
+        if len(pdf_bytes) == 0:
+            st.error("❌ File is empty")
+            return ""
+        
+        if not pdf_bytes.startswith(b'%PDF'):
+            st.error("❌ Not a valid PDF file")
+            return ""
+        
+        # Open PDF document
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        
+        try:
+            st.success(f"✅ PDF opened successfully - {len(doc)} pages found")
+            
+            full_text = ""
+            page_texts = []
+            
+            # Extract text from each page
+            for page_num in range(len(doc)):
+                try:
+                    page = doc[page_num]
+                    
+                    # Get text with layout preservation
+                    text_dict = page.get_text("dict")
+                    
+                    # Extract text blocks in reading order
+                    page_text = ""
+                    if "blocks" in text_dict:
+                        for block in text_dict["blocks"]:
+                            if "lines" in block:
+                                for line in block["lines"]:
+                                    if "spans" in line:
+                                        line_text = ""
+                                        for span in line["spans"]:
+                                            if "text" in span:
+                                                line_text += span["text"]
+                                        if line_text.strip():
+                                            page_text += line_text + "\n"
+                    
+                    # Fallback to simple text extraction if dict method fails
+                    if not page_text.strip():
+                        page_text = page.get_text()
+                    
+                    if page_text.strip():
+                        page_texts.append(f"=== PAGE {page_num + 1} ===\n{page_text}")
+                        st.info(f"✅ Extracted text from page {page_num + 1}")
+                    else:
+                        st.warning(f"⚠️ No text found on page {page_num + 1}")
+                        
+                except Exception as e:
+                    st.warning(f"⚠️ Error extracting page {page_num + 1}: {str(e)}")
+                    continue
+            
+            # Combine all page texts
+            full_text = "\n\n".join(page_texts)
+            
+            if not full_text.strip():
+                st.error("❌ No text content found in PDF")
+                return ""
+            
+            st.success(f"✅ Successfully extracted {len(full_text)} characters from PDF")
+            return full_text
+            
+        finally:
+            doc.close()
+            
+    except Exception as e:
+        st.error(f"💥 PDF extraction failed: {str(e)}")
+        logger.error(f"PDF extraction error: {e}")
+        return ""
 
 # ===== AGENTIC PROCESSOR =====
 
 class AgenticProcessor:
-    """Simplified agentic processor with proper OpenAI integration"""
+    """Improved agentic processor with efficient API usage"""
     
     def __init__(self):
         self.openai_client = None
         self.setup_openai()
     
     def setup_openai(self):
-        """Setup OpenAI client with proper error handling"""
+        """Setup OpenAI client"""
         try:
-            # Try to get API key from secrets
+            # Try multiple sources for API key
+            api_key = None
+            
+            # Check Streamlit secrets first
             if hasattr(st, 'secrets') and 'OPENAI_API_KEY' in st.secrets:
                 api_key = st.secrets['OPENAI_API_KEY']
-            else:
-                # Fallback to environment variable
+                st.sidebar.success("🔑 Using API key from Streamlit secrets")
+            
+            # Check environment variable
+            elif os.getenv('OPENAI_API_KEY'):
                 api_key = os.getenv('OPENAI_API_KEY')
+                st.sidebar.success("🔑 Using API key from environment")
             
             if not api_key:
-                st.error("🔑 OpenAI API key not found! Please add it to Streamlit secrets or environment variables.")
+                st.error("""
+                🔑 **OpenAI API Key Required!**
+                
+                Please add your OpenAI API key in one of these ways:
+                
+                **Option 1 - Streamlit Secrets (Recommended):**
+                Create `.streamlit/secrets.toml`:
+                ```
+                OPENAI_API_KEY = "your-api-key-here"
+                ```
+                
+                **Option 2 - Environment Variable:**
+                ```
+                export OPENAI_API_KEY="your-api-key-here"
+                ```
+                """)
                 return
             
+            # Initialize client
             self.openai_client = openai.OpenAI(api_key=api_key)
             
-            # Test the connection
+            # Test connection with minimal call
             try:
-                test_response = self.openai_client.chat.completions.create(
+                self.openai_client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": "Hello"}],
-                    max_tokens=5
+                    messages=[{"role": "user", "content": "test"}],
+                    max_tokens=1
                 )
-                st.sidebar.success("🔑 OpenAI API connected!")
+                st.sidebar.success("✅ OpenAI connection verified!")
             except Exception as e:
                 st.error(f"❌ OpenAI API test failed: {str(e)}")
                 self.openai_client = None
@@ -335,41 +467,54 @@ class AgenticProcessor:
             self.openai_client = None
     
     def process_form_intelligently(self, pdf_text: str, progress_callback=None) -> SmartForm:
-        """Main processing pipeline with proper error handling"""
+        """Main processing pipeline with efficient API usage"""
         
         if not self.openai_client:
             st.error("❌ OpenAI client not available")
             return None
         
         try:
-            # Stage 1: Form Analysis
+            # Stage 1: Analyze form and extract parts (Single API call)
             if progress_callback:
-                progress_callback("🔍 Analyzing form structure...")
+                progress_callback("🔍 Analyzing form structure and extracting parts...")
             
-            form_info = self._analyze_form_structure(pdf_text)
+            form_data = self._analyze_form_and_extract_parts(pdf_text)
+            
+            if not form_data:
+                st.error("❌ Failed to analyze form structure")
+                return None
             
             # Stage 2: Create Smart Form
             smart_form = SmartForm(
-                form_number=form_info.get('form_number', 'Unknown'),
-                form_title=form_info.get('form_title', 'Unknown Form'),
-                form_edition=form_info.get('form_edition', ''),
-                processing_stage=ProcessingStage.ANALYZING
+                form_number=form_data.get('form_number', 'Unknown'),
+                form_title=form_data.get('form_title', 'Unknown Form'),
+                form_edition=form_data.get('form_edition', ''),
+                processing_stage=ProcessingStage.EXTRACTING
             )
             
-            # Stage 3: Extract Fields (Simplified)
+            # Stage 3: Process each part (One API call per part)
             if progress_callback:
-                progress_callback("📄 Extracting form fields...")
+                progress_callback("📄 Extracting fields from each part...")
             
-            fields = self._extract_fields_simplified(pdf_text)
+            parts_data = form_data.get('parts', [])
             
-            # Group fields into parts (simplified approach)
-            current_part = SmartPart(number=1, title="Form Fields")
-            
-            for i, field in enumerate(fields):
-                field.part_number = 1
-                current_part.add_field(field)
-            
-            smart_form.add_part(current_part)
+            for part_data in parts_data:
+                if progress_callback:
+                    progress_callback(f"📄 Processing {part_data.get('title', f'Part {part_data.get(\"number\", \"?\")')}")
+                
+                smart_part = SmartPart(
+                    number=part_data.get('number', 1),
+                    title=part_data.get('title', 'Unknown Part'),
+                    description=part_data.get('description', '')
+                )
+                
+                # Extract fields for this part
+                fields = self._extract_fields_for_part(part_data, pdf_text)
+                
+                for field in fields:
+                    smart_part.add_field(field)
+                
+                smart_form.add_part(smart_part)
             
             # Stage 4: Apply intelligent mapping
             if progress_callback:
@@ -387,21 +532,43 @@ class AgenticProcessor:
             st.error(f"❌ Processing error: {str(e)}")
             return None
     
-    def _analyze_form_structure(self, pdf_text: str) -> Dict[str, Any]:
-        """Analyze form structure using AI"""
+    def _analyze_form_and_extract_parts(self, pdf_text: str) -> Dict[str, Any]:
+        """Analyze form and extract parts in a single API call"""
         
-        # Truncate text for API limits
-        analysis_text = pdf_text[:4000]
+        # Limit text length for API call
+        analysis_text = pdf_text[:10000]  # First 10k characters should contain form structure
         
         prompt = f"""
-        Analyze this USCIS form and extract basic information.
+        Analyze this USCIS form text and extract the form information AND all parts.
         
-        Return ONLY a JSON object with these fields:
+        USCIS forms typically have parts like:
+        - Part 1: Information About You
+        - Part 2: Information About Your Employment  
+        - Part 3: Processing Information
+        - etc.
+        
+        Look for patterns like "Part 1.", "Part 2.", etc. and extract the complete part titles.
+        
+        Return ONLY a JSON object:
         {{
             "form_number": "extracted_form_number",
-            "form_title": "extracted_form_title", 
-            "form_edition": "edition_date_if_found"
+            "form_title": "extracted_form_title",
+            "form_edition": "edition_date_if_found",
+            "parts": [
+                {{
+                    "number": 1,
+                    "title": "Information About You",
+                    "description": "Basic applicant information"
+                }},
+                {{
+                    "number": 2,
+                    "title": "Information About Your Employment",
+                    "description": "Employment details"
+                }}
+            ]
         }}
+        
+        If no clear parts are found, create at least one part called "Form Information".
         
         Form text:
         {analysis_text}
@@ -409,10 +576,10 @@ class AgenticProcessor:
         
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=1500
             )
             
             content = response.choices[0].message.content.strip()
@@ -423,76 +590,61 @@ class AgenticProcessor:
             elif '```' in content:
                 content = content.split('```')[1].split('```')[0]
             
-            return json.loads(content.strip())
+            data = json.loads(content.strip())
+            
+            # Ensure we have at least one part
+            if not data.get('parts'):
+                data['parts'] = [{"number": 1, "title": "Form Information", "description": "All form fields"}]
+            
+            return data
             
         except Exception as e:
             logger.error(f"Form analysis failed: {e}")
             return {
                 'form_number': 'Unknown',
                 'form_title': 'Unknown Form',
-                'form_edition': ''
+                'form_edition': '',
+                'parts': [{"number": 1, "title": "Form Information", "description": "All form fields"}]
             }
     
-    def _extract_fields_simplified(self, pdf_text: str) -> List[SmartField]:
-        """Extract fields using simplified AI approach"""
+    def _extract_fields_for_part(self, part_data: Dict[str, Any], full_pdf_text: str) -> List[SmartField]:
+        """Extract fields for a specific part"""
         
-        # Split text into chunks for processing
-        chunks = self._split_text_into_chunks(pdf_text, 6000)
-        all_fields = []
+        part_number = part_data.get('number', 1)
+        part_title = part_data.get('title', 'Unknown Part')
         
-        for i, chunk in enumerate(chunks):
-            try:
-                fields = self._extract_fields_from_chunk(chunk, i + 1)
-                all_fields.extend(fields)
-            except Exception as e:
-                logger.error(f"Failed to extract from chunk {i+1}: {e}")
-                continue
+        # Try to find the relevant section in the PDF text
+        part_text = self._extract_part_text_from_pdf(part_number, part_title, full_pdf_text)
         
-        return all_fields
-    
-    def _split_text_into_chunks(self, text: str, max_size: int) -> List[str]:
-        """Split text into manageable chunks"""
-        words = text.split()
-        chunks = []
-        current_chunk = []
-        current_size = 0
-        
-        for word in words:
-            if current_size + len(word) > max_size and current_chunk:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-                current_size = len(word)
-            else:
-                current_chunk.append(word)
-                current_size += len(word) + 1
-        
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        
-        return chunks
-    
-    def _extract_fields_from_chunk(self, chunk: str, chunk_num: int) -> List[SmartField]:
-        """Extract fields from a text chunk"""
+        # Limit text for API call
+        if len(part_text) > 8000:
+            part_text = part_text[:8000] + "\n[...text truncated...]"
         
         prompt = f"""
-        Extract form fields from this USCIS form text chunk. Look for numbered fields, labels, and input areas.
+        Extract ALL form fields from Part {part_number}: {part_title} of this USCIS form.
         
-        Return ONLY a JSON array of fields:
+        Look for:
+        - Numbered fields (1.a, 1.b, 2.a, etc.)
+        - Field labels and descriptions
+        - Any existing values
+        - Field types (text, date, checkbox, etc.)
+        
+        Return ONLY a JSON array:
         [
             {{
                 "field_number": "1.a",
                 "field_label": "Family Name (Last Name)",
-                "field_value": "extracted_value_or_empty_string",
+                "field_value": "extracted_value_or_empty",
                 "field_type": "text",
                 "is_required": true,
                 "confidence": 0.85
             }}
         ]
         
-        Field types can be: text, date, checkbox, radio, number, email, phone, address, ssn, alien_number
+        Field types: text, date, checkbox, radio, number, email, phone, address, ssn, alien_number
         
-        Text chunk:
-        {chunk}
+        Part text:
+        {part_text}
         """
         
         try:
@@ -500,7 +652,7 @@ class AgenticProcessor:
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=2000
+                max_tokens=2500
             )
             
             content = response.choices[0].message.content.strip()
@@ -514,9 +666,9 @@ class AgenticProcessor:
             fields_data = json.loads(content.strip())
             
             fields = []
-            for field_data in fields_data:
+            for i, field_data in enumerate(fields_data):
                 try:
-                    # Convert field type to enum
+                    # Convert field type
                     field_type_str = field_data.get('field_type', 'text')
                     try:
                         field_type = FieldType(field_type_str)
@@ -524,10 +676,11 @@ class AgenticProcessor:
                         field_type = FieldType.TEXT
                     
                     field = SmartField(
-                        field_number=field_data.get('field_number', f'chunk_{chunk_num}_field'),
+                        field_number=field_data.get('field_number', f'{part_number}.{chr(97+i)}'),
                         field_label=field_data.get('field_label', 'Unknown Field'),
                         field_value=field_data.get('field_value', ''),
                         field_type=field_type,
+                        part_number=part_number,
                         extraction_confidence=field_data.get('confidence', 0.5),
                         is_required=field_data.get('is_required', False)
                     )
@@ -535,62 +688,133 @@ class AgenticProcessor:
                     fields.append(field)
                     
                 except Exception as e:
-                    logger.error(f"Failed to create field from data: {e}")
+                    logger.error(f"Failed to create field: {e}")
                     continue
             
             return fields
             
         except Exception as e:
-            logger.error(f"Field extraction failed: {e}")
+            logger.error(f"Field extraction failed for part {part_number}: {e}")
             return []
     
-    def _apply_intelligent_mapping(self, smart_form: SmartForm):
-        """Apply intelligent mapping using AI"""
+    def _extract_part_text_from_pdf(self, part_number: int, part_title: str, full_text: str) -> str:
+        """Extract relevant text for a specific part from the full PDF text"""
         
-        for field in smart_form.get_all_fields():
-            if field.is_mapped:
-                continue
-            
-            # Use AI to suggest mapping
-            suggestion = self._get_mapping_suggestion(field)
-            
-            if suggestion and suggestion.get('confidence', 0) > 0.8:
-                field.is_mapped = True
-                field.db_object = suggestion['db_object']
-                field.db_path = suggestion['db_path']
+        # Look for part boundaries
+        lines = full_text.split('\n')
+        part_lines = []
+        found_part = False
+        
+        # Patterns to match part headers
+        part_patterns = [
+            rf"Part\s+{part_number}[.\s]",
+            rf"PART\s+{part_number}[.\s]",
+            rf"{part_number}\.\s",
+            part_title.replace(' ', r'\s+'),
+        ]
+        
+        # Find the start of this part
+        start_idx = 0
+        for i, line in enumerate(lines):
+            for pattern in part_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    start_idx = i
+                    found_part = True
+                    break
+            if found_part:
+                break
+        
+        # Find the end (next part or end of document)
+        end_idx = len(lines)
+        if found_part:
+            next_part_number = part_number + 1
+            for i in range(start_idx + 1, len(lines)):
+                line = lines[i]
+                if re.search(rf"Part\s+{next_part_number}[.\s]", line, re.IGNORECASE):
+                    end_idx = i
+                    break
+        
+        # Extract the part text
+        if found_part:
+            part_text = '\n'.join(lines[start_idx:end_idx])
+        else:
+            # If specific part not found, use a portion of the full text
+            chunk_size = len(lines) // max(part_number, 1)
+            start_idx = (part_number - 1) * chunk_size
+            end_idx = min(start_idx + chunk_size, len(lines))
+            part_text = '\n'.join(lines[start_idx:end_idx])
+        
+        return part_text
     
-    def _get_mapping_suggestion(self, field: SmartField) -> Dict[str, Any]:
-        """Get AI mapping suggestion for a field"""
+    def _apply_intelligent_mapping(self, smart_form: SmartForm):
+        """Apply intelligent mapping with reduced API calls"""
         
-        # Create schema summary
-        schema_summary = {}
-        for obj_name, obj_info in DATABASE_OBJECTS.items():
-            schema_summary[obj_name] = {
-                'description': obj_info['description'],
-                'sample_paths': DATABASE_PATHS[obj_name][:5]  # First 5 paths as examples
+        # Get all unmapped fields
+        unmapped_fields = smart_form.get_unmapped_fields()
+        
+        if not unmapped_fields:
+            return
+        
+        # Process fields in batches to reduce API calls
+        batch_size = 5
+        for i in range(0, len(unmapped_fields), batch_size):
+            batch = unmapped_fields[i:i+batch_size]
+            suggestions = self._get_mapping_suggestions_batch(batch)
+            
+            # Apply high-confidence mappings
+            for j, field in enumerate(batch):
+                if j < len(suggestions) and suggestions[j]:
+                    suggestion = suggestions[j]
+                    if suggestion.get('confidence', 0) > 0.85:
+                        field.is_mapped = True
+                        field.db_object = suggestion['db_object']
+                        field.db_path = suggestion['db_path']
+    
+    def _get_mapping_suggestions_batch(self, fields: List[SmartField]) -> List[Dict[str, Any]]:
+        """Get mapping suggestions for a batch of fields"""
+        
+        # Prepare batch data
+        fields_info = []
+        for field in fields:
+            fields_info.append({
+                "number": field.field_number,
+                "label": field.field_label,
+                "type": field.field_type.value,
+                "value": field.field_value[:50]
+            })
+        
+        # Prepare schema info
+        schema_info = {}
+        for obj_name, obj_data in DATABASE_OBJECTS.items():
+            schema_info[obj_name] = {
+                "description": obj_data["description"],
+                "paths": obj_data["paths"][:10]  # Limit paths for token efficiency
             }
         
         prompt = f"""
-        Map this USCIS form field to the most appropriate database object and path.
+        Map these USCIS form fields to database objects and paths.
         
-        Field Information:
-        - Number: {field.field_number}
-        - Label: {field.field_label}
-        - Type: {field.field_type.value}
-        - Value: {field.field_value[:50]}
+        Fields to map:
+        {json.dumps(fields_info, indent=2)}
         
-        Available Database Objects:
-        {json.dumps(schema_summary, indent=2)}
+        Available database schema:
+        {json.dumps(schema_info, indent=2)}
         
-        Return ONLY JSON:
-        {{
-            "db_object": "best_matching_object",
-            "db_path": "best_matching_path",
-            "confidence": 0.85,
-            "reasoning": "why this mapping makes sense"
-        }}
+        Return ONLY a JSON array with one mapping per field:
+        [
+            {{
+                "db_object": "beneficiary",
+                "db_path": "beneficiaryFirstName",
+                "confidence": 0.90
+            }},
+            {{
+                "db_object": "attorney",
+                "db_path": "lastName", 
+                "confidence": 0.75
+            }}
+        ]
         
-        If no good match exists, return confidence below 0.5.
+        If no good mapping exists, use confidence below 0.5.
         """
         
         try:
@@ -598,12 +822,11 @@ class AgenticProcessor:
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=300
+                max_tokens=1000
             )
             
             content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
             if '```json' in content:
                 content = content.split('```json')[1].split('```')[0]
             elif '```' in content:
@@ -612,53 +835,8 @@ class AgenticProcessor:
             return json.loads(content.strip())
             
         except Exception as e:
-            logger.error(f"Mapping suggestion failed: {e}")
-            return None
-
-# ===== PDF PROCESSING =====
-
-def extract_pdf_text_enhanced(pdf_file) -> str:
-    """Enhanced PDF text extraction"""
-    try:
-        st.info(f"📄 Processing: {pdf_file.name}")
-        
-        pdf_file.seek(0)
-        pdf_bytes = pdf_file.read()
-        
-        if len(pdf_bytes) == 0:
-            st.error("❌ File is empty")
-            return ""
-        
-        if not pdf_bytes.startswith(b'%PDF'):
-            st.error("❌ Not a valid PDF file")
-            return ""
-        
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        
-        try:
-            st.success(f"✅ PDF opened - {len(doc)} pages")
-            
-            full_text = ""
-            for page_num in range(len(doc)):
-                try:
-                    page = doc[page_num]
-                    page_text = page.get_text()
-                    
-                    if page_text.strip():
-                        full_text += f"\n=== PAGE {page_num + 1} ===\n{page_text}\n"
-                        
-                except Exception as e:
-                    st.warning(f"⚠️ Error on page {page_num + 1}: {str(e)}")
-                    continue
-            
-            return full_text
-            
-        finally:
-            doc.close()
-            
-    except Exception as e:
-        st.error(f"💥 PDF extraction failed: {str(e)}")
-        return ""
+            logger.error(f"Batch mapping failed: {e}")
+            return []
 
 # ===== UI COMPONENTS =====
 
@@ -670,7 +848,6 @@ def display_agent_status(processing_stage: ProcessingStage, progress_text: str =
         ProcessingStage.ANALYZING: {"icon": "🔍", "text": "Analyzing Form Structure"},
         ProcessingStage.EXTRACTING: {"icon": "📄", "text": "Extracting Fields"},
         ProcessingStage.MAPPING: {"icon": "🧠", "text": "Applying Intelligent Mapping"},
-        ProcessingStage.VALIDATING: {"icon": "✅", "text": "Validating Results"},
         ProcessingStage.COMPLETED: {"icon": "🎉", "text": "Processing Complete"},
         ProcessingStage.ERROR: {"icon": "❌", "text": "Processing Error"}
     }
@@ -686,7 +863,7 @@ def display_agent_status(processing_stage: ProcessingStage, progress_text: str =
     """, unsafe_allow_html=True)
 
 def display_smart_field(field: SmartField, field_key: str):
-    """Display smart field with simplified interface"""
+    """Display smart field with proper interface"""
     
     # Determine field status
     if field.in_questionnaire:
@@ -778,62 +955,71 @@ def display_smart_field(field: SmartField, field_key: str):
                 st.session_state[f"show_mapping_{field_key}"] = True
                 st.rerun()
         
-        if st.button("📝 Questionnaire", key=f"quest_{field_key}", help="Move to questionnaire"):
+        if st.button("📝 Quest", key=f"quest_{field_key}", help="Move to questionnaire"):
             field.in_questionnaire = True
             field.is_mapped = False
             st.rerun()
     
-    # Simplified mapping interface
+    # Mapping interface
     if st.session_state.get(f"show_mapping_{field_key}", False):
-        display_simplified_mapping_interface(field, field_key)
+        display_mapping_interface(field, field_key)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def display_simplified_mapping_interface(field: SmartField, field_key: str):
-    """Display simplified mapping interface showing only database objects"""
+def display_mapping_interface(field: SmartField, field_key: str):
+    """Display proper mapping interface with working dropdowns"""
     
-    st.markdown('<div class="simple-mapping">', unsafe_allow_html=True)
+    st.markdown('<div class="mapping-interface">', unsafe_allow_html=True)
     st.markdown("#### 🔗 Map to Database")
+    
+    # Get database object options
+    db_objects = list(DATABASE_OBJECTS.keys())
     
     col1, col2, col3 = st.columns([2, 2, 1])
     
     with col1:
-        # Database object selector
-        object_options = list(DATABASE_OBJECTS.keys())
-        object_labels = [f"{DATABASE_OBJECTS[obj]['icon']} {DATABASE_OBJECTS[obj]['label']}" for obj in object_options]
+        st.markdown("**Select Database Object:**")
         
-        selected_idx = st.selectbox(
-            "Select Database Object:",
-            range(len(object_options)),
-            format_func=lambda x: object_labels[x],
-            key=f"obj_select_{field_key}"
+        # Create radio buttons for database objects
+        selected_object = st.radio(
+            "Database Object:",
+            options=db_objects,
+            format_func=lambda x: f"{DATABASE_OBJECTS[x]['icon']} {DATABASE_OBJECTS[x]['label']}",
+            key=f"db_obj_{field_key}",
+            label_visibility="collapsed"
         )
         
-        selected_object = object_options[selected_idx]
-        
-        # Show object description
-        st.caption(DATABASE_OBJECTS[selected_object]['description'])
+        # Show description
+        if selected_object:
+            st.caption(DATABASE_OBJECTS[selected_object]['description'])
     
     with col2:
-        # Path selector for selected object
-        available_paths = DATABASE_PATHS.get(selected_object, [])
+        st.markdown("**Select Field Path:**")
         
-        selected_path = st.selectbox(
-            "Select Field Path:",
-            available_paths,
-            key=f"path_select_{field_key}"
-        )
+        if selected_object:
+            available_paths = DATABASE_OBJECTS[selected_object]['paths']
+            
+            selected_path = st.selectbox(
+                "Field Path:",
+                options=available_paths,
+                key=f"db_path_{field_key}",
+                label_visibility="collapsed"
+            )
+        else:
+            selected_path = None
+            st.info("Select an object first")
     
     with col3:
-        st.write("") # Spacer
-        if st.button("✅ Apply", key=f"apply_{field_key}"):
+        st.markdown("**Actions:**")
+        
+        if st.button("✅ Apply", key=f"apply_{field_key}", disabled=not (selected_object and selected_path)):
             field.is_mapped = True
             field.db_object = selected_object
             field.db_path = selected_path
             field.in_questionnaire = False
             
             st.session_state[f"show_mapping_{field_key}"] = False
-            st.success(f"Mapped to {selected_object}.{selected_path}")
+            st.success(f"✅ Mapped to {selected_object}.{selected_path}")
             st.rerun()
         
         if st.button("❌ Cancel", key=f"cancel_{field_key}"):
@@ -843,7 +1029,7 @@ def display_simplified_mapping_interface(field: SmartField, field_key: str):
     st.markdown('</div>', unsafe_allow_html=True)
 
 def display_smart_form(smart_form: SmartForm):
-    """Display smart form"""
+    """Display smart form with proper part separation"""
     
     if not smart_form or not smart_form.parts:
         st.warning("No form data to display")
@@ -851,8 +1037,10 @@ def display_smart_form(smart_form: SmartForm):
     
     # Form summary
     st.markdown(f"## 📄 {smart_form.form_number}: {smart_form.form_title}")
+    if smart_form.form_edition:
+        st.markdown(f"**Edition:** {smart_form.form_edition}")
     
-    # Metrics
+    # Overall metrics
     col1, col2, col3, col4 = st.columns(4)
     
     all_fields = smart_form.get_all_fields()
@@ -869,11 +1057,34 @@ def display_smart_form(smart_form: SmartForm):
     with col4:
         st.metric("Confidence", f"{smart_form.overall_confidence:.0%}")
     
-    # Display fields by part
+    # Display each part
     for part_num in sorted(smart_form.parts.keys()):
         part = smart_form.parts[part_num]
         
-        with st.expander(f"📄 {part.title}", expanded=True):
+        # Part header with metrics
+        mapped_count = part.get_mapped_count()
+        unmapped_count = part.get_unmapped_count()
+        questionnaire_count = part.get_questionnaire_count()
+        
+        with st.expander(f"📄 Part {part.number}: {part.title}", expanded=(part_num == 1)):
+            
+            # Part description
+            if part.description:
+                st.markdown(f"*{part.description}*")
+            
+            # Part metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Fields", len(part.fields))
+            with col2:
+                st.metric("Mapped", mapped_count)
+            with col3:
+                st.metric("Questionnaire", questionnaire_count)
+            with col4:
+                completion = (mapped_count + questionnaire_count) / len(part.fields) if part.fields else 0
+                st.metric("Completion", f"{completion:.0%}")
+            
+            # Display fields
             if not part.fields:
                 st.info("No fields found in this part")
                 continue
@@ -906,7 +1117,7 @@ def display_export_options(smart_form: SmartForm):
             st.download_button(
                 "Download TypeScript",
                 ts_content,
-                f"{smart_form.form_number}_mappings.ts",
+                f"{smart_form.form_number.replace('-', '_')}_mappings.ts",
                 "text/typescript"
             )
     
@@ -921,182 +1132,9 @@ def display_export_options(smart_form: SmartForm):
             st.download_button(
                 "Download JSON",
                 json_content,
-                f"{smart_form.form_number}_questionnaire.json",
+                f"{smart_form.form_number.replace('-', '_')}_questionnaire.json",
                 "application/json"
             )
-
-# ===== EXPORT FUNCTIONS =====
-
-def generate_typescript_mappings(smart_form: SmartForm, mapped_fields: List[SmartField]) -> str:
-    """Generate TypeScript mappings"""
-    
-    ts_content = f"""/**
- * TypeScript mappings for {smart_form.form_number}
- * Generated: {datetime.now().isoformat()}
- */
-
-export interface {smart_form.form_number.replace('-', '')}Mapping {{
-"""
-    
-    # Group by database object
-    objects = {}
-    for field in mapped_fields:
-        if field.db_object not in objects:
-            objects[field.db_object] = []
-        objects[field.db_object].append(field)
-    
-    for obj_name, fields in objects.items():
-        ts_content += f"  {obj_name}: {{\n"
-        for field in fields:
-            ts_content += f"    \"{field.field_number}\": {{\n"
-            ts_content += f"      path: \"{field.db_path}\",\n"
-            ts_content += f"      value: \"{field.field_value}\",\n"
-            ts_content += f"      type: \"{field.field_type.value}\"\n"
-            ts_content += f"    }},\n"
-        ts_content += f"  }},\n"
-    
-    ts_content += "}\n"
-    
-    return ts_content
-
-def generate_json_questionnaire(smart_form: SmartForm, questionnaire_fields: List[SmartField]) -> str:
-    """Generate JSON questionnaire"""
-    
-    questionnaire = {
-        "form_info": {
-            "form_number": smart_form.form_number,
-            "form_title": smart_form.form_title,
-            "generation_date": datetime.now().isoformat()
-        },
-        "questions": []
-    }
-    
-    for field in questionnaire_fields:
-        question = {
-            "field_number": field.field_number,
-            "question": f"Please provide: {field.field_label}",
-            "field_type": field.field_type.value,
-            "current_value": field.field_value,
-            "is_required": field.is_required
-        }
-        questionnaire["questions"].append(question)
-    
-    return json.dumps(questionnaire, indent=2)
-
-# ===== MAIN APPLICATION =====
-
-def main():
-    st.markdown(
-        '<div class="main-header">'
-        '<h1>🤖 Agentic USCIS Form Reader</h1>'
-        '<p>AI-powered system for intelligent USCIS form processing</p>'
-        '</div>', 
-        unsafe_allow_html=True
-    )
-    
-    # Check dependencies
-    if not PYMUPDF_AVAILABLE:
-        st.error("❌ PyMuPDF not available! Install with: pip install pymupdf")
-        st.stop()
-    
-    if not OPENAI_AVAILABLE:
-        st.error("❌ OpenAI not available! Install with: pip install openai")
-        st.stop()
-    
-    # Initialize session state
-    if 'smart_form' not in st.session_state:
-        st.session_state.smart_form = None
-    
-    if 'processing_stage' not in st.session_state:
-        st.session_state.processing_stage = ProcessingStage.UPLOADED
-    
-    # Initialize processor
-    if 'processor' not in st.session_state:
-        st.session_state.processor = AgenticProcessor()
-    
-    # Display status
-    display_agent_status(st.session_state.processing_stage)
-    
-    # Sidebar
-    with st.sidebar:
-        st.markdown("## 🤖 Controls")
-        
-        if st.button("🆕 New Form"):
-            st.session_state.smart_form = None
-            st.session_state.processing_stage = ProcessingStage.UPLOADED
-            st.rerun()
-        
-        # Show stats if form is loaded
-        if st.session_state.smart_form:
-            form = st.session_state.smart_form
-            st.markdown("### 📊 Stats")
-            st.metric("Fields", len(form.get_all_fields()))
-            st.metric("Mapped", len(form.get_mapped_fields()))
-            st.metric("Confidence", f"{form.overall_confidence:.0%}")
-    
-    # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["🚀 Process", "✏️ Edit", "📝 Questionnaire", "📤 Export"])
-    
-    with tab1:
-        st.markdown("### 🚀 Upload & Process")
-        
-        uploaded_file = st.file_uploader("Choose USCIS form PDF", type=['pdf'])
-        
-        if uploaded_file:
-            st.success(f"✅ File: {uploaded_file.name}")
-            
-            if st.button("🚀 Process with AI", type="primary"):
-                progress_placeholder = st.empty()
-                
-                def update_progress(text):
-                    with progress_placeholder:
-                        st.info(f"🤖 {text}")
-                
-                with st.spinner("Processing..."):
-                    try:
-                        # Extract PDF text
-                        update_progress("Extracting PDF text...")
-                        pdf_text = extract_pdf_text_enhanced(uploaded_file)
-                        
-                        if not pdf_text:
-                            st.error("No text found in PDF")
-                            st.stop()
-                        
-                        # Process with AI
-                        smart_form = st.session_state.processor.process_form_intelligently(
-                            pdf_text, update_progress
-                        )
-                        
-                        if smart_form:
-                            st.session_state.smart_form = smart_form
-                            st.session_state.processing_stage = ProcessingStage.COMPLETED
-                            
-                            progress_placeholder.empty()
-                            st.balloons()
-                            st.success(f"🎉 Processing complete! Found {len(smart_form.get_all_fields())} fields")
-                        else:
-                            st.error("Processing failed")
-                    
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-    
-    with tab2:
-        if st.session_state.smart_form:
-            display_smart_form(st.session_state.smart_form)
-        else:
-            st.info("No form loaded. Process a PDF first.")
-    
-    with tab3:
-        if st.session_state.smart_form:
-            display_questionnaire_interface(st.session_state.smart_form)
-        else:
-            st.info("No form loaded. Process a PDF first.")
-    
-    with tab4:
-        if st.session_state.smart_form:
-            display_export_options(st.session_state.smart_form)
-        else:
-            st.info("No form loaded. Process a PDF first.")
 
 def display_questionnaire_interface(smart_form: SmartForm):
     """Display questionnaire interface"""
@@ -1153,6 +1191,222 @@ def display_questionnaire_interface(smart_form: SmartForm):
             if st.button("🔙 Back", key=f"back_{i}"):
                 field.in_questionnaire = False
                 st.rerun()
+
+# ===== EXPORT FUNCTIONS =====
+
+def generate_typescript_mappings(smart_form: SmartForm, mapped_fields: List[SmartField]) -> str:
+    """Generate TypeScript mappings"""
+    
+    ts_content = f"""/**
+ * TypeScript mappings for {smart_form.form_number}
+ * Form: {smart_form.form_title}
+ * Generated: {datetime.now().isoformat()}
+ */
+
+export interface {smart_form.form_number.replace('-', '_')}Mapping {{
+"""
+    
+    # Group by database object
+    objects = {}
+    for field in mapped_fields:
+        if field.db_object not in objects:
+            objects[field.db_object] = []
+        objects[field.db_object].append(field)
+    
+    for obj_name, fields in objects.items():
+        ts_content += f"  {obj_name}: {{\n"
+        for field in fields:
+            ts_content += f"    \"{field.field_number}\": {{\n"
+            ts_content += f"      path: \"{field.db_path}\",\n"
+            ts_content += f"      value: \"{field.field_value}\",\n"
+            ts_content += f"      type: \"{field.field_type.value}\",\n"
+            ts_content += f"      label: \"{field.field_label}\"\n"
+            ts_content += f"    }},\n"
+        ts_content += f"  }},\n"
+    
+    ts_content += "}\n"
+    
+    return ts_content
+
+def generate_json_questionnaire(smart_form: SmartForm, questionnaire_fields: List[SmartField]) -> str:
+    """Generate JSON questionnaire"""
+    
+    questionnaire = {
+        "form_info": {
+            "form_number": smart_form.form_number,
+            "form_title": smart_form.form_title,
+            "form_edition": smart_form.form_edition,
+            "generation_date": datetime.now().isoformat()
+        },
+        "questions": []
+    }
+    
+    for field in questionnaire_fields:
+        question = {
+            "field_number": field.field_number,
+            "question": f"Please provide: {field.field_label}",
+            "field_type": field.field_type.value,
+            "current_value": field.field_value,
+            "is_required": field.is_required,
+            "part_number": field.part_number
+        }
+        questionnaire["questions"].append(question)
+    
+    return json.dumps(questionnaire, indent=2)
+
+# ===== MAIN APPLICATION =====
+
+def main():
+    st.markdown(
+        '<div class="main-header">'
+        '<h1>🤖 Agentic USCIS Form Reader</h1>'
+        '<p>AI-powered system for intelligent USCIS form processing</p>'
+        '</div>', 
+        unsafe_allow_html=True
+    )
+    
+    # Check dependencies
+    if not PYMUPDF_AVAILABLE:
+        st.error("❌ PyMuPDF not available! Install with: `pip install pymupdf`")
+        st.stop()
+    
+    if not OPENAI_AVAILABLE:
+        st.error("❌ OpenAI not available! Install with: `pip install openai`")
+        st.stop()
+    
+    # Initialize session state
+    if 'smart_form' not in st.session_state:
+        st.session_state.smart_form = None
+    
+    if 'processing_stage' not in st.session_state:
+        st.session_state.processing_stage = ProcessingStage.UPLOADED
+    
+    # Initialize processor
+    if 'processor' not in st.session_state:
+        st.session_state.processor = AgenticProcessor()
+    
+    # Display status
+    display_agent_status(st.session_state.processing_stage)
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## 🤖 Controls")
+        
+        if st.button("🆕 New Form"):
+            st.session_state.smart_form = None
+            st.session_state.processing_stage = ProcessingStage.UPLOADED
+            for key in list(st.session_state.keys()):
+                if key.startswith('show_mapping_') or key.startswith('db_obj_') or key.startswith('db_path_'):
+                    del st.session_state[key]
+            st.rerun()
+        
+        # Show stats if form is loaded
+        if st.session_state.smart_form:
+            form = st.session_state.smart_form
+            st.markdown("### 📊 Form Stats")
+            st.metric("Form", form.form_number)
+            st.metric("Parts", len(form.parts))
+            st.metric("Fields", len(form.get_all_fields()))
+            st.metric("Mapped", len(form.get_mapped_fields()))
+            st.metric("Confidence", f"{form.overall_confidence:.0%}")
+            
+            # Quick actions
+            st.markdown("### ⚡ Quick Actions")
+            if st.button("📝 Move All Unmapped to Questionnaire"):
+                for field in form.get_unmapped_fields():
+                    field.in_questionnaire = True
+                st.success("Moved all unmapped fields!")
+                st.rerun()
+    
+    # Main tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["🚀 Process", "✏️ Edit", "📝 Questionnaire", "📤 Export"])
+    
+    with tab1:
+        st.markdown("### 🚀 Upload & Process USCIS Form")
+        
+        uploaded_file = st.file_uploader("Choose USCIS form PDF", type=['pdf'])
+        
+        if uploaded_file:
+            st.success(f"✅ File uploaded: {uploaded_file.name}")
+            
+            if st.button("🚀 Process with AI", type="primary", use_container_width=True):
+                
+                # Check if OpenAI is available
+                if not st.session_state.processor.openai_client:
+                    st.error("❌ OpenAI client not available. Please check API key setup.")
+                    st.stop()
+                
+                progress_placeholder = st.empty()
+                
+                def update_progress(text):
+                    with progress_placeholder:
+                        st.markdown(f"""
+                        <div class="progress-text">
+                            🤖 {text}
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                with st.spinner("🤖 AI Processing in progress..."):
+                    try:
+                        # Extract PDF text
+                        update_progress("Extracting text from PDF...")
+                        pdf_text = extract_pdf_text_properly(uploaded_file)
+                        
+                        if not pdf_text or len(pdf_text.strip()) < 100:
+                            st.error("❌ Insufficient text found in PDF. Please check if the PDF contains readable text.")
+                            st.stop()
+                        
+                        st.info(f"📄 Extracted {len(pdf_text)} characters from PDF")
+                        
+                        # Process with AI
+                        smart_form = st.session_state.processor.process_form_intelligently(
+                            pdf_text, update_progress
+                        )
+                        
+                        if smart_form and smart_form.parts:
+                            st.session_state.smart_form = smart_form
+                            st.session_state.processing_stage = ProcessingStage.COMPLETED
+                            
+                            progress_placeholder.empty()
+                            st.balloons()
+                            
+                            # Show success metrics
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("Parts Found", len(smart_form.parts))
+                            with col2:
+                                st.metric("Fields Extracted", len(smart_form.get_all_fields()))
+                            with col3:
+                                st.metric("Auto-Mapped", len(smart_form.get_mapped_fields()))
+                            with col4:
+                                st.metric("Confidence", f"{smart_form.overall_confidence:.0%}")
+                            
+                            st.success(f"🎉 Processing complete! Found {len(smart_form.parts)} parts with {len(smart_form.get_all_fields())} fields")
+                        else:
+                            st.error("❌ Processing failed - no form structure found")
+                    
+                    except Exception as e:
+                        progress_placeholder.empty()
+                        st.error(f"💥 Processing error: {str(e)}")
+                        logger.error(f"Processing error: {e}")
+    
+    with tab2:
+        if st.session_state.smart_form:
+            display_smart_form(st.session_state.smart_form)
+        else:
+            st.info("📄 No form loaded. Process a PDF in the first tab to begin editing.")
+    
+    with tab3:
+        if st.session_state.smart_form:
+            display_questionnaire_interface(st.session_state.smart_form)
+        else:
+            st.info("📝 No form loaded. Process a PDF to access the questionnaire.")
+    
+    with tab4:
+        if st.session_state.smart_form:
+            display_export_options(st.session_state.smart_form)
+        else:
+            st.info("📤 No form loaded. Process a PDF to access export options.")
 
 if __name__ == "__main__":
     main()
