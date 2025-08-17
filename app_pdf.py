@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-🤖 AGENTIC USCIS FORM READER - FINAL VERSION
-============================================
+🤖 AGENTIC USCIS FORM READER - CORRECTED VERSION
+=================================================
 
 Fixed Issues:
-- All syntax errors resolved
-- Proper part-by-part extraction
-- Reduced API calls 
-- Fixed database dropdown
-- Improved PDF extraction
-- Better form structure parsing
+- Correct part sequencing and identification
+- Proper database object structure matching your schema
+- Accurate field numbering system (P1_1, P2_5a, etc.)
+- Improved form structure parsing based on actual USCIS forms
 
-Author: AI Assistant
-Version: 3.1.0 - FINAL
+Author: AI Assistant  
+Version: 4.0.0 - CORRECTED
 """
 
 import os
@@ -51,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 # Page config
 st.set_page_config(
-    page_title="🤖 Agentic USCIS Form Reader",
+    page_title="🤖 Agentic USCIS Form Reader - Fixed",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Enhanced CSS
+# Enhanced CSS (same as before)
 st.markdown("""
 <style>
     .main-header {
@@ -270,7 +268,7 @@ class SmartForm:
         confidences = [f.extraction_confidence for f in all_fields]
         self.overall_confidence = np.mean(confidences) if confidences else 0.0
 
-# ===== DATABASE SCHEMA =====
+# ===== CORRECTED DATABASE SCHEMA =====
 
 DATABASE_OBJECTS = {
     "attorney": {
@@ -278,50 +276,110 @@ DATABASE_OBJECTS = {
         "description": "Legal representative details",
         "icon": "⚖️",
         "paths": [
-            "firstName", "lastName", "middleName", "workPhone", "mobilePhone", 
-            "emailAddress", "stateBarNumber", "addressStreet", "addressCity", 
-            "addressState", "addressZip", "addressCountry", "licensingAuthority",
-            "uscisRepresentation", "receiptNumber"
+            "attorneyInfo.firstName",
+            "attorneyInfo.lastName", 
+            "attorneyInfo.middleName",
+            "attorneyInfo.workPhone",
+            "attorneyInfo.mobilePhone",
+            "attorneyInfo.emailAddress",
+            "attorneyInfo.stateBarNumber",
+            "address.addressStreet",
+            "address.addressCity",
+            "address.addressState",
+            "address.addressZip",
+            "address.addressCountry",
+            "licensingAuthority",
+            "uscisRepresentation",
+            "receiptNumber"
         ]
     },
-    "beneficiary": {
-        "label": "Beneficiary Information", 
-        "description": "Primary applicant details",
+    "attorneyLawfirmDetails": {
+        "label": "Attorney Lawfirm Details",
+        "description": "Law firm and address information",
+        "icon": "🏛️",
+        "paths": [
+            "lawfirmDetails.lawFirmName",
+            "lawfirmDetails.lawFirmFein",
+            "address.addressStreet",
+            "address.addressType",
+            "address.addressCity",
+            "address.addressState",
+            "address.addressZip",
+            "address.addressCountry",
+            "uscisOnlineAccountNumber",
+            "companyPhone"
+        ]
+    },
+    "beneficary": {
+        "label": "Beneficiary Information",
+        "description": "Primary applicant details", 
         "icon": "👤",
         "paths": [
-            "beneficiaryFirstName", "beneficiaryLastName", "beneficiaryMiddleName",
-            "beneficiaryGender", "beneficiaryDateOfBirth", "beneficiarySsn",
-            "alienNumber", "beneficiaryCountryOfBirth", "beneficiaryCellNumber",
-            "beneficiaryPrimaryEmailAddress", "uscisOnlineAccount", "nameChanged",
-            "previousFirstName", "previousLastName", "addressStreet", "addressCity",
-            "addressState", "addressZip", "addressCountry"
+            "Beneficiary.beneficiaryFirstName",
+            "Beneficiary.beneficiaryLastName",
+            "Beneficiary.beneficiaryMiddleName",
+            "Beneficiary.beneficiaryGender",
+            "Beneficiary.beneficiaryDateOfBirth",
+            "Beneficiary.beneficiarySsn",
+            "Beneficiary.alienNumber",
+            "Beneficiary.beneficiaryCountryOfBirth",
+            "Beneficiary.beneficiaryCitizenOfCountry",
+            "Beneficiary.beneficiaryCellNumber",
+            "Beneficiary.beneficiaryWorkNumber",
+            "Beneficiary.beneficiaryPrimaryEmailAddress",
+            "Beneficiary.uscisOnlineAccount",
+            "HomeAddress.addressStreet",
+            "HomeAddress.addressCity",
+            "HomeAddress.addressState",
+            "HomeAddress.addressZip",
+            "HomeAddress.addressCountry",
+            "WorkAddress.addressStreet",
+            "WorkAddress.addressCity",
+            "WorkAddress.addressState",
+            "WorkAddress.addressZip",
+            "WorkAddress.addressCountry"
         ]
     },
     "customer": {
-        "label": "Company/Customer Information",
+        "label": "Customer/Employer Information",
         "description": "Employer or petitioning organization",
         "icon": "🏢",
         "paths": [
-            "customer_name", "customer_tax_id", "customer_website_url",
-            "signatory_first_name", "signatory_last_name", "signatory_middle_name",
-            "signatory_work_phone", "signatory_mobile_phone", "signatory_email_id",
-            "signatory_job_title", "address_street", "address_city", 
-            "address_state", "address_zip", "address_country"
+            "customer_name",
+            "customer_tax_id",
+            "customer_website_url",
+            "signatory_first_name",
+            "signatory_last_name", 
+            "signatory_middle_name",
+            "signatory_work_phone",
+            "signatory_mobile_phone",
+            "signatory_email_id",
+            "signatory_job_title",
+            "address_street",
+            "address_type",
+            "address_number",
+            "address_city",
+            "address_state",
+            "address_zip",
+            "address_country"
         ]
     },
-    "lawfirm": {
-        "label": "Law Firm Information",
-        "description": "Law firm details and contacts",
-        "icon": "🏛️",
+    "case": {
+        "label": "Case Information",
+        "description": "Case-specific details",
+        "icon": "📋",
         "paths": [
-            "lawFirmName", "uscisOnlineAccountNumber", "lawFirmFein",
-            "companyPhone", "addressStreet", "addressCity", "addressState",
-            "addressZip", "addressCountry"
+            "h1BPetitionType",
+            "caseNumber",
+            "priority",
+            "status",
+            "filingDate",
+            "receiptNumber"
         ]
     }
 }
 
-# ===== PDF PROCESSING =====
+# ===== PDF PROCESSING (same as before) =====
 
 def extract_pdf_text_properly(pdf_file) -> str:
     """Proper PDF text extraction with structure preservation"""
@@ -409,10 +467,10 @@ def extract_pdf_text_properly(pdf_file) -> str:
         logger.error(f"PDF extraction error: {e}")
         return ""
 
-# ===== AGENTIC PROCESSOR =====
+# ===== CORRECTED AGENTIC PROCESSOR =====
 
 class AgenticProcessor:
-    """Improved agentic processor with efficient API usage"""
+    """Corrected agentic processor with proper form structure handling"""
     
     def __init__(self):
         self.openai_client = None
@@ -473,18 +531,18 @@ class AgenticProcessor:
             self.openai_client = None
     
     def process_form_intelligently(self, pdf_text: str, progress_callback=None) -> SmartForm:
-        """Main processing pipeline with efficient API usage"""
+        """Main processing pipeline with corrected form structure handling"""
         
         if not self.openai_client:
             st.error("❌ OpenAI client not available")
             return None
         
         try:
-            # Stage 1: Analyze form and extract parts (Single API call)
+            # Stage 1: Analyze form and extract parts with corrected patterns
             if progress_callback:
                 progress_callback("🔍 Analyzing form structure and extracting parts...")
             
-            form_data = self._analyze_form_and_extract_parts(pdf_text)
+            form_data = self._analyze_form_and_extract_parts_corrected(pdf_text)
             
             if not form_data:
                 st.error("❌ Failed to analyze form structure")
@@ -498,7 +556,7 @@ class AgenticProcessor:
                 processing_stage=ProcessingStage.EXTRACTING
             )
             
-            # Stage 3: Process each part (One API call per part)
+            # Stage 3: Process each part with corrected field extraction
             if progress_callback:
                 progress_callback("📄 Extracting fields from each part...")
             
@@ -518,19 +576,19 @@ class AgenticProcessor:
                     description=part_data.get('description', '')
                 )
                 
-                # Extract fields for this part
-                fields = self._extract_fields_for_part(part_data, pdf_text)
+                # Extract fields for this part with corrected numbering
+                fields = self._extract_fields_for_part_corrected(part_data, pdf_text)
                 
                 for field in fields:
                     smart_part.add_field(field)
                 
                 smart_form.add_part(smart_part)
             
-            # Stage 4: Apply intelligent mapping
+            # Stage 4: Apply corrected intelligent mapping
             if progress_callback:
                 progress_callback("🧠 Applying intelligent mapping...")
             
-            self._apply_intelligent_mapping(smart_form)
+            self._apply_intelligent_mapping_corrected(smart_form)
             
             smart_form.processing_stage = ProcessingStage.COMPLETED
             smart_form.calculate_metrics()
@@ -542,44 +600,54 @@ class AgenticProcessor:
             st.error(f"❌ Processing error: {str(e)}")
             return None
     
-    def _analyze_form_and_extract_parts(self, pdf_text: str) -> Dict[str, Any]:
-        """Analyze form and extract parts in a single API call with robust JSON parsing"""
+    def _analyze_form_and_extract_parts_corrected(self, pdf_text: str) -> Dict[str, Any]:
+        """Analyze form with corrected part identification patterns"""
         
         # Limit text length for API call
-        analysis_text = pdf_text[:10000]  # First 10k characters should contain form structure
+        analysis_text = pdf_text[:15000]  # Increased for better part detection
         
         prompt = f"""
         Analyze this USCIS form text and extract the form information AND all parts.
         
-        USCIS forms typically have parts like:
-        - Part 1: Information About You
-        - Part 2: Information About Your Employment  
-        - Part 3: Processing Information
-        - etc.
+        USCIS forms have specific part patterns. Look for:
+        - "Part 1." followed by title (e.g., "Part 1. Information About You")
+        - "Part 2." followed by title (e.g., "Part 2. Information About Your Eligibility Category")
+        - "Part 3." followed by title (e.g., "Part 3. Processing Information")
+        - "Part 4." through "Part 14." with their specific titles
         
-        Look for patterns like "Part 1.", "Part 2.", etc. and extract the complete part titles.
+        Each part typically has fields numbered like:
+        - P1_1, P1_2, P1_3 (Part 1 fields)
+        - P2_1a, P2_1b, P2_1c (Part 2 sub-fields)
+        - 1.a., 1.b., 2.a., 2.b. (traditional numbering)
         
-        IMPORTANT: Return ONLY valid JSON with all property names in double quotes.
+        Common USCIS form parts include:
+        - Part 1: Information About You (Beneficiary)
+        - Part 2: Information About Your Eligibility Category
+        - Part 3: Processing Information  
+        - Part 4: Accommodations for Individuals with Disabilities
+        - Part 5: Attorney or Accredited Representative Information
+        - Part 6: Contact Information, Declaration, and Signature
+        - Part 9: Additional Information
+        
+        Return ONLY valid JSON:
         
         {{
-            "form_number": "extracted_form_number",
-            "form_title": "extracted_form_title",
-            "form_edition": "edition_date_if_found",
+            "form_number": "I-129",
+            "form_title": "Petition for Nonimmigrant Worker", 
+            "form_edition": "01/17/25",
             "parts": [
                 {{
                     "number": 1,
-                    "title": "Information About You",
-                    "description": "Basic applicant information"
+                    "title": "Information About You (Petitioner)",
+                    "description": "Petitioner basic information"
                 }},
                 {{
                     "number": 2,
-                    "title": "Information About Your Employment",
-                    "description": "Employment details"
+                    "title": "Information About This Petition",
+                    "description": "Petition details and beneficiary information"
                 }}
             ]
         }}
-        
-        If no clear parts are found, create at least one part called "Form Information".
         
         Form text:
         {analysis_text}
@@ -590,7 +658,7 @@ class AgenticProcessor:
                 model="gpt-4o",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=1500
+                max_tokens=2000
             )
             
             content = response.choices[0].message.content.strip()
@@ -600,7 +668,7 @@ class AgenticProcessor:
             
             if not data:
                 logger.warning("Failed to parse form analysis JSON, using fallback")
-                return self._get_fallback_form_data()
+                return self._get_fallback_form_data_corrected()
             
             # Ensure we have at least one part
             if not data.get('parts'):
@@ -611,8 +679,353 @@ class AgenticProcessor:
             
         except Exception as e:
             logger.error(f"Form analysis failed: {e}")
-            return self._get_fallback_form_data()
+            return self._get_fallback_form_data_corrected()
     
+    def _get_fallback_form_data_corrected(self) -> Dict[str, Any]:
+        """Get corrected fallback form data with typical USCIS parts"""
+        
+        return {
+            'form_number': 'Unknown',
+            'form_title': 'Unknown USCIS Form',
+            'form_edition': '',
+            'parts': [
+                {"number": 1, "title": "Information About You", "description": "Basic applicant information"},
+                {"number": 2, "title": "Information About Your Eligibility", "description": "Eligibility details"},
+                {"number": 3, "title": "Processing Information", "description": "Processing and contact information"},
+                {"number": 5, "title": "Attorney or Representative Information", "description": "Legal representation"}
+            ]
+        }
+    
+    def _extract_fields_for_part_corrected(self, part_data: Dict[str, Any], full_pdf_text: str) -> List[SmartField]:
+        """Extract fields with corrected numbering system (P1_1, P2_5a, etc.)"""
+        
+        part_number = part_data.get('number', 1)
+        part_title = part_data.get('title', 'Unknown Part')
+        
+        # Try to find the relevant section in the PDF text
+        part_text = self._extract_part_text_from_pdf_corrected(part_number, part_title, full_pdf_text)
+        
+        # Limit text for API call
+        if len(part_text) > 10000:
+            part_text = part_text[:10000] + "\n[...text truncated...]"
+        
+        prompt = f"""
+        Extract ALL form fields from Part {part_number}: {part_title} of this USCIS form.
+        
+        Look for USCIS-specific field patterns:
+        - P{part_number}_1, P{part_number}_2, P{part_number}_3 (Part {part_number} fields)
+        - P{part_number}_1a, P{part_number}_1b, P{part_number}_1c (sub-fields)
+        - {part_number}.a., {part_number}.b., {part_number}.c. (traditional numbering)
+        - Item numbers like "1.a.", "1.b.", "2.a.", "2.b."
+        
+        Field types include:
+        - Name fields (Family Name, Given Name, Middle Name)
+        - Address fields (Street, City, State, ZIP, Country)
+        - Contact fields (Phone, Email)
+        - Date fields (Date of Birth, etc.)
+        - Checkbox/Yes/No fields
+        - SSN, A-Number fields
+        
+        Return ONLY valid JSON array:
+        
+        [
+            {{
+                "field_number": "P{part_number}_1a",
+                "field_label": "Family Name (Last Name)",
+                "field_value": "",
+                "field_type": "text",
+                "is_required": true,
+                "confidence": 0.85
+            }},
+            {{
+                "field_number": "{part_number}.a",
+                "field_label": "Given Name (First Name)", 
+                "field_value": "",
+                "field_type": "text",
+                "is_required": true,
+                "confidence": 0.90
+            }}
+        ]
+        
+        Field types: text, date, checkbox, radio, number, email, phone, address, ssn, alien_number
+        
+        Part text:
+        {part_text}
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=3000
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Clean and parse JSON response
+            fields_data = self._parse_json_robust(content)
+            
+            if not fields_data:
+                st.warning(f"⚠️ No valid JSON returned for Part {part_number}, creating fallback fields")
+                return self._create_fallback_fields_corrected(part_number, part_title)
+            
+            fields = []
+            for i, field_data in enumerate(fields_data):
+                try:
+                    # Convert field type
+                    field_type_str = field_data.get('field_type', 'text')
+                    try:
+                        field_type = FieldType(field_type_str)
+                    except ValueError:
+                        field_type = FieldType.TEXT
+                    
+                    # Create field number with corrected format
+                    field_num = field_data.get('field_number', f'P{part_number}_{i+1}')
+                    
+                    field = SmartField(
+                        field_number=field_num,
+                        field_label=field_data.get('field_label', 'Unknown Field'),
+                        field_value=field_data.get('field_value', ''),
+                        field_type=field_type,
+                        part_number=part_number,
+                        extraction_confidence=field_data.get('confidence', 0.5),
+                        is_required=field_data.get('is_required', False)
+                    )
+                    
+                    fields.append(field)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create field {i}: {e}")
+                    continue
+            
+            if not fields:
+                st.warning(f"⚠️ No fields created for Part {part_number}, using fallback")
+                return self._create_fallback_fields_corrected(part_number, part_title)
+            
+            return fields
+            
+        except Exception as e:
+            logger.error(f"Field extraction failed for part {part_number}: {e}")
+            st.warning(f"⚠️ Field extraction failed for Part {part_number}, using fallback")
+            return self._create_fallback_fields_corrected(part_number, part_title)
+    
+    def _create_fallback_fields_corrected(self, part_number: int, part_title: str) -> List[SmartField]:
+        """Create fallback fields with corrected USCIS numbering"""
+        
+        fallback_fields = []
+        
+        # Create fields based on part type
+        if part_number == 1:
+            # Part 1: Information About You
+            field_templates = [
+                ("P1_1a", "Family Name (Last Name)", FieldType.TEXT),
+                ("P1_1b", "Given Name (First Name)", FieldType.TEXT),
+                ("P1_1c", "Middle Name", FieldType.TEXT),
+                ("P1_2", "Date of Birth", FieldType.DATE),
+                ("P1_3", "Country of Birth", FieldType.TEXT)
+            ]
+        elif part_number == 2:
+            # Part 2: Information About Your Eligibility
+            field_templates = [
+                ("P2_1", "Eligibility Category", FieldType.CHECKBOX),
+                ("P2_2a", "Priority Date", FieldType.DATE),
+                ("P2_2b", "Country Chargeability", FieldType.TEXT)
+            ]
+        elif part_number == 5:
+            # Part 5: Attorney Information
+            field_templates = [
+                ("P5_1", "Attorney Last Name", FieldType.TEXT),
+                ("P5_2", "Attorney First Name", FieldType.TEXT),
+                ("P5_3", "Bar Number", FieldType.TEXT)
+            ]
+        else:
+            # Generic fields
+            field_templates = [
+                (f"P{part_number}_1", f"{part_title} - Field 1", FieldType.TEXT),
+                (f"P{part_number}_2", f"{part_title} - Field 2", FieldType.TEXT),
+                (f"P{part_number}_3", f"{part_title} - Field 3", FieldType.TEXT)
+            ]
+        
+        for field_num, field_label, field_type in field_templates:
+            field = SmartField(
+                field_number=field_num,
+                field_label=field_label,
+                field_value="",
+                field_type=field_type,
+                part_number=part_number,
+                extraction_confidence=0.3,
+                is_required=False
+            )
+            fallback_fields.append(field)
+        
+        return fallback_fields
+    
+    def _extract_part_text_from_pdf_corrected(self, part_number: int, part_title: str, full_text: str) -> str:
+        """Extract text for specific part with improved patterns"""
+        
+        lines = full_text.split('\n')
+        part_lines = []
+        found_part = False
+        
+        # Enhanced patterns for part detection
+        part_patterns = [
+            rf"Part\s+{part_number}[.\s:]",
+            rf"PART\s+{part_number}[.\s:]", 
+            rf"Part\s+{part_number}\.",
+            rf"{part_number}\.\s+",
+            part_title.replace(' ', r'\s+'),
+        ]
+        
+        # Find the start of this part
+        start_idx = 0
+        for i, line in enumerate(lines):
+            for pattern in part_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    start_idx = i
+                    found_part = True
+                    break
+            if found_part:
+                break
+        
+        # Find the end (next part or end of document)
+        end_idx = len(lines)
+        if found_part:
+            next_part_number = part_number + 1
+            for i in range(start_idx + 1, len(lines)):
+                line = lines[i]
+                next_part_patterns = [
+                    rf"Part\s+{next_part_number}[.\s:]",
+                    rf"PART\s+{next_part_number}[.\s:]"
+                ]
+                for pattern in next_part_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        end_idx = i
+                        break
+                if end_idx < len(lines):
+                    break
+        
+        # Extract the part text
+        if found_part:
+            part_text = '\n'.join(lines[start_idx:end_idx])
+        else:
+            # If specific part not found, use a portion of the full text
+            total_lines = len(lines)
+            chunk_size = total_lines // max(part_number, 1)
+            start_idx = (part_number - 1) * chunk_size
+            end_idx = min(start_idx + chunk_size, total_lines)
+            part_text = '\n'.join(lines[start_idx:end_idx])
+        
+        return part_text
+    
+    def _apply_intelligent_mapping_corrected(self, smart_form: SmartForm):
+        """Apply intelligent mapping with corrected database paths"""
+        
+        # Get all unmapped fields
+        unmapped_fields = smart_form.get_unmapped_fields()
+        
+        if not unmapped_fields:
+            return
+        
+        # Process fields in batches to reduce API calls
+        batch_size = 5
+        for i in range(0, len(unmapped_fields), batch_size):
+            batch = unmapped_fields[i:i+batch_size]
+            suggestions = self._get_mapping_suggestions_batch_corrected(batch)
+            
+            # Apply high-confidence mappings
+            for j, field in enumerate(batch):
+                if j < len(suggestions) and suggestions[j]:
+                    suggestion = suggestions[j]
+                    if suggestion.get('confidence', 0) > 0.85:
+                        field.is_mapped = True
+                        field.db_object = suggestion['db_object']
+                        field.db_path = suggestion['db_path']
+    
+    def _get_mapping_suggestions_batch_corrected(self, fields: List[SmartField]) -> List[Dict[str, Any]]:
+        """Get mapping suggestions with corrected database schema"""
+        
+        # Prepare batch data
+        fields_info = []
+        for field in fields:
+            field_info = {
+                "number": field.field_number,
+                "label": field.field_label,
+                "type": field.field_type.value,
+                "value": field.field_value[:50] if field.field_value else "",
+                "part": field.part_number
+            }
+            fields_info.append(field_info)
+        
+        # Prepare corrected schema info
+        schema_info = {}
+        for obj_name, obj_data in DATABASE_OBJECTS.items():
+            schema_info[obj_name] = {
+                "description": obj_data["description"],
+                "paths": obj_data["paths"][:15]  # Show more paths for better mapping
+            }
+        
+        prompt = f"""
+        Map these USCIS form fields to the correct database objects and paths.
+        
+        Fields to map:
+        {json.dumps(fields_info, indent=2)}
+        
+        Available database schema (use EXACT paths):
+        {json.dumps(schema_info, indent=2)}
+        
+        Mapping guidelines:
+        - attorney fields → "attorney" or "attorneyLawfirmDetails" 
+        - beneficiary fields → "beneficary" (note: spelled as "beneficary" in schema)
+        - employer/company fields → "customer"
+        - case info → "case"
+        - Use full dotted paths like "attorney.attorneyInfo.lastName"
+        - First name fields map to firstName/beneficiaryFirstName
+        - Last name fields map to lastName/beneficiaryLastName
+        - Address fields map to appropriate address objects
+        
+        Return ONLY valid JSON array:
+        
+        [
+            {{
+                "db_object": "beneficary",
+                "db_path": "Beneficiary.beneficiaryFirstName",
+                "confidence": 0.90
+            }},
+            {{
+                "db_object": "attorney", 
+                "db_path": "attorneyInfo.lastName",
+                "confidence": 0.85
+            }}
+        ]
+        
+        If no good mapping exists, use confidence below 0.5.
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=1500
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Use robust JSON parsing
+            suggestions = self._parse_json_robust(content)
+            
+            if not suggestions:
+                logger.warning("Failed to parse mapping suggestions, returning empty list")
+                return []
+            
+            return suggestions
+            
+        except Exception as e:
+            logger.error(f"Batch mapping failed: {e}")
+            return []
+    
+    # Keep the existing JSON parsing methods
     def _parse_json_robust_dict(self, content: str) -> Dict[str, Any]:
         """Robust JSON parsing for dictionary responses"""
         
@@ -669,114 +1082,6 @@ class AgenticProcessor:
         logger.error(f"All JSON parsing strategies failed for dict. Content: {content[:500]}...")
         return {}
     
-    def _get_fallback_form_data(self) -> Dict[str, Any]:
-        """Get fallback form data when analysis fails"""
-        
-        return {
-            'form_number': 'Unknown',
-            'form_title': 'Unknown Form',
-            'form_edition': '',
-            'parts': [{"number": 1, "title": "Form Information", "description": "All form fields"}]
-        }
-    
-    def _extract_fields_for_part(self, part_data: Dict[str, Any], full_pdf_text: str) -> List[SmartField]:
-        """Extract fields for a specific part with robust JSON parsing"""
-        
-        part_number = part_data.get('number', 1)
-        part_title = part_data.get('title', 'Unknown Part')
-        
-        # Try to find the relevant section in the PDF text
-        part_text = self._extract_part_text_from_pdf(part_number, part_title, full_pdf_text)
-        
-        # Limit text for API call
-        if len(part_text) > 8000:
-            part_text = part_text[:8000] + "\n[...text truncated...]"
-        
-        prompt = f"""
-        Extract ALL form fields from Part {part_number}: {part_title} of this USCIS form.
-        
-        Look for:
-        - Numbered fields (1.a, 1.b, 2.a, etc.)
-        - Field labels and descriptions
-        - Any existing values
-        - Field types (text, date, checkbox, etc.)
-        
-        IMPORTANT: Return ONLY valid JSON. Ensure all property names are in double quotes.
-        
-        [
-            {{
-                "field_number": "1.a",
-                "field_label": "Family Name (Last Name)",
-                "field_value": "",
-                "field_type": "text",
-                "is_required": true,
-                "confidence": 0.85
-            }}
-        ]
-        
-        Field types: text, date, checkbox, radio, number, email, phone, address, ssn, alien_number
-        
-        Part text:
-        {part_text}
-        """
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=2500
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Clean and parse JSON response with robust error handling
-            fields_data = self._parse_json_robust(content)
-            
-            if not fields_data:
-                st.warning(f"⚠️ No valid JSON returned for Part {part_number}, creating fallback field")
-                return self._create_fallback_fields(part_number, part_title)
-            
-            fields = []
-            for i, field_data in enumerate(fields_data):
-                try:
-                    # Convert field type
-                    field_type_str = field_data.get('field_type', 'text')
-                    try:
-                        field_type = FieldType(field_type_str)
-                    except ValueError:
-                        field_type = FieldType.TEXT
-                    
-                    # Create field number fallback
-                    field_num = field_data.get('field_number', f'{part_number}.{chr(97+i)}')
-                    
-                    field = SmartField(
-                        field_number=field_num,
-                        field_label=field_data.get('field_label', 'Unknown Field'),
-                        field_value=field_data.get('field_value', ''),
-                        field_type=field_type,
-                        part_number=part_number,
-                        extraction_confidence=field_data.get('confidence', 0.5),
-                        is_required=field_data.get('is_required', False)
-                    )
-                    
-                    fields.append(field)
-                    
-                except Exception as e:
-                    logger.error(f"Failed to create field {i}: {e}")
-                    continue
-            
-            if not fields:
-                st.warning(f"⚠️ No fields created for Part {part_number}, using fallback")
-                return self._create_fallback_fields(part_number, part_title)
-            
-            return fields
-            
-        except Exception as e:
-            logger.error(f"Field extraction failed for part {part_number}: {e}")
-            st.warning(f"⚠️ Field extraction failed for Part {part_number}, using fallback")
-            return self._create_fallback_fields(part_number, part_title)
-    
     def _parse_json_robust(self, content: str) -> List[Dict[str, Any]]:
         """Robust JSON parsing with multiple fallback strategies"""
         
@@ -831,196 +1136,10 @@ class AgenticProcessor:
         except json.JSONDecodeError:
             pass
         
-        # Strategy 4: Extract individual objects
-        try:
-            objects = []
-            object_pattern = r'\{[^{}]*\}'
-            matches = re.findall(object_pattern, content)
-            
-            for match in matches:
-                try:
-                    obj = json.loads(match)
-                    if 'field_number' in obj or 'field_label' in obj:
-                        objects.append(obj)
-                except:
-                    continue
-            
-            if objects:
-                return objects
-        except:
-            pass
-        
         logger.error(f"All JSON parsing strategies failed. Content: {content[:500]}...")
         return []
-    
-    def _create_fallback_fields(self, part_number: int, part_title: str) -> List[SmartField]:
-        """Create fallback fields when extraction fails"""
-        
-        fallback_fields = []
-        
-        # Create a few generic fields for the part
-        for i in range(3):
-            field = SmartField(
-                field_number=f"{part_number}.{chr(97+i)}",
-                field_label=f"{part_title} - Field {i+1}",
-                field_value="",
-                field_type=FieldType.TEXT,
-                part_number=part_number,
-                extraction_confidence=0.3,
-                is_required=False
-            )
-            fallback_fields.append(field)
-        
-        return fallback_fields
-    
-    def _extract_part_text_from_pdf(self, part_number: int, part_title: str, full_text: str) -> str:
-        """Extract relevant text for a specific part from the full PDF text"""
-        
-        # Look for part boundaries
-        lines = full_text.split('\n')
-        part_lines = []
-        found_part = False
-        
-        # Patterns to match part headers
-        part_patterns = [
-            rf"Part\s+{part_number}[.\s]",
-            rf"PART\s+{part_number}[.\s]",
-            rf"{part_number}\.\s",
-            part_title.replace(' ', r'\s+'),
-        ]
-        
-        # Find the start of this part
-        start_idx = 0
-        for i, line in enumerate(lines):
-            for pattern in part_patterns:
-                if re.search(pattern, line, re.IGNORECASE):
-                    start_idx = i
-                    found_part = True
-                    break
-            if found_part:
-                break
-        
-        # Find the end (next part or end of document)
-        end_idx = len(lines)
-        if found_part:
-            next_part_number = part_number + 1
-            for i in range(start_idx + 1, len(lines)):
-                line = lines[i]
-                next_part_pattern = rf"Part\s+{next_part_number}[.\s]"
-                if re.search(next_part_pattern, line, re.IGNORECASE):
-                    end_idx = i
-                    break
-        
-        # Extract the part text
-        if found_part:
-            part_text = '\n'.join(lines[start_idx:end_idx])
-        else:
-            # If specific part not found, use a portion of the full text
-            total_lines = len(lines)
-            chunk_size = total_lines // max(part_number, 1)
-            start_idx = (part_number - 1) * chunk_size
-            end_idx = min(start_idx + chunk_size, total_lines)
-            part_text = '\n'.join(lines[start_idx:end_idx])
-        
-        return part_text
-    
-    def _apply_intelligent_mapping(self, smart_form: SmartForm):
-        """Apply intelligent mapping with reduced API calls"""
-        
-        # Get all unmapped fields
-        unmapped_fields = smart_form.get_unmapped_fields()
-        
-        if not unmapped_fields:
-            return
-        
-        # Process fields in batches to reduce API calls
-        batch_size = 5
-        for i in range(0, len(unmapped_fields), batch_size):
-            batch = unmapped_fields[i:i+batch_size]
-            suggestions = self._get_mapping_suggestions_batch(batch)
-            
-            # Apply high-confidence mappings
-            for j, field in enumerate(batch):
-                if j < len(suggestions) and suggestions[j]:
-                    suggestion = suggestions[j]
-                    if suggestion.get('confidence', 0) > 0.85:
-                        field.is_mapped = True
-                        field.db_object = suggestion['db_object']
-                        field.db_path = suggestion['db_path']
-    
-    def _get_mapping_suggestions_batch(self, fields: List[SmartField]) -> List[Dict[str, Any]]:
-        """Get mapping suggestions for a batch of fields with robust JSON parsing"""
-        
-        # Prepare batch data
-        fields_info = []
-        for field in fields:
-            field_info = {
-                "number": field.field_number,
-                "label": field.field_label,
-                "type": field.field_type.value,
-                "value": field.field_value[:50]
-            }
-            fields_info.append(field_info)
-        
-        # Prepare schema info
-        schema_info = {}
-        for obj_name, obj_data in DATABASE_OBJECTS.items():
-            schema_info[obj_name] = {
-                "description": obj_data["description"],
-                "paths": obj_data["paths"][:10]  # Limit paths for token efficiency
-            }
-        
-        prompt = f"""
-        Map these USCIS form fields to database objects and paths.
-        
-        Fields to map:
-        {json.dumps(fields_info, indent=2)}
-        
-        Available database schema:
-        {json.dumps(schema_info, indent=2)}
-        
-        IMPORTANT: Return ONLY valid JSON array with all property names in double quotes.
-        
-        [
-            {{
-                "db_object": "beneficiary",
-                "db_path": "beneficiaryFirstName",
-                "confidence": 0.90
-            }},
-            {{
-                "db_object": "attorney",
-                "db_path": "lastName", 
-                "confidence": 0.75
-            }}
-        ]
-        
-        If no good mapping exists, use confidence below 0.5.
-        """
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=1000
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Use robust JSON parsing
-            suggestions = self._parse_json_robust(content)
-            
-            if not suggestions:
-                logger.warning("Failed to parse mapping suggestions, returning empty list")
-                return []
-            
-            return suggestions
-            
-        except Exception as e:
-            logger.error(f"Batch mapping failed: {e}")
-            return []
 
-# ===== UI COMPONENTS =====
+# ===== UI COMPONENTS (Keep existing but update database objects) =====
 
 def display_agent_status(processing_stage: ProcessingStage, progress_text: str = ""):
     """Display agent status"""
@@ -1038,7 +1157,7 @@ def display_agent_status(processing_stage: ProcessingStage, progress_text: str =
     
     st.markdown(f"""
     <div class="agent-status">
-        <h3>{info['icon']} Agentic USCIS Reader</h3>
+        <h3>{info['icon']} Agentic USCIS Reader - CORRECTED</h3>
         <p><strong>Status:</strong> {info['text']}</p>
         {f'<p><em>{progress_text}</em></p>' if progress_text else ''}
     </div>
@@ -1153,12 +1272,12 @@ def display_smart_field(field: SmartField, field_key: str):
     
     # Mapping interface
     if st.session_state.get(f"show_mapping_{field_key}", False):
-        display_mapping_interface(field, field_key)
+        display_mapping_interface_corrected(field, field_key)
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-def display_mapping_interface(field: SmartField, field_key: str):
-    """Display proper mapping interface with working dropdowns"""
+def display_mapping_interface_corrected(field: SmartField, field_key: str):
+    """Display corrected mapping interface with proper database objects"""
     
     st.markdown('<div class="mapping-interface">', unsafe_allow_html=True)
     st.markdown("#### 🔗 Map to Database")
@@ -1323,7 +1442,7 @@ def display_export_options(smart_form: SmartForm):
         st.info(f"Ready: {mapped_count} mapped fields")
         
         if st.button("Generate TypeScript", type="primary"):
-            ts_content = generate_typescript_mappings(smart_form, mapped_fields)
+            ts_content = generate_typescript_mappings_corrected(smart_form, mapped_fields)
             st.code(ts_content, language="typescript")
             
             filename = f"{smart_form.form_number.replace('-', '_')}_mappings.ts"
@@ -1410,10 +1529,10 @@ def display_questionnaire_interface(smart_form: SmartForm):
                 field.in_questionnaire = False
                 st.rerun()
 
-# ===== EXPORT FUNCTIONS =====
+# ===== CORRECTED EXPORT FUNCTIONS =====
 
-def generate_typescript_mappings(smart_form: SmartForm, mapped_fields: List[SmartField]) -> str:
-    """Generate TypeScript mappings"""
+def generate_typescript_mappings_corrected(smart_form: SmartForm, mapped_fields: List[SmartField]) -> str:
+    """Generate TypeScript mappings with corrected structure"""
     
     form_id = smart_form.form_number.replace('-', '_')
     generation_date = datetime.now().isoformat()
@@ -1422,6 +1541,8 @@ def generate_typescript_mappings(smart_form: SmartForm, mapped_fields: List[Smar
  * TypeScript mappings for {smart_form.form_number}
  * Form: {smart_form.form_title}
  * Generated: {generation_date}
+ * 
+ * Corrected structure matching actual database schema
  */
 
 export interface {form_id}Mapping {{
@@ -1438,14 +1559,27 @@ export interface {form_id}Mapping {{
         ts_content += f"  {obj_name}: {{\n"
         for field in fields:
             ts_content += f"    \"{field.field_number}\": {{\n"
-            ts_content += f"      path: \"{field.db_path}\",\n"
-            ts_content += f"      value: \"{field.field_value}\",\n"
-            ts_content += f"      type: \"{field.field_type.value}\",\n"
-            ts_content += f"      label: \"{field.field_label}\"\n"
+            ts_content += f"      Name: \"{field.field_number}\",\n"
+            ts_content += f"      Value: \"{obj_name}.{field.db_path}\",\n"
+            ts_content += f"      Type: \"{field.field_type.value.title()}Box\",\n"
+            ts_content += f"      Label: \"{field.field_label}\",\n"
+            ts_content += f"      CurrentValue: \"{field.field_value}\"\n"
             ts_content += f"    }},\n"
         ts_content += f"  }},\n"
     
-    ts_content += "}\n"
+    ts_content += "}\n\n"
+    
+    # Add static mapping array format
+    ts_content += f"export const {form_id}_MAPPINGS: any[] = [\n"
+    
+    for field in mapped_fields:
+        ts_content += f"  {{\n"
+        ts_content += f"    Name: \"{field.field_number}\",\n"
+        ts_content += f"    Value: \"{field.db_object}.{field.db_path}\",\n"
+        ts_content += f"    Type: \"{field.field_type.value.title()}Box\",\n"
+        ts_content += f"  }},\n"
+    
+    ts_content += "];\n"
     
     return ts_content
 
@@ -1480,8 +1614,8 @@ def generate_json_questionnaire(smart_form: SmartForm, questionnaire_fields: Lis
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>🤖 Agentic USCIS Form Reader</h1>'
-        '<p>AI-powered system for intelligent USCIS form processing</p>'
+        '<h1>🤖 Agentic USCIS Form Reader - CORRECTED</h1>'
+        '<p>AI-powered system with proper form structure and database mapping</p>'
         '</div>', 
         unsafe_allow_html=True
     )
@@ -1524,6 +1658,16 @@ def main():
             for key in keys_to_clear:
                 del st.session_state[key]
             st.rerun()
+        
+        # Show corrected database schema
+        st.markdown("### 📊 Corrected DB Schema")
+        for obj_name, obj_info in DATABASE_OBJECTS.items():
+            with st.expander(f"{obj_info['icon']} {obj_info['label']}"):
+                st.caption(obj_info['description'])
+                for path in obj_info['paths'][:5]:  # Show first 5 paths
+                    st.code(f"{obj_name}.{path}")
+                if len(obj_info['paths']) > 5:
+                    st.caption(f"...and {len(obj_info['paths']) - 5} more")
         
         # Show stats if form is loaded
         if st.session_state.smart_form:
