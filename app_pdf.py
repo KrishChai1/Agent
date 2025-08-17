@@ -543,7 +543,7 @@ class AgenticProcessor:
             return None
     
     def _analyze_form_and_extract_parts(self, pdf_text: str) -> Dict[str, Any]:
-        """Analyze form and extract parts in a single API call"""
+        """Analyze form and extract parts in a single API call with robust JSON parsing"""
         
         # Limit text length for API call
         analysis_text = pdf_text[:10000]  # First 10k characters should contain form structure
@@ -559,7 +559,8 @@ class AgenticProcessor:
         
         Look for patterns like "Part 1.", "Part 2.", etc. and extract the complete part titles.
         
-        Return ONLY a JSON object:
+        IMPORTANT: Return ONLY valid JSON with all property names in double quotes.
+        
         {{
             "form_number": "extracted_form_number",
             "form_title": "extracted_form_title",
@@ -594,13 +595,12 @@ class AgenticProcessor:
             
             content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0]
-            elif '```' in content:
-                content = content.split('```')[1].split('```')[0]
+            # Use robust JSON parsing
+            data = self._parse_json_robust_dict(content)
             
-            data = json.loads(content.strip())
+            if not data:
+                logger.warning("Failed to parse form analysis JSON, using fallback")
+                return self._get_fallback_form_data()
             
             # Ensure we have at least one part
             if not data.get('parts'):
@@ -611,15 +611,76 @@ class AgenticProcessor:
             
         except Exception as e:
             logger.error(f"Form analysis failed: {e}")
-            return {
-                'form_number': 'Unknown',
-                'form_title': 'Unknown Form',
-                'form_edition': '',
-                'parts': [{"number": 1, "title": "Form Information", "description": "All form fields"}]
-            }
+            return self._get_fallback_form_data()
+    
+    def _parse_json_robust_dict(self, content: str) -> Dict[str, Any]:
+        """Robust JSON parsing for dictionary responses"""
+        
+        # Strategy 1: Standard extraction
+        try:
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0]
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0]
+            
+            return json.loads(content.strip())
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 2: Find JSON object in content
+        try:
+            # Look for object pattern
+            start = content.find('{')
+            end = content.rfind('}') + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+                return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 3: Clean up common JSON issues
+        try:
+            cleaned = content.strip()
+            
+            # Remove markdown
+            if '```' in cleaned:
+                lines = cleaned.split('\n')
+                cleaned_lines = []
+                in_json = False
+                for line in lines:
+                    if '```' in line:
+                        in_json = not in_json
+                        continue
+                    if in_json:
+                        cleaned_lines.append(line)
+                cleaned = '\n'.join(cleaned_lines)
+            
+            # Fix trailing commas
+            cleaned = re.sub(r',\s*}', '}', cleaned)
+            cleaned = re.sub(r',\s*]', ']', cleaned)
+            
+            # Fix single quotes to double quotes
+            cleaned = re.sub(r"'([^']*)':", r'"\1":', cleaned)
+            
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+        
+        logger.error(f"All JSON parsing strategies failed for dict. Content: {content[:500]}...")
+        return {}
+    
+    def _get_fallback_form_data(self) -> Dict[str, Any]:
+        """Get fallback form data when analysis fails"""
+        
+        return {
+            'form_number': 'Unknown',
+            'form_title': 'Unknown Form',
+            'form_edition': '',
+            'parts': [{"number": 1, "title": "Form Information", "description": "All form fields"}]
+        }
     
     def _extract_fields_for_part(self, part_data: Dict[str, Any], full_pdf_text: str) -> List[SmartField]:
-        """Extract fields for a specific part"""
+        """Extract fields for a specific part with robust JSON parsing"""
         
         part_number = part_data.get('number', 1)
         part_title = part_data.get('title', 'Unknown Part')
@@ -640,12 +701,13 @@ class AgenticProcessor:
         - Any existing values
         - Field types (text, date, checkbox, etc.)
         
-        Return ONLY a JSON array:
+        IMPORTANT: Return ONLY valid JSON. Ensure all property names are in double quotes.
+        
         [
             {{
                 "field_number": "1.a",
                 "field_label": "Family Name (Last Name)",
-                "field_value": "extracted_value_or_empty",
+                "field_value": "",
                 "field_type": "text",
                 "is_required": true,
                 "confidence": 0.85
@@ -668,13 +730,12 @@ class AgenticProcessor:
             
             content = response.choices[0].message.content.strip()
             
-            # Parse JSON response
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0]
-            elif '```' in content:
-                content = content.split('```')[1].split('```')[0]
+            # Clean and parse JSON response with robust error handling
+            fields_data = self._parse_json_robust(content)
             
-            fields_data = json.loads(content.strip())
+            if not fields_data:
+                st.warning(f"⚠️ No valid JSON returned for Part {part_number}, creating fallback field")
+                return self._create_fallback_fields(part_number, part_title)
             
             fields = []
             for i, field_data in enumerate(fields_data):
@@ -702,14 +763,115 @@ class AgenticProcessor:
                     fields.append(field)
                     
                 except Exception as e:
-                    logger.error(f"Failed to create field: {e}")
+                    logger.error(f"Failed to create field {i}: {e}")
                     continue
+            
+            if not fields:
+                st.warning(f"⚠️ No fields created for Part {part_number}, using fallback")
+                return self._create_fallback_fields(part_number, part_title)
             
             return fields
             
         except Exception as e:
             logger.error(f"Field extraction failed for part {part_number}: {e}")
-            return []
+            st.warning(f"⚠️ Field extraction failed for Part {part_number}, using fallback")
+            return self._create_fallback_fields(part_number, part_title)
+    
+    def _parse_json_robust(self, content: str) -> List[Dict[str, Any]]:
+        """Robust JSON parsing with multiple fallback strategies"""
+        
+        # Strategy 1: Standard extraction
+        try:
+            if '```json' in content:
+                content = content.split('```json')[1].split('```')[0]
+            elif '```' in content:
+                content = content.split('```')[1].split('```')[0]
+            
+            return json.loads(content.strip())
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 2: Find JSON array in content
+        try:
+            # Look for array pattern
+            start = content.find('[')
+            end = content.rfind(']') + 1
+            if start != -1 and end > start:
+                json_str = content[start:end]
+                return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 3: Clean up common JSON issues
+        try:
+            # Fix common issues
+            cleaned = content.strip()
+            
+            # Remove markdown
+            if '```' in cleaned:
+                lines = cleaned.split('\n')
+                cleaned_lines = []
+                in_json = False
+                for line in lines:
+                    if '```' in line:
+                        in_json = not in_json
+                        continue
+                    if in_json:
+                        cleaned_lines.append(line)
+                cleaned = '\n'.join(cleaned_lines)
+            
+            # Fix trailing commas
+            cleaned = re.sub(r',\s*}', '}', cleaned)
+            cleaned = re.sub(r',\s*]', ']', cleaned)
+            
+            # Fix single quotes to double quotes
+            cleaned = re.sub(r"'([^']*)':", r'"\1":', cleaned)
+            
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 4: Extract individual objects
+        try:
+            objects = []
+            object_pattern = r'\{[^{}]*\}'
+            matches = re.findall(object_pattern, content)
+            
+            for match in matches:
+                try:
+                    obj = json.loads(match)
+                    if 'field_number' in obj or 'field_label' in obj:
+                        objects.append(obj)
+                except:
+                    continue
+            
+            if objects:
+                return objects
+        except:
+            pass
+        
+        logger.error(f"All JSON parsing strategies failed. Content: {content[:500]}...")
+        return []
+    
+    def _create_fallback_fields(self, part_number: int, part_title: str) -> List[SmartField]:
+        """Create fallback fields when extraction fails"""
+        
+        fallback_fields = []
+        
+        # Create a few generic fields for the part
+        for i in range(3):
+            field = SmartField(
+                field_number=f"{part_number}.{chr(97+i)}",
+                field_label=f"{part_title} - Field {i+1}",
+                field_value="",
+                field_type=FieldType.TEXT,
+                part_number=part_number,
+                extraction_confidence=0.3,
+                is_required=False
+            )
+            fallback_fields.append(field)
+        
+        return fallback_fields
     
     def _extract_part_text_from_pdf(self, part_number: int, part_title: str, full_text: str) -> str:
         """Extract relevant text for a specific part from the full PDF text"""
@@ -787,7 +949,7 @@ class AgenticProcessor:
                         field.db_path = suggestion['db_path']
     
     def _get_mapping_suggestions_batch(self, fields: List[SmartField]) -> List[Dict[str, Any]]:
-        """Get mapping suggestions for a batch of fields"""
+        """Get mapping suggestions for a batch of fields with robust JSON parsing"""
         
         # Prepare batch data
         fields_info = []
@@ -817,7 +979,8 @@ class AgenticProcessor:
         Available database schema:
         {json.dumps(schema_info, indent=2)}
         
-        Return ONLY a JSON array with one mapping per field:
+        IMPORTANT: Return ONLY valid JSON array with all property names in double quotes.
+        
         [
             {{
                 "db_object": "beneficiary",
@@ -844,12 +1007,14 @@ class AgenticProcessor:
             
             content = response.choices[0].message.content.strip()
             
-            if '```json' in content:
-                content = content.split('```json')[1].split('```')[0]
-            elif '```' in content:
-                content = content.split('```')[1].split('```')[0]
+            # Use robust JSON parsing
+            suggestions = self._parse_json_robust(content)
             
-            return json.loads(content.strip())
+            if not suggestions:
+                logger.warning("Failed to parse mapping suggestions, returning empty list")
+                return []
+            
+            return suggestions
             
         except Exception as e:
             logger.error(f"Batch mapping failed: {e}")
