@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Simplified Working USCIS Form Processing System
-- Fixed PDF reading with immediate results display
-- Simplified workflow without complex stage management
-- Better error handling and debugging
+Complete Fixed USCIS Form Processing System
+- Fixed PDF reading with improved error handling
+- Multiple fallback extraction methods
+- Better resource management
 - Manual editing and database integration
 - Questionnaire for missing fields
 """
@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+from contextlib import contextmanager
 
 import streamlit as st
 import pandas as pd
@@ -200,39 +201,36 @@ class SimpleDatabase:
             result = cursor.fetchone()
             return json.loads(result[0]) if result else None
 
-# ===== PDF EXTRACTION =====
-def extract_pdf_text_simple(pdf_file) -> str:
-    """Simplified PDF extraction with better error reporting"""
+# ===== IMPROVED PDF EXTRACTION =====
+@contextmanager
+def safe_pdf_context(pdf_source):
+    """Context manager for safe PDF handling"""
+    doc = None
     try:
-        st.info(f"📄 Processing file: {pdf_file.name}")
+        if isinstance(pdf_source, bytes):
+            doc = fitz.open(stream=pdf_source, filetype="pdf")
+        else:
+            doc = fitz.open(pdf_source)
+        yield doc
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except:
+                pass
+
+def extract_from_memory(pdf_bytes) -> str:
+    """Extract PDF text directly from memory bytes"""
+    doc = None
+    try:
+        # Open document from memory
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        st.success(f"✅ PDF opened from memory - {len(doc)} pages")
         
-        # Read file bytes
-        pdf_file.seek(0)
-        pdf_bytes = pdf_file.read()
-        
-        if len(pdf_bytes) == 0:
-            st.error("❌ File is empty")
-            return ""
-        
-        st.success(f"✅ Read {len(pdf_bytes):,} bytes")
-        
-        # Check PDF header
-        if not pdf_bytes.startswith(b'%PDF'):
-            st.error("❌ Not a valid PDF file")
-            return ""
-        
-        # Open with PyMuPDF
-        try:
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            st.success(f"✅ PDF opened - {len(doc)} pages")
-        except Exception as e:
-            st.error(f"❌ Cannot open PDF: {str(e)}")
-            return ""
-        
-        # Extract text
         full_text = ""
         pages_with_text = 0
         
+        # Extract text from each page
         for page_num in range(len(doc)):
             try:
                 page = doc[page_num]
@@ -244,16 +242,182 @@ def extract_pdf_text_simple(pdf_file) -> str:
                     
             except Exception as e:
                 st.warning(f"⚠️ Error on page {page_num + 1}: {str(e)}")
+                continue
         
-        doc.close()
+        if not full_text.strip():
+            st.warning("⚠️ No text found in memory extraction")
+            return ""
+        
+        st.success(f"✅ Memory extraction: {pages_with_text}/{len(doc)} pages")
+        return full_text
+        
+    except Exception as e:
+        st.warning(f"⚠️ Memory extraction failed: {str(e)}")
+        return ""
+    finally:
+        # Ensure document is properly closed
+        if doc is not None:
+            try:
+                doc.close()
+            except:
+                pass  # Ignore close errors
+
+def extract_from_temp_file(pdf_bytes) -> str:
+    """Extract PDF text using temporary file approach"""
+    temp_file_path = None
+    doc = None
+    
+    try:
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            temp_file.write(pdf_bytes)
+            temp_file_path = temp_file.name
+        
+        st.info(f"📁 Created temporary file: {temp_file_path}")
+        
+        # Open PDF from file
+        doc = fitz.open(temp_file_path)
+        st.success(f"✅ PDF opened from file - {len(doc)} pages")
+        
+        full_text = ""
+        pages_with_text = 0
+        
+        # Extract text from each page
+        for page_num in range(len(doc)):
+            try:
+                page = doc[page_num]
+                page_text = page.get_text()
+                
+                if page_text.strip():
+                    full_text += f"\n=== PAGE {page_num + 1} ===\n{page_text}\n"
+                    pages_with_text += 1
+                    
+            except Exception as e:
+                st.warning(f"⚠️ Error on page {page_num + 1}: {str(e)}")
+                continue
         
         if not full_text.strip():
             st.error("❌ No text found - this might be an image-based PDF")
             st.info("💡 Try using OCR software first, or use a PDF with selectable text")
             return ""
         
-        st.success(f"✅ Extracted text from {pages_with_text}/{len(doc)} pages")
+        st.success(f"✅ File extraction: {pages_with_text}/{len(doc)} pages")
         return full_text
+        
+    except Exception as e:
+        st.error(f"❌ File extraction failed: {str(e)}")
+        return ""
+    finally:
+        # Clean up resources
+        if doc is not None:
+            try:
+                doc.close()
+            except:
+                pass  # Ignore close errors
+        
+        # Remove temporary file
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                st.info("🗑️ Cleaned up temporary file")
+            except:
+                pass  # Ignore cleanup errors
+
+def extract_pdf_text_with_context(pdf_file) -> str:
+    """Alternative extraction using context manager"""
+    try:
+        st.info(f"📄 Processing with context manager: {pdf_file.name}")
+        
+        pdf_file.seek(0)
+        pdf_bytes = pdf_file.read()
+        
+        if len(pdf_bytes) == 0:
+            st.error("❌ File is empty")
+            return ""
+        
+        if not pdf_bytes.startswith(b'%PDF'):
+            st.error("❌ Not a valid PDF file")
+            return ""
+        
+        full_text = ""
+        pages_with_text = 0
+        
+        with safe_pdf_context(pdf_bytes) as doc:
+            st.success(f"✅ PDF opened with context - {len(doc)} pages")
+            
+            for page_num in range(len(doc)):
+                try:
+                    page = doc[page_num]
+                    page_text = page.get_text()
+                    
+                    if page_text.strip():
+                        full_text += f"\n=== PAGE {page_num + 1} ===\n{page_text}\n"
+                        pages_with_text += 1
+                        
+                except Exception as e:
+                    st.warning(f"⚠️ Error on page {page_num + 1}: {str(e)}")
+                    continue
+        
+        if not full_text.strip():
+            st.error("❌ No text found")
+            return ""
+        
+        st.success(f"✅ Context extraction: {pages_with_text} pages")
+        return full_text
+        
+    except Exception as e:
+        st.error(f"❌ Context extraction failed: {str(e)}")
+        return ""
+
+def extract_pdf_text_simple(pdf_file) -> str:
+    """
+    Main PDF extraction function with multiple fallback methods
+    Fixes the "document closed" error
+    """
+    try:
+        st.info(f"📄 Processing file: {pdf_file.name}")
+        
+        # Reset file pointer to beginning
+        pdf_file.seek(0)
+        pdf_bytes = pdf_file.read()
+        
+        if len(pdf_bytes) == 0:
+            st.error("❌ File is empty")
+            return ""
+        
+        st.success(f"✅ Read {len(pdf_bytes):,} bytes")
+        
+        # Validate PDF header
+        if not pdf_bytes.startswith(b'%PDF'):
+            st.error("❌ Not a valid PDF file")
+            return ""
+        
+        # Method 1: Try direct memory approach first
+        full_text = extract_from_memory(pdf_bytes)
+        if full_text:
+            return full_text
+        
+        # Method 2: Fallback to temporary file approach
+        st.info("🔄 Trying alternative extraction method...")
+        full_text = extract_from_temp_file(pdf_bytes)
+        if full_text:
+            return full_text
+        
+        # Method 3: Context manager approach
+        st.info("🔄 Trying context manager approach...")
+        full_text = extract_pdf_text_with_context(pdf_file)
+        if full_text:
+            return full_text
+        
+        # If all methods fail
+        st.error("❌ All extraction methods failed")
+        st.info("💡 Possible solutions:")
+        st.info("   • Try a different PDF file")
+        st.info("   • Use OCR if it's an image-based PDF")
+        st.info("   • Check if the PDF is corrupted")
+        st.info("   • Ensure PyMuPDF is properly installed: pip install --upgrade PyMuPDF")
+        
+        return ""
         
     except Exception as e:
         st.error(f"💥 PDF extraction failed: {str(e)}")
@@ -740,8 +904,8 @@ def load_submission(db: SimpleDatabase, submission_id: int):
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>🤖 USCIS Form Processor - Fixed Version</h1>'
-        '<p>Simple, working AI extraction with manual editing and database</p>'
+        '<h1>🤖 USCIS Form Processor - Complete Fixed Version</h1>'
+        '<p>AI-powered form extraction with robust PDF handling and manual editing</p>'
         '</div>', 
         unsafe_allow_html=True
     )
