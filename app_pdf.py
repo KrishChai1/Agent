@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Complete Fixed USCIS Form Processing System
-- Fixed PDF reading with improved error handling
-- Multiple fallback extraction methods
-- Better resource management
-- Manual editing and database integration
-- Questionnaire for missing fields
+Complete Generic USCIS Form Processing System
+- Properly detects ANY USCIS form type
+- Dynamically extracts ALL parts and fields
+- No hardcoded assumptions about form structure
+- Works with I-90, I-130, I-485, N-400, G-28, I-129, etc.
 """
 
 import os
@@ -42,12 +41,12 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="USCIS Form Processor - Fixed",
+    page_title="Generic USCIS Form Processor",
     page_icon="🤖",
     layout="wide"
 )
 
-# Simplified CSS
+# CSS
 st.markdown("""
 <style>
     .main-header {
@@ -77,18 +76,12 @@ st.markdown("""
         border-left: 4px solid #ffc107;
     }
     
-    .field-error {
-        background: #ffebee;
-        border-left: 4px solid #f44336;
-    }
-    
-    .debug-info {
-        background: #f5f5f5;
+    .form-detection {
+        background: #e3f2fd;
+        border-left: 4px solid #2196f3;
         padding: 1rem;
-        border-radius: 4px;
-        font-family: monospace;
-        font-size: 0.9rem;
         margin: 1rem 0;
+        border-radius: 4px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -103,7 +96,7 @@ class ExtractedField:
     confidence: float = 0.0
     is_required: bool = False
     manually_edited: bool = False
-    questionnaire_response: str = ""
+    page_number: int = 0
     
     def to_dict(self):
         return {
@@ -114,7 +107,7 @@ class ExtractedField:
             'confidence': self.confidence,
             'is_required': self.is_required,
             'manually_edited': self.manually_edited,
-            'questionnaire_response': self.questionnaire_response
+            'page_number': self.page_number
         }
 
 @dataclass
@@ -136,6 +129,8 @@ class FormPart:
 class FormResult:
     form_number: str
     form_title: str
+    form_edition: str = ""
+    total_pages: int = 0
     parts: Dict[int, FormPart] = field(default_factory=dict)
     total_fields: int = 0
     filled_fields: int = 0
@@ -146,9 +141,9 @@ class FormResult:
         self.filled_fields = sum(1 for part in self.parts.values() 
                                 for field in part.fields if field.field_value and field.field_value.strip())
 
-# ===== DATABASE =====
+# ===== DATABASE (Same as before) =====
 class SimpleDatabase:
-    def __init__(self, db_path: str = "uscis_simple.db"):
+    def __init__(self, db_path: str = "uscis_generic.db"):
         self.db_path = db_path
         self.init_database()
     
@@ -178,6 +173,8 @@ class SimpleDatabase:
                 form_result.filled_fields,
                 json.dumps({
                     'form_title': form_result.form_title,
+                    'form_edition': form_result.form_edition,
+                    'total_pages': form_result.total_pages,
                     'parts': {str(k): {
                         'title': v.title,
                         'fields': [f.to_dict() for f in v.fields]
@@ -201,7 +198,7 @@ class SimpleDatabase:
             result = cursor.fetchone()
             return json.loads(result[0]) if result else None
 
-# ===== IMPROVED PDF EXTRACTION =====
+# ===== IMPROVED PDF EXTRACTION (Same as before) =====
 @contextmanager
 def safe_pdf_context(pdf_source):
     """Context manager for safe PDF handling"""
@@ -223,14 +220,12 @@ def extract_from_memory(pdf_bytes) -> str:
     """Extract PDF text directly from memory bytes"""
     doc = None
     try:
-        # Open document from memory
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         st.success(f"✅ PDF opened from memory - {len(doc)} pages")
         
         full_text = ""
         pages_with_text = 0
         
-        # Extract text from each page
         for page_num in range(len(doc)):
             try:
                 page = doc[page_num]
@@ -255,12 +250,11 @@ def extract_from_memory(pdf_bytes) -> str:
         st.warning(f"⚠️ Memory extraction failed: {str(e)}")
         return ""
     finally:
-        # Ensure document is properly closed
         if doc is not None:
             try:
                 doc.close()
             except:
-                pass  # Ignore close errors
+                pass
 
 def extract_from_temp_file(pdf_bytes) -> str:
     """Extract PDF text using temporary file approach"""
@@ -268,21 +262,16 @@ def extract_from_temp_file(pdf_bytes) -> str:
     doc = None
     
     try:
-        # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
             temp_file.write(pdf_bytes)
             temp_file_path = temp_file.name
         
-        st.info(f"📁 Created temporary file: {temp_file_path}")
-        
-        # Open PDF from file
         doc = fitz.open(temp_file_path)
         st.success(f"✅ PDF opened from file - {len(doc)} pages")
         
         full_text = ""
         pages_with_text = 0
         
-        # Extract text from each page
         for page_num in range(len(doc)):
             try:
                 page = doc[page_num]
@@ -298,7 +287,6 @@ def extract_from_temp_file(pdf_bytes) -> str:
         
         if not full_text.strip():
             st.error("❌ No text found - this might be an image-based PDF")
-            st.info("💡 Try using OCR software first, or use a PDF with selectable text")
             return ""
         
         st.success(f"✅ File extraction: {pages_with_text}/{len(doc)} pages")
@@ -308,76 +296,23 @@ def extract_from_temp_file(pdf_bytes) -> str:
         st.error(f"❌ File extraction failed: {str(e)}")
         return ""
     finally:
-        # Clean up resources
         if doc is not None:
             try:
                 doc.close()
             except:
-                pass  # Ignore close errors
+                pass
         
-        # Remove temporary file
         if temp_file_path and os.path.exists(temp_file_path):
             try:
                 os.unlink(temp_file_path)
-                st.info("🗑️ Cleaned up temporary file")
             except:
-                pass  # Ignore cleanup errors
-
-def extract_pdf_text_with_context(pdf_file) -> str:
-    """Alternative extraction using context manager"""
-    try:
-        st.info(f"📄 Processing with context manager: {pdf_file.name}")
-        
-        pdf_file.seek(0)
-        pdf_bytes = pdf_file.read()
-        
-        if len(pdf_bytes) == 0:
-            st.error("❌ File is empty")
-            return ""
-        
-        if not pdf_bytes.startswith(b'%PDF'):
-            st.error("❌ Not a valid PDF file")
-            return ""
-        
-        full_text = ""
-        pages_with_text = 0
-        
-        with safe_pdf_context(pdf_bytes) as doc:
-            st.success(f"✅ PDF opened with context - {len(doc)} pages")
-            
-            for page_num in range(len(doc)):
-                try:
-                    page = doc[page_num]
-                    page_text = page.get_text()
-                    
-                    if page_text.strip():
-                        full_text += f"\n=== PAGE {page_num + 1} ===\n{page_text}\n"
-                        pages_with_text += 1
-                        
-                except Exception as e:
-                    st.warning(f"⚠️ Error on page {page_num + 1}: {str(e)}")
-                    continue
-        
-        if not full_text.strip():
-            st.error("❌ No text found")
-            return ""
-        
-        st.success(f"✅ Context extraction: {pages_with_text} pages")
-        return full_text
-        
-    except Exception as e:
-        st.error(f"❌ Context extraction failed: {str(e)}")
-        return ""
+                pass
 
 def extract_pdf_text_simple(pdf_file) -> str:
-    """
-    Main PDF extraction function with multiple fallback methods
-    Fixes the "document closed" error
-    """
+    """Main PDF extraction function with multiple fallback methods"""
     try:
         st.info(f"📄 Processing file: {pdf_file.name}")
         
-        # Reset file pointer to beginning
         pdf_file.seek(0)
         pdf_bytes = pdf_file.read()
         
@@ -387,200 +322,313 @@ def extract_pdf_text_simple(pdf_file) -> str:
         
         st.success(f"✅ Read {len(pdf_bytes):,} bytes")
         
-        # Validate PDF header
         if not pdf_bytes.startswith(b'%PDF'):
             st.error("❌ Not a valid PDF file")
             return ""
         
-        # Method 1: Try direct memory approach first
+        # Try memory extraction first
         full_text = extract_from_memory(pdf_bytes)
         if full_text:
             return full_text
         
-        # Method 2: Fallback to temporary file approach
+        # Fallback to temporary file
         st.info("🔄 Trying alternative extraction method...")
         full_text = extract_from_temp_file(pdf_bytes)
         if full_text:
             return full_text
         
-        # Method 3: Context manager approach
-        st.info("🔄 Trying context manager approach...")
-        full_text = extract_pdf_text_with_context(pdf_file)
-        if full_text:
-            return full_text
-        
-        # If all methods fail
         st.error("❌ All extraction methods failed")
-        st.info("💡 Possible solutions:")
-        st.info("   • Try a different PDF file")
-        st.info("   • Use OCR if it's an image-based PDF")
-        st.info("   • Check if the PDF is corrupted")
-        st.info("   • Ensure PyMuPDF is properly installed: pip install --upgrade PyMuPDF")
-        
         return ""
         
     except Exception as e:
         st.error(f"💥 PDF extraction failed: {str(e)}")
         return ""
 
-# ===== AI EXTRACTION =====
-def extract_form_data_simple(pdf_text: str, openai_client, form_type: str = None) -> FormResult:
-    """Simplified AI extraction with immediate results"""
+# ===== GENERIC FORM DETECTION =====
+def detect_form_info(pdf_text: str) -> tuple:
+    """Generic form detection that works for any USCIS form"""
+    
+    # Extract form number - look for "Form [LETTER-NUMBER]"
+    form_patterns = [
+        r'Form\s+([A-Z]-?\d+[A-Z]?)',  # Form I-90, Form N-400, etc.
+        r'USCIS\s+Form\s+([A-Z]-?\d+[A-Z]?)',
+        r'Form\s+([A-Z]\d+[A-Z]?)',  # FormI90, etc.
+    ]
+    
+    form_number = "Unknown"
+    for pattern in form_patterns:
+        match = re.search(pattern, pdf_text, re.IGNORECASE)
+        if match:
+            form_number = match.group(1).upper()
+            # Ensure hyphen format
+            if re.match(r'^[A-Z]\d', form_number) and '-' not in form_number:
+                form_number = form_number[0] + '-' + form_number[1:]
+            break
+    
+    # Extract form title - usually appears after form number
+    title_patterns = [
+        rf'Form\s+{re.escape(form_number)}.*?\n(.+?)(?:\n|Department)',
+        rf'{re.escape(form_number)}.*?\n(.+?)(?:\n|Department)',
+        r'(?:Form\s+[A-Z]-?\d+[A-Z]?.*?\n)(.+?)(?:\n|Department)',
+    ]
+    
+    form_title = f"USCIS Form {form_number}"
+    for pattern in title_patterns:
+        match = re.search(pattern, pdf_text, re.IGNORECASE | re.DOTALL)
+        if match:
+            title = match.group(1).strip()
+            if len(title) > 10 and len(title) < 100:  # Reasonable title length
+                form_title = title
+                break
+    
+    # Extract edition/date
+    edition_patterns = [
+        r'Edition\s+(\d{2}/\d{2}/\d{2,4})',
+        r'Rev\.\s+(\d{2}/\d{2}/\d{2,4})',
+        r'(\d{2}/\d{2}/\d{2,4})\s+Edition',
+    ]
+    
+    edition = ""
+    for pattern in edition_patterns:
+        match = re.search(pattern, pdf_text, re.IGNORECASE)
+        if match:
+            edition = match.group(1)
+            break
+    
+    # Count total pages
+    page_count = len(re.findall(r'=== PAGE \d+ ===', pdf_text))
+    
+    return form_number, form_title, edition, page_count
+
+def extract_all_parts(pdf_text: str) -> List[dict]:
+    """Dynamically extract all parts from any USCIS form"""
+    
+    parts = []
+    
+    # Find all "Part X." patterns
+    part_patterns = [
+        r'Part\s+(\d+)\.\s*(.+?)(?=\n)',
+        r'PART\s+(\d+)\.\s*(.+?)(?=\n)',
+        r'Part\s+(\d+)\s*-\s*(.+?)(?=\n)',
+        r'Part\s+(\d+)\s*:\s*(.+?)(?=\n)',
+    ]
+    
+    found_parts = set()
+    
+    for pattern in part_patterns:
+        matches = re.finditer(pattern, pdf_text, re.IGNORECASE | re.MULTILINE)
+        for match in matches:
+            part_num = int(match.group(1))
+            part_title = match.group(2).strip()
+            
+            # Clean up the title
+            part_title = re.sub(r'\s+', ' ', part_title)
+            part_title = part_title.replace('(continued)', '').strip()
+            
+            if part_num not in found_parts and part_title and len(part_title) > 3:
+                found_parts.add(part_num)
+                parts.append({
+                    'number': part_num,
+                    'title': part_title,
+                    'raw_text': extract_part_text(pdf_text, part_num)
+                })
+    
+    # Sort by part number
+    parts.sort(key=lambda x: x['number'])
+    
+    return parts
+
+def extract_part_text(pdf_text: str, part_num: int) -> str:
+    """Extract text for a specific part"""
+    
+    # Find start of this part
+    start_patterns = [
+        rf'Part\s+{part_num}\..*?\n',
+        rf'PART\s+{part_num}\..*?\n',
+    ]
+    
+    start_pos = -1
+    for pattern in start_patterns:
+        match = re.search(pattern, pdf_text, re.IGNORECASE)
+        if match:
+            start_pos = match.end()
+            break
+    
+    if start_pos == -1:
+        return ""
+    
+    # Find end of this part (start of next part or end of document)
+    next_part_patterns = [
+        rf'Part\s+{part_num + 1}\..*?\n',
+        rf'PART\s+{part_num + 1}\..*?\n',
+    ]
+    
+    end_pos = len(pdf_text)
+    for pattern in next_part_patterns:
+        match = re.search(pattern, pdf_text[start_pos:], re.IGNORECASE)
+        if match:
+            end_pos = start_pos + match.start()
+            break
+    
+    return pdf_text[start_pos:end_pos]
+
+# ===== IMPROVED AI EXTRACTION =====
+def extract_form_data_generic(pdf_text: str, openai_client) -> FormResult:
+    """Generic AI extraction that works for any USCIS form"""
     
     try:
-        st.info("🤖 Starting AI extraction...")
+        st.info("🤖 Starting generic AI extraction...")
         
-        # Auto-detect form type if needed
-        if not form_type or form_type == "Auto-detect":
-            form_type = detect_form_type(pdf_text[:2000])
-            st.info(f"🔍 Detected form type: {form_type}")
+        # Step 1: Detect form information
+        form_number, form_title, edition, page_count = detect_form_info(pdf_text)
         
-        # Truncate text if too long
-        max_length = 15000
-        if len(pdf_text) > max_length:
-            pdf_text = pdf_text[:max_length] + "\n[...text truncated...]"
-            st.info(f"📝 Text truncated to {max_length} characters for processing")
+        st.markdown(f"""
+        <div class="form-detection">
+        <h4>📋 Form Detection Results</h4>
+        <p><strong>Form Number:</strong> {form_number}</p>
+        <p><strong>Title:</strong> {form_title}</p>
+        <p><strong>Edition:</strong> {edition}</p>
+        <p><strong>Pages:</strong> {page_count}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Create extraction prompt
-        prompt = f"""
-        Extract form data from this USCIS {form_type} document.
+        # Step 2: Extract all parts dynamically
+        st.info("🔍 Extracting form parts...")
+        parts_info = extract_all_parts(pdf_text)
         
-        Return ONLY valid JSON in this format:
-        {{
-          "form_type": "{form_type}",
-          "parts": [
-            {{
-              "number": 1,
-              "title": "Information About You",
-              "fields": [
-                {{
-                  "field_number": "1.a",
-                  "field_label": "Family Name (Last Name)",
-                  "field_value": "extracted_value_or_empty_string",
-                  "field_type": "text",
-                  "confidence": 0.95,
-                  "is_required": true
-                }}
-              ]
-            }}
-          ]
-        }}
+        if not parts_info:
+            st.warning("⚠️ No parts detected, using full document")
+            parts_info = [{'number': 1, 'title': 'Form Data', 'raw_text': pdf_text}]
         
-        Extract ALL visible fields, even if empty. Focus on accuracy.
+        st.success(f"✅ Found {len(parts_info)} parts: {', '.join([f'Part {p['number']}' for p in parts_info])}")
         
-        Document text:
-        {pdf_text}
-        """
-        
-        # Call OpenAI
-        st.info("🔄 Calling OpenAI API...")
-        
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=6000,
-                timeout=60
-            )
-            
-            response_text = response.choices[0].message.content.strip()
-            st.success(f"✅ AI response received ({len(response_text)} characters)")
-            
-        except Exception as e:
-            st.error(f"❌ OpenAI API call failed: {str(e)}")
-            return create_empty_result(form_type)
-        
-        # Parse JSON response
-        try:
-            # Clean response
-            if '```json' in response_text:
-                response_text = response_text.split('```json')[1].split('```')[0]
-            elif '```' in response_text:
-                response_text = response_text.split('```')[1].split('```')[0]
-            
-            data = json.loads(response_text.strip())
-            st.success("✅ JSON parsed successfully")
-            
-        except json.JSONDecodeError as e:
-            st.error(f"❌ JSON parsing failed: {str(e)}")
-            st.error("Raw response preview:")
-            st.code(response_text[:500] + "..." if len(response_text) > 500 else response_text)
-            return create_empty_result(form_type)
-        
-        # Convert to FormResult
+        # Step 3: Process each part with AI
         result = FormResult(
-            form_number=data.get('form_type', form_type),
-            form_title=get_form_title(form_type)
+            form_number=form_number,
+            form_title=form_title,
+            form_edition=edition,
+            total_pages=page_count
         )
         
-        # Process parts
-        for part_data in data.get('parts', []):
-            part = FormPart(
-                number=part_data.get('number', 1),
-                title=part_data.get('title', 'Unknown Part')
+        for part_info in parts_info:
+            st.info(f"🔄 Processing Part {part_info['number']}: {part_info['title']}")
+            
+            part_result = extract_part_with_ai(
+                part_info['raw_text'], 
+                openai_client, 
+                form_number, 
+                part_info['number'], 
+                part_info['title']
             )
             
-            # Process fields
-            for field_data in part_data.get('fields', []):
-                field = ExtractedField(
-                    field_number=field_data.get('field_number', ''),
-                    field_label=field_data.get('field_label', ''),
-                    field_value=field_data.get('field_value', ''),
-                    field_type=field_data.get('field_type', 'text'),
-                    confidence=field_data.get('confidence', 0.5),
-                    is_required=field_data.get('is_required', False)
-                )
-                part.add_field(field)
-            
-            result.parts[part.number] = part
-            st.info(f"📋 Part {part.number}: {len(part.fields)} fields extracted")
+            if part_result:
+                result.parts[part_info['number']] = part_result
+                st.success(f"✅ Part {part_info['number']}: {len(part_result.fields)} fields extracted")
+            else:
+                st.warning(f"⚠️ Part {part_info['number']}: No fields extracted")
         
-        # Calculate stats
+        # Calculate final stats
         result.calculate_stats()
         st.success(f"🎉 Extraction complete! {result.total_fields} total fields, {result.filled_fields} filled")
         
         return result
         
     except Exception as e:
-        st.error(f"💥 Extraction failed: {str(e)}")
-        return create_empty_result(form_type or "Unknown")
+        st.error(f"💥 Generic extraction failed: {str(e)}")
+        return create_empty_result("Unknown")
 
-def detect_form_type(text_sample: str) -> str:
-    """Simple form type detection"""
-    patterns = [
-        (r'Form\s+(I-90)', 'I-90'),
-        (r'Form\s+(I-130)', 'I-130'),
-        (r'Form\s+(I-485)', 'I-485'),
-        (r'Form\s+(N-400)', 'N-400'),
-        (r'Form\s+(G-28)', 'G-28'),
-    ]
+def extract_part_with_ai(part_text: str, openai_client, form_number: str, part_num: int, part_title: str) -> FormPart:
+    """Extract fields from a single part using AI"""
     
-    for pattern, form_type in patterns:
-        if re.search(pattern, text_sample, re.IGNORECASE):
-            return form_type
-    
-    return "Unknown"
+    try:
+        # Truncate if too long
+        max_length = 8000
+        if len(part_text) > max_length:
+            part_text = part_text[:max_length] + "\n[...truncated...]"
+        
+        # Create generic extraction prompt
+        prompt = f"""
+Extract all form fields from this USCIS {form_number} Part {part_num} ({part_title}).
 
-def get_form_title(form_type: str) -> str:
-    """Get form title"""
-    titles = {
-        'I-90': 'Application to Replace Permanent Resident Card',
-        'I-130': 'Petition for Alien Relative',
-        'I-485': 'Application to Register Permanent Residence',
-        'N-400': 'Application for Naturalization',
-        'G-28': 'Notice of Entry of Appearance as Attorney',
-    }
-    return titles.get(form_type, f"USCIS Form {form_type}")
+Return ONLY valid JSON in this exact format:
+{{
+  "fields": [
+    {{
+      "field_number": "1.a",
+      "field_label": "Family Name (Last Name)",
+      "field_value": "extracted_value_or_empty_string",
+      "field_type": "text",
+      "confidence": 0.85,
+      "is_required": true
+    }}
+  ]
+}}
+
+IMPORTANT RULES:
+1. Extract ALL visible form fields, even if empty
+2. Include field numbers like "1.a", "2.b", "3.c" etc.
+3. Extract exact field labels as shown
+4. Set field_value to actual value found, or empty string if blank
+5. Determine field_type: "text", "date", "checkbox", "select", "number", "address", "phone", "email"
+6. Set confidence based on how certain you are about the extraction
+7. Mark as required if the field appears mandatory
+8. Do NOT include page headers, instructions, or non-field text
+9. Focus only on actual form input fields
+
+Part text to analyze:
+{part_text}
+"""
+        
+        # Call OpenAI
+        response = openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=4000,
+            timeout=30
+        )
+        
+        response_text = response.choices[0].message.content.strip()
+        
+        # Parse JSON response
+        try:
+            if '```json' in response_text:
+                response_text = response_text.split('```json')[1].split('```')[0]
+            elif '```' in response_text:
+                response_text = response_text.split('```')[1].split('```')[0]
+            
+            data = json.loads(response_text.strip())
+        except json.JSONDecodeError as e:
+            st.warning(f"⚠️ JSON parsing failed for Part {part_num}: {str(e)}")
+            return None
+        
+        # Create FormPart
+        part = FormPart(number=part_num, title=part_title)
+        
+        for field_data in data.get('fields', []):
+            field = ExtractedField(
+                field_number=field_data.get('field_number', ''),
+                field_label=field_data.get('field_label', ''),
+                field_value=field_data.get('field_value', ''),
+                field_type=field_data.get('field_type', 'text'),
+                confidence=field_data.get('confidence', 0.5),
+                is_required=field_data.get('is_required', False)
+            )
+            part.add_field(field)
+        
+        return part
+        
+    except Exception as e:
+        st.warning(f"⚠️ AI extraction failed for Part {part_num}: {str(e)}")
+        return None
 
 def create_empty_result(form_type: str) -> FormResult:
     """Create empty result when extraction fails"""
     result = FormResult(
         form_number=form_type,
-        form_title=get_form_title(form_type)
+        form_title=f"USCIS Form {form_type}"
     )
     
-    # Add a basic empty part
     part = FormPart(number=1, title="Form Data")
     result.parts[1] = part
     
@@ -624,10 +672,10 @@ def display_extraction_results(result: FormResult):
     
     st.markdown("## 📋 Extracted Form Data")
     
-    # Summary metrics
+    # Form info
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Form Type", result.form_number)
+        st.metric("Form", result.form_number)
     with col2:
         st.metric("Total Fields", result.total_fields)
     with col3:
@@ -635,6 +683,14 @@ def display_extraction_results(result: FormResult):
     with col4:
         fill_rate = (result.filled_fields / result.total_fields * 100) if result.total_fields > 0 else 0
         st.metric("Completion", f"{fill_rate:.0f}%")
+    
+    # Display form details
+    with st.expander("📄 Form Details", expanded=False):
+        st.write(f"**Title:** {result.form_title}")
+        if result.form_edition:
+            st.write(f"**Edition:** {result.form_edition}")
+        if result.total_pages:
+            st.write(f"**Pages:** {result.total_pages}")
     
     # Display each part
     for part_num in sorted(result.parts.keys()):
@@ -655,7 +711,6 @@ def display_extraction_results(result: FormResult):
 def display_field_editor(field: ExtractedField, field_key: str):
     """Display individual field with editing capability"""
     
-    # Determine field status
     has_value = field.field_value and field.field_value.strip()
     css_class = "field-filled" if has_value else "field-empty"
     
@@ -669,7 +724,7 @@ def display_field_editor(field: ExtractedField, field_key: str):
         if field.is_required:
             st.markdown("🔴 Required")
         if field.manually_edited:
-            st.markdown("✏️ Manually Edited")
+            st.markdown("✏️ Edited")
     
     with col2:
         st.markdown(f"**{field.field_label}**")
@@ -683,15 +738,15 @@ def display_field_editor(field: ExtractedField, field_key: str):
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        # Different input types
-        if field.field_type == "checkbox" or "yes" in field.field_label.lower() or "no" in field.field_label.lower():
+        # Different input types based on field type
+        if field.field_type == "checkbox":
             new_value = st.selectbox(
-                f"Value:",
+                "Value:",
                 ["", "Yes", "No", "N/A"],
                 index=["", "Yes", "No", "N/A"].index(field.field_value) if field.field_value in ["", "Yes", "No", "N/A"] else 0,
                 key=f"field_{field_key}"
             )
-        elif field.field_type == "date" or "date" in field.field_label.lower():
+        elif field.field_type == "date":
             if field.field_value:
                 try:
                     date_val = pd.to_datetime(field.field_value).date()
@@ -706,6 +761,14 @@ def display_field_editor(field: ExtractedField, field_key: str):
                 key=f"field_{field_key}"
             )
             new_value = str(date_input) if date_input else ""
+        elif field.field_type == "select":
+            # For select fields, show as text input for now
+            new_value = st.text_input(
+                "Value:",
+                value=field.field_value,
+                placeholder="Select option...",
+                key=f"field_{field_key}"
+            )
         else:
             new_value = st.text_input(
                 "Value:",
@@ -718,114 +781,14 @@ def display_field_editor(field: ExtractedField, field_key: str):
         if new_value != field.field_value:
             field.field_value = new_value
             field.manually_edited = True
-            st.success("✅ Field updated!")
     
     with col2:
-        # Quick actions
-        if st.button(f"❌ Clear", key=f"clear_{field_key}"):
+        if st.button(f"❌", key=f"clear_{field_key}", help="Clear field"):
             field.field_value = ""
             field.manually_edited = True
             st.rerun()
-        
-        if field.field_type in ["country", "state"]:
-            if st.button(f"🌍", key=f"help_{field_key}"):
-                show_field_suggestions(field)
     
     st.markdown('</div>', unsafe_allow_html=True)
-
-def show_field_suggestions(field: ExtractedField):
-    """Show suggestions for specific field types"""
-    if field.field_type == "country":
-        st.info("Common countries: United States, Canada, Mexico, United Kingdom, Germany")
-    elif field.field_type == "state":
-        st.info("US States: California, New York, Texas, Florida, Illinois")
-
-def display_questionnaire(result: FormResult):
-    """Display questionnaire for missing fields"""
-    
-    st.markdown("## 📝 Complete Missing Information")
-    
-    # Find fields that need completion
-    missing_fields = []
-    for part in result.parts.values():
-        for field in part.fields:
-            if field.is_required and (not field.field_value or not field.field_value.strip()):
-                missing_fields.append(field)
-    
-    if not missing_fields:
-        st.success("🎉 All required fields are completed!")
-        return
-    
-    st.info(f"Please complete {len(missing_fields)} required fields:")
-    
-    # Group by part
-    fields_by_part = {}
-    for field in missing_fields:
-        part_num = 1  # Default since we don't track part in field
-        for part_num, part in result.parts.items():
-            if field in part.fields:
-                break
-        
-        if part_num not in fields_by_part:
-            fields_by_part[part_num] = []
-        fields_by_part[part_num].append(field)
-    
-    # Display questionnaire
-    for part_num, fields in fields_by_part.items():
-        part_title = result.parts[part_num].title
-        
-        st.markdown(f"### Part {part_num}: {part_title}")
-        
-        for i, field in enumerate(fields):
-            st.markdown(f"**{field.field_number}: {field.field_label}**")
-            
-            # Generate question
-            question = generate_question(field)
-            st.write(question)
-            
-            # Answer input
-            answer = st.text_input(
-                "Your answer:",
-                key=f"quest_{part_num}_{i}",
-                placeholder=get_placeholder(field)
-            )
-            
-            if answer:
-                field.questionnaire_response = answer
-                field.field_value = answer
-                field.manually_edited = True
-            
-            st.markdown("---")
-
-def generate_question(field: ExtractedField) -> str:
-    """Generate question text for field"""
-    label = field.field_label.lower()
-    
-    if 'name' in label:
-        return f"What is your {field.field_label.lower()}?"
-    elif 'address' in label:
-        return f"What is your {field.field_label.lower()}? (Include street, city, state, ZIP)"
-    elif 'date' in label or 'birth' in label:
-        return f"What is the {field.field_label.lower()}? (MM/DD/YYYY format)"
-    elif 'phone' in label:
-        return f"What is your {field.field_label.lower()}? (Include area code)"
-    elif 'email' in label:
-        return f"What is your {field.field_label.lower()}?"
-    else:
-        return f"Please provide: {field.field_label}"
-
-def get_placeholder(field: ExtractedField) -> str:
-    """Get placeholder text"""
-    if 'name' in field.field_label.lower():
-        return "Enter full name"
-    elif 'address' in field.field_label.lower():
-        return "123 Main St, City, State 12345"
-    elif 'phone' in field.field_label.lower():
-        return "(555) 123-4567"
-    elif 'email' in field.field_label.lower():
-        return "your.email@example.com"
-    else:
-        return "Enter value"
 
 def display_database_tab(db: SimpleDatabase):
     """Display database management"""
@@ -849,7 +812,6 @@ def display_database_tab(db: SimpleDatabase):
         )
         
         if st.button("📂 Load Form"):
-            # Extract ID from selection
             submission_id = int(selected_id.split()[1])
             load_submission(db, submission_id)
 
@@ -864,12 +826,14 @@ def load_submission(db: SimpleDatabase, submission_id: int):
         # Convert back to FormResult
         result = FormResult(
             form_number=data.get('form_title', 'Unknown'),
-            form_title=data.get('form_title', 'Unknown Form')
+            form_title=data.get('form_title', 'Unknown Form'),
+            form_edition=data.get('form_edition', ''),
+            total_pages=data.get('total_pages', 0)
         )
         
         # Rebuild parts
         for part_num_str, part_data in data.get('parts', {}).items():
-            part_num = int(part_num_str.replace('part_', ''))
+            part_num = int(part_num_str)
             part = FormPart(
                 number=part_num,
                 title=part_data.get('title', f'Part {part_num}')
@@ -884,7 +848,7 @@ def load_submission(db: SimpleDatabase, submission_id: int):
                     confidence=field_data.get('confidence', 0.5),
                     is_required=field_data.get('is_required', False),
                     manually_edited=field_data.get('manually_edited', False),
-                    questionnaire_response=field_data.get('questionnaire_response', '')
+                    page_number=field_data.get('page_number', 0)
                 )
                 part.add_field(field)
             
@@ -904,8 +868,8 @@ def load_submission(db: SimpleDatabase, submission_id: int):
 def main():
     st.markdown(
         '<div class="main-header">'
-        '<h1>🤖 USCIS Form Processor - Complete Fixed Version</h1>'
-        '<p>AI-powered form extraction with robust PDF handling and manual editing</p>'
+        '<h1>🤖 Generic USCIS Form Processor</h1>'
+        '<p>AI-powered extraction for ANY USCIS form - I-90, I-130, I-485, N-400, G-28, I-129, etc.</p>'
         '</div>', 
         unsafe_allow_html=True
     )
@@ -947,15 +911,15 @@ def main():
                 st.rerun()
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Extract", "✏️ Edit Fields", "📝 Questionnaire", "💾 Database"])
+    tab1, tab2, tab3 = st.tabs(["📤 Upload & Extract", "✏️ Edit Fields", "💾 Database"])
     
     with tab1:
-        st.markdown("### 📤 Upload PDF and Extract Data")
+        st.markdown("### 📤 Upload ANY USCIS Form PDF")
         
         uploaded_file = st.file_uploader(
             "Choose a USCIS form PDF",
             type=['pdf'],
-            help="Upload any USCIS form"
+            help="Upload any USCIS form - I-90, I-130, I-485, N-400, G-28, I-129, etc."
         )
         
         if uploaded_file:
@@ -963,10 +927,6 @@ def main():
             
             with col1:
                 st.success(f"✅ File: {uploaded_file.name}")
-                form_type = st.selectbox(
-                    "Form Type",
-                    ["Auto-detect", "I-90", "I-130", "I-485", "N-400", "G-28"]
-                )
             
             with col2:
                 if st.button("🔍 Test PDF Read"):
@@ -994,11 +954,11 @@ def main():
                         with st.expander("🔍 Extracted Text Preview"):
                             st.text_area("Raw text:", pdf_text[:1000], height=200)
                     
-                    # Step 2: AI Extraction
-                    st.markdown("#### Step 2: AI Data Extraction")
+                    # Step 2: Generic AI Extraction
+                    st.markdown("#### Step 2: Generic AI Data Extraction")
                     start_time = time.time()
                     
-                    result = extract_form_data_simple(pdf_text, openai_client, form_type)
+                    result = extract_form_data_generic(pdf_text, openai_client)
                     
                     if result and result.parts:
                         result.processing_time = time.time() - start_time
@@ -1042,18 +1002,6 @@ def main():
             st.info("No form data loaded. Upload and extract a PDF first.")
     
     with tab3:
-        if st.session_state.current_result:
-            display_questionnaire(st.session_state.current_result)
-            
-            if st.button("✅ Complete Form"):
-                st.session_state.current_result.calculate_stats()
-                submission_id = db.save_submission(st.session_state.current_result)
-                st.success("🎉 Form completed and saved!")
-                st.balloons()
-        else:
-            st.info("No form data loaded. Upload and extract a PDF first.")
-    
-    with tab4:
         display_database_tab(db)
     
     # Debug info
@@ -1074,6 +1022,7 @@ def main():
                 result = st.session_state.current_result
                 st.json({
                     "form_number": result.form_number,
+                    "form_title": result.form_title,
                     "total_fields": result.total_fields,
                     "filled_fields": result.filled_fields,
                     "parts_count": len(result.parts)
