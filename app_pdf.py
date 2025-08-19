@@ -1220,7 +1220,7 @@ class AgenticProcessor:
                     line = re.sub(r'([^"]),\s*$', r'\1",', line)
                     line = re.sub(r'([^"})\s*}$', r'\1"}', line)
             fixed_lines.append(line)
-        
+
         json_str = '\n'.join(fixed_lines)
         
         return json_str
