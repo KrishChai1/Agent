@@ -193,6 +193,11 @@ class SmartForm:
     parts: Dict[int, SmartPart] = field(default_factory=dict)
     processing_stage: ProcessingStage = ProcessingStage.UPLOADED
     
+    def __post_init__(self):
+        # Ensure total_pages is always set
+        if not hasattr(self, 'total_pages') or self.total_pages is None:
+            self.total_pages = 0
+    
     def add_part(self, part: SmartPart):
         self.parts[part.number] = part
     
@@ -490,6 +495,9 @@ class AdvancedAgenticProcessor:
                 total_pages=len(page_texts),
                 processing_stage=ProcessingStage.EXTRACTING
             )
+            
+            # Ensure total_pages is set properly
+            smart_form.total_pages = len(page_texts)
             
             # Stage 3: Advanced part extraction with page mapping
             if progress_callback:
@@ -1254,7 +1262,12 @@ def display_form_enhanced(smart_form: SmartForm):
     # Enhanced form header
     st.markdown(f"## 📄 {smart_form.form_number}: {smart_form.form_title}")
     if smart_form.form_edition:
-        st.markdown(f"**Edition:** {smart_form.form_edition} • **Pages:** {smart_form.total_pages}")
+        # Safely get total_pages with fallback
+        total_pages = getattr(smart_form, 'total_pages', 0)
+        if total_pages > 0:
+            st.markdown(f"**Edition:** {smart_form.form_edition} • **Pages:** {total_pages}")
+        else:
+            st.markdown(f"**Edition:** {smart_form.form_edition}")
     
     # Enhanced summary stats
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -1412,7 +1425,7 @@ def display_export_enhanced(smart_form: SmartForm):
                 "form_number": smart_form.form_number,
                 "form_title": smart_form.form_title,
                 "form_edition": smart_form.form_edition,
-                "total_pages": smart_form.total_pages,
+                "total_pages": getattr(smart_form, 'total_pages', 0),
                 "processing_date": datetime.now().isoformat()
             },
             "extraction_summary": {
@@ -1558,7 +1571,7 @@ def generate_enhanced_mappings(smart_form: SmartForm, mapped_fields: List[SmartF
             "form_number": smart_form.form_number,
             "form_title": smart_form.form_title,
             "form_edition": smart_form.form_edition,
-            "total_pages": smart_form.total_pages,
+            "total_pages": getattr(smart_form, 'total_pages', 0),
             "generated_date": datetime.now().isoformat(),
             "total_mapped_fields": len(mapped_fields)
         },
@@ -1653,8 +1666,14 @@ def main():
         st.error("❌ OpenAI not available! Install with: `pip install openai`")
         st.stop()
     
-    # Initialize session state
+    # Initialize session state with safety checks
     if 'smart_form' not in st.session_state:
+        st.session_state.smart_form = None
+    
+    # Safety check for old SmartForm objects without total_pages
+    if (st.session_state.smart_form is not None and 
+        not hasattr(st.session_state.smart_form, 'total_pages')):
+        st.warning("🔄 Clearing old form data due to version compatibility...")
         st.session_state.smart_form = None
     
     if 'processing_stage' not in st.session_state:
@@ -1700,7 +1719,8 @@ def main():
                 st.metric("Total Fields", len(form.get_all_fields()))
             
             with col2:
-                st.metric("Pages", form.total_pages)
+                total_pages = getattr(form, 'total_pages', 0)
+                st.metric("Pages", total_pages)
                 st.metric("Mapped", len(form.get_mapped_fields()))
                 st.metric("Questionnaire", len(form.get_questionnaire_fields()))
             
