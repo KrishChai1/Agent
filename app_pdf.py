@@ -787,75 +787,97 @@ def display_mapping_interface_simple(field: SmartField, field_key: str):
     st.markdown('<div class="mapping-section">', unsafe_allow_html=True)
     st.markdown("### 🔗 Map to Database")
     
+    # Show current mapping if exists
+    if field.is_mapped:
+        st.info(f"Currently mapped to: **{field.db_object}** → `{field.db_path}`")
+    
     # Tab for different mapping options
-    tab1, tab2 = st.tabs(["📋 Select Object", "✏️ Manual Entry"])
+    tab1, tab2 = st.tabs(["📋 Select from Database Objects", "✏️ Manual Entry"])
     
     with tab1:
-        col1, col2 = st.columns(2)
+        st.markdown("**Step 1: Choose Database Object**")
         
-        with col1:
-            st.markdown("**Database Object:**")
+        # Create clearer database object options
+        db_options = [
+            ("beneficiary", "👤 Beneficiary Information", "Primary applicant details"),
+            ("attorney", "⚖️ Attorney Information", "Legal representative details"), 
+            ("employer", "🏢 Employer/Company Information", "Petitioning organization details"),
+            ("case", "📋 Case Information", "Case-specific details")
+        ]
+        
+        # Show radio buttons for better visibility
+        selected_obj_key = st.radio(
+            "Select the database object for this field:",
+            options=[opt[0] for opt in db_options],
+            format_func=lambda x: next(opt[1] for opt in db_options if opt[0] == x),
+            key=f"obj_radio_{field_key}",
+            help="Choose which database object this field should map to"
+        )
+        
+        # Show description
+        selected_description = next(opt[2] for opt in db_options if opt[0] == selected_obj_key)
+        st.caption(f"📝 {selected_description}")
+        
+        st.markdown("---")
+        st.markdown("**Step 2: Choose Field Path**")
+        
+        if selected_obj_key and selected_obj_key in DATABASE_OBJECTS:
+            common_paths = DATABASE_OBJECTS[selected_obj_key]['common_paths']
             
-            # Simple selection of database objects
-            db_options = list(DATABASE_OBJECTS.keys())
-            db_labels = [f"{DATABASE_OBJECTS[key]['icon']} {DATABASE_OBJECTS[key]['label']}" for key in db_options]
+            # Show common paths with better display
+            st.markdown("**Common field paths:**")
             
-            selected_obj_index = st.selectbox(
-                "Choose object:",
-                range(len(db_options)),
-                format_func=lambda x: db_labels[x],
-                key=f"obj_select_{field_key}",
-                label_visibility="collapsed"
+            path_choice = st.radio(
+                "Select field path:",
+                options=["common", "custom"],
+                format_func=lambda x: "Choose from common paths" if x == "common" else "Enter custom path",
+                key=f"path_choice_{field_key}",
+                horizontal=True
             )
             
-            selected_object = db_options[selected_obj_index]
+            if path_choice == "common":
+                selected_path = st.selectbox(
+                    "Choose field path:",
+                    options=common_paths,
+                    key=f"path_select_{field_key}",
+                    help="Select the specific database field this form field should map to"
+                )
+            else:
+                selected_path = st.text_input(
+                    "Enter custom field path:",
+                    key=f"custom_path_{field_key}",
+                    placeholder="e.g., customField.subField",
+                    help="Enter a custom database field path"
+                )
+        else:
+            selected_path = ""
+        
+        st.markdown("---")
+        
+        # Apply mapping with validation
+        col1, col2, col3 = st.columns([1, 1, 1])
         
         with col2:
-            st.markdown("**Field Path:**")
-            
-            if selected_object:
-                common_paths = DATABASE_OBJECTS[selected_object]['common_paths']
-                
-                # Add option for custom path
-                path_options = common_paths + ["[Custom Path]"]
-                
-                selected_path_index = st.selectbox(
-                    "Choose field:",
-                    range(len(path_options)),
-                    format_func=lambda x: path_options[x],
-                    key=f"path_select_{field_key}",
-                    label_visibility="collapsed"
-                )
-                
-                if selected_path_index < len(common_paths):
-                    selected_path = common_paths[selected_path_index]
-                else:
-                    selected_path = st.text_input(
-                        "Enter custom path:",
-                        key=f"custom_path_{field_key}",
-                        placeholder="e.g., customField.subField"
-                    )
-        
-        # Apply mapping
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Apply Mapping", key=f"apply_sel_{field_key}", type="primary"):
-                if selected_object and selected_path:
+            if st.button("✅ Apply Mapping", key=f"apply_sel_{field_key}", type="primary", use_container_width=True):
+                if selected_obj_key and selected_path:
                     field.is_mapped = True
-                    field.db_object = selected_object
+                    field.db_object = selected_obj_key
                     field.db_path = selected_path
                     field.in_questionnaire = False
                     st.session_state[f"show_mapping_{field_key}"] = False
-                    st.success(f"✅ Mapped to {selected_object}.{selected_path}")
+                    st.success(f"✅ Mapped to **{selected_obj_key}**.{selected_path}")
                     st.rerun()
+                else:
+                    st.error("Please select both database object and field path")
         
-        with col2:
-            if st.button("❌ Cancel", key=f"cancel_sel_{field_key}"):
+        with col3:
+            if st.button("❌ Cancel", key=f"cancel_sel_{field_key}", use_container_width=True):
                 st.session_state[f"show_mapping_{field_key}"] = False
                 st.rerun()
     
     with tab2:
-        st.markdown("**Manual Database Mapping:**")
+        st.markdown("**Manual Database Mapping**")
+        st.caption("Enter database object and field path manually")
         
         col1, col2 = st.columns(2)
         
@@ -864,7 +886,8 @@ def display_mapping_interface_simple(field: SmartField, field_key: str):
                 "Database Object:",
                 value=field.db_object if field.is_mapped else "",
                 key=f"manual_obj_{field_key}",
-                placeholder="e.g., beneficiary, attorney, employer"
+                placeholder="e.g., beneficiary, attorney, employer, case",
+                help="Enter the name of the database object"
             )
         
         with col2:
@@ -872,24 +895,32 @@ def display_mapping_interface_simple(field: SmartField, field_key: str):
                 "Field Path:",
                 value=field.db_path if field.is_mapped else "",
                 key=f"manual_path_{field_key}",
-                placeholder="e.g., firstName, address.street"
+                placeholder="e.g., firstName, address.street",
+                help="Enter the field path within the database object"
             )
         
+        # Show example
+        if manual_object and manual_path:
+            st.info(f"💡 This will map to: **{manual_object}**.{manual_path}")
+        
         # Apply manual mapping
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("✅ Apply Manual", key=f"apply_man_{field_key}", type="primary"):
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col2:
+            if st.button("✅ Apply Manual", key=f"apply_man_{field_key}", type="primary", use_container_width=True):
                 if manual_object.strip() and manual_path.strip():
                     field.is_mapped = True
                     field.db_object = manual_object.strip()
                     field.db_path = manual_path.strip()
                     field.in_questionnaire = False
                     st.session_state[f"show_mapping_{field_key}"] = False
-                    st.success(f"✅ Manually mapped to {manual_object}.{manual_path}")
+                    st.success(f"✅ Manually mapped to **{manual_object}**.{manual_path}")
                     st.rerun()
+                else:
+                    st.error("Please enter both database object and field path")
         
-        with col2:
-            if st.button("❌ Cancel", key=f"cancel_man_{field_key}"):
+        with col3:
+            if st.button("❌ Cancel", key=f"cancel_man_{field_key}", use_container_width=True):
                 st.session_state[f"show_mapping_{field_key}"] = False
                 st.rerun()
     
