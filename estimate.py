@@ -7,507 +7,920 @@ import json
 
 # Page configuration
 st.set_page_config(
-    page_title="Marken Digital Transformation - Estimation Tool",
+    page_title="Marken Digital Transformation - Editable Estimation Tool",
     page_icon="📊",
     layout="wide"
 )
 
-# Initialize session state
-if 'phase_data' not in st.session_state:
-    st.session_state.phase_data = {}
-
-# Rate card based on ShipNexus document
-RATE_CARD = {
-    'Onsite': {
-        'P1': {'Senior Technical Head': 140, 'Senior Technical Architect': 113.26, 'Technical Architect': 102.56},
-        'U1': {'Junior Developer': 77.59},
-        'U2': {'Developer': 82.05, 'Tester': 77.59},
-        'U3': {'Senior Developer': 87.40, 'Senior Tester': 82.94},
-        'U4': {'Automation Test Lead': 89.18, 'Performance Tester': 87.40, 'Project Manager': 102.56, 'Team Lead': 89.18}
-    },
-    'Nearshore': {
-        'P1': {'Senior Project Manager': 75.12, 'Senior Technical Architect': 75.12, 'Technical Architect': 68.02},
-        'U1': {'Junior Developer': 51.46},
-        'U2': {'Developer': 54.42, 'Tester': 51.46},
-        'U3': {'Senior Developer': 57.97, 'Senior Tester': 55.01},
-        'U4': {'Automation Test Lead': 59.15, 'Performance Tester': 57.97, 'Project Manager': 68.02, 'Team Lead': 59.15}
-    },
-    'Offshore': {
-        'P1': {'Senior Project Manager': 29.43, 'Senior Technical Architect': 30.32, 'Technical Architect': 26.75},
-        'U1': {'Junior Developer': 18.73},
-        'U2': {'Developer': 20.51, 'Tester': 19.62},
-        'U3': {'Senior Developer': 23.19, 'Senior Tester': 22.30},
-        'U4': {'Automation Test Lead': 23.19, 'Performance Tester': 22.30, 'Project Manager': 26.75, 'Team Lead': 23.19}
-    }
-}
-
-# Epic complexity and effort mapping
-EPIC_COMPLEXITY = {
-    # Polar Scan Epics
-    'PS-EPIC-01': {'complexity': 'High', 'stories': 14, 'effort_multiplier': 1.5},
-    'PS-EPIC-02': {'complexity': 'High', 'stories': 15, 'effort_multiplier': 1.4},
-    'PS-EPIC-03': {'complexity': 'Medium', 'stories': 14, 'effort_multiplier': 1.2},
-    'PS-EPIC-04': {'complexity': 'High', 'stories': 10, 'effort_multiplier': 1.3},
-    'PS-EPIC-05': {'complexity': 'Medium', 'stories': 10, 'effort_multiplier': 1.1},
-    'PS-EPIC-06': {'complexity': 'Low', 'stories': 8, 'effort_multiplier': 1.0},
-    'PS-EPIC-07': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.4},
-    'PS-EPIC-08': {'complexity': 'High', 'stories': 10, 'effort_multiplier': 1.3},
-    'PS-EPIC-09': {'complexity': 'Very High', 'stories': 8, 'effort_multiplier': 2.0},
-    'PS-EPIC-10': {'complexity': 'High', 'stories': 10, 'effort_multiplier': 1.5},
-    
-    # Polar Track Epics
-    'PT-EPIC-01': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PT-EPIC-02': {'complexity': 'High', 'stories': 10, 'effort_multiplier': 1.3},
-    'PT-EPIC-03': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.4},
-    'PT-EPIC-04': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PT-EPIC-05': {'complexity': 'Medium', 'stories': 10, 'effort_multiplier': 1.2},
-    'PT-EPIC-06': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.4},
-    'PT-EPIC-07': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PT-EPIC-08': {'complexity': 'Very High', 'stories': 12, 'effort_multiplier': 1.8},
-    'PT-EPIC-09': {'complexity': 'Very High', 'stories': 14, 'effort_multiplier': 2.0},
-    'PT-EPIC-10': {'complexity': 'High', 'stories': 10, 'effort_multiplier': 1.3},
-    'PT-EPIC-11': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.4},
-    'PT-EPIC-12': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.3},
-    
-    # Patient Management Epics
-    'PM-EPIC-01': {'complexity': 'Very High', 'stories': 12, 'effort_multiplier': 1.8},
-    'PM-EPIC-02': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.3},
-    'PM-EPIC-03': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.4},
-    'PM-EPIC-04': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PM-EPIC-05': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.3},
-    'PM-EPIC-06': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PM-EPIC-07': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2},
-    'PM-EPIC-08': {'complexity': 'High', 'stories': 13, 'effort_multiplier': 1.4},
-    'PM-EPIC-09': {'complexity': 'High', 'stories': 12, 'effort_multiplier': 1.3},
-    'PM-EPIC-10': {'complexity': 'Very High', 'stories': 12, 'effort_multiplier': 1.7},
-    'PM-EPIC-11': {'complexity': 'Medium', 'stories': 12, 'effort_multiplier': 1.2}
-}
-
-def calculate_story_points(epic_id, base_points=3):
-    """Calculate story points based on complexity"""
-    complexity = EPIC_COMPLEXITY[epic_id]['complexity']
-    multiplier = EPIC_COMPLEXITY[epic_id]['effort_multiplier']
-    stories = EPIC_COMPLEXITY[epic_id]['stories']
-    
-    complexity_points = {
-        'Low': 2,
-        'Medium': 3,
-        'High': 5,
-        'Very High': 8
-    }
-    
-    return stories * complexity_points[complexity] * multiplier
-
-def generate_phase_timeline():
-    """Generate project phase timeline"""
-    phases = {
-        'Phase 0 - Due Diligence': {
-            'start': datetime(2025, 1, 1),
-            'duration_weeks': 8,
-            'epics': [],
-            'focus': 'Discovery, Architecture, Business Alignment'
+# Initialize session state for editable data
+if 'rate_card' not in st.session_state:
+    st.session_state.rate_card = {
+        'Onsite': {
+            'Head of Technology': 140.00,
+            'Senior Technical Architect': 113.26,
+            'Technical Architect': 102.56,
+            'Project Manager': 102.56,
+            'Senior Developer': 87.40,
+            'Developer': 82.05,
+            'Senior Tester': 82.94,
+            'Team Lead': 89.18,
+            'DevOps Engineer': 87.40,
+            'Business Analyst': 82.05,
+            'Scrum Master': 89.18,
+            'UI/UX Designer': 82.05,
+            'Mobile Developer': 87.40,
+            'Integration Specialist': 89.18,
+            'Data Architect': 102.56
         },
-        'Phase 1 - Scan & Track Beta': {
-            'start': datetime(2025, 3, 1),
-            'duration_weeks': 24,
-            'epics': list(EPIC_COMPLEXITY.keys())[:22],  # All PS and PT epics
-            'focus': 'Polar Scan + Track Implementation'
+        'Nearshore': {
+            'Senior Technical Architect': 75.12,
+            'Technical Architect': 68.02,
+            'Project Manager': 68.02,
+            'Senior Developer': 57.97,
+            'Developer': 54.42,
+            'Tester': 51.46,
+            'Senior Tester': 55.01,
+            'Team Lead': 59.15,
+            'DevOps Engineer': 57.97,
+            'Automation Test Lead': 59.15,
+            'UI/UX Developer': 54.42,
+            'Business Analyst': 54.42,
+            'Mobile Developer': 57.97,
+            'Integration Developer': 57.97,
+            'Performance Engineer': 57.97,
+            'QA Lead': 55.01
         },
-        'Phase 2 - Patient Management': {
-            'start': datetime(2025, 9, 1),
-            'duration_weeks': 20,
-            'epics': list(EPIC_COMPLEXITY.keys())[22:],  # All PM epics
-            'focus': 'Patient Management System'
+        'Offshore': {
+            'Technical Architect': 26.75,
+            'Senior Developer': 23.19,
+            'Developer': 20.51,
+            'Junior Developer': 18.73,
+            'Tester': 19.62,
+            'Senior Tester': 22.30,
+            'Automation Tester': 22.30,
+            'Performance Tester': 22.30,
+            'Technical Writer': 18.73,
+            'Database Developer': 23.19,
+            'Integration Developer': 23.19,
+            'QA Analyst': 19.62,
+            'Support Engineer': 18.73,
+            'DevOps Engineer': 23.19,
+            'Data Engineer': 23.19
         }
     }
-    
-    return phases
 
-def calculate_resources(phase_name, epics, duration_weeks):
-    """Calculate resources needed for each phase"""
-    
-    # Base resource allocation
-    if phase_name == 'Phase 0 - Due Diligence':
-        return {
+if 'resources' not in st.session_state:
+    st.session_state.resources = {
+        'Phase 0': {
+            'duration_weeks': 8,
             'Onsite': {
                 'Head of Technology': 1,
                 'Senior Technical Architect': 2,
-                'Business Product Owner': 2
+                'Business Analyst': 2,
+                'UI/UX Designer': 1
             },
             'Nearshore': {},
             'Offshore': {}
-        }
-    
-    # Calculate story points for the phase
-    total_points = sum(calculate_story_points(epic) for epic in epics if epic in EPIC_COMPLEXITY)
-    
-    # Resource calculation based on velocity (points per person per sprint)
-    velocity_per_person_sprint = 10  # Adjustable
-    sprints = duration_weeks / 2
-    required_capacity = total_points / (velocity_per_person_sprint * sprints)
-    
-    # Distribute resources (1 onsite : 2 nearshore : 4 offshore)
-    resources = {
-        'Onsite': {
-            'Technical Architect': 2,
-            'Project Manager': 1,
-            'Team Lead': 2,
-            'Senior Developer': 2,
-            'DevOps Engineer': 1
         },
-        'Nearshore': {
-            'Senior Developer': 3,
-            'Developer': 4,
-            'Senior Tester': 2,
-            'Automation Test Lead': 1,
-            'UI/UX Developer': 2
+        'Phase 1': {
+            'duration_weeks': 28,
+            'Onsite': {
+                'Senior Technical Architect': 2,
+                'Technical Architect': 2,
+                'Project Manager': 2,
+                'Senior Developer': 3,
+                'Team Lead': 2,
+                'DevOps Engineer': 2,
+                'Business Analyst': 2,
+                'Integration Specialist': 1
+            },
+            'Nearshore': {
+                'Technical Architect': 2,
+                'Senior Developer': 4,
+                'Mobile Developer': 3,
+                'Developer': 6,
+                'Senior Tester': 3,
+                'Automation Test Lead': 2,
+                'UI/UX Developer': 3,
+                'DevOps Engineer': 1,
+                'Integration Developer': 2,
+                'Performance Engineer': 1
+            },
+            'Offshore': {
+                'Senior Developer': 4,
+                'Developer': 8,
+                'Junior Developer': 4,
+                'Integration Developer': 3,
+                'Tester': 6,
+                'Automation Tester': 3,
+                'Performance Tester': 2,
+                'Database Developer': 2,
+                'Technical Writer': 2,
+                'DevOps Engineer': 2,
+                'Data Engineer': 2
+            }
         },
-        'Offshore': {
-            'Developer': 6,
-            'Tester': 4,
-            'Junior Developer': 3,
-            'Performance Tester': 1,
-            'Technical Writer': 1
+        'Phase 2': {
+            'duration_weeks': 16,
+            'Onsite': {
+                'Technical Architect': 1,
+                'Project Manager': 1,
+                'Senior Developer': 2,
+                'Team Lead': 1,
+                'Business Analyst': 1,
+                'Data Architect': 1
+            },
+            'Nearshore': {
+                'Senior Developer': 2,
+                'Developer': 3,
+                'Senior Tester': 1,
+                'Automation Test Lead': 1,
+                'UI/UX Developer': 2,
+                'QA Lead': 1
+            },
+            'Offshore': {
+                'Developer': 4,
+                'Junior Developer': 2,
+                'Tester': 3,
+                'Automation Tester': 1,
+                'QA Analyst': 2,
+                'Technical Writer': 1,
+                'Support Engineer': 2
+            }
         }
     }
-    
-    return resources
 
-def calculate_cost(resources, duration_weeks):
-    """Calculate cost based on resources and duration"""
+def calculate_cost_for_phase(phase_name):
+    """Calculate cost for a specific phase"""
+    resources = st.session_state.resources[phase_name]
+    duration_weeks = resources['duration_weeks']
     total_cost = 0
     hours_per_week = 40
     
-    for location, roles in resources.items():
-        for role, count in roles.items():
-            # Map role to rate card
-            if location == 'Onsite':
-                if 'Architect' in role:
-                    rate = RATE_CARD[location]['P1'].get('Technical Architect', 100)
-                elif 'Manager' in role:
-                    rate = RATE_CARD[location]['U4'].get('Project Manager', 100)
-                elif 'Senior' in role:
-                    rate = RATE_CARD[location]['U3'].get('Senior Developer', 85)
-                elif 'Lead' in role:
-                    rate = RATE_CARD[location]['U4'].get('Team Lead', 90)
-                else:
-                    rate = RATE_CARD[location]['U2'].get('Developer', 80)
-            elif location == 'Nearshore':
-                if 'Architect' in role:
-                    rate = RATE_CARD[location]['P1'].get('Technical Architect', 68)
-                elif 'Manager' in role:
-                    rate = RATE_CARD[location]['U4'].get('Project Manager', 68)
-                elif 'Senior' in role:
-                    rate = RATE_CARD[location]['U3'].get('Senior Developer', 57)
-                elif 'Lead' in role:
-                    rate = RATE_CARD[location]['U4'].get('Team Lead', 59)
-                else:
-                    rate = RATE_CARD[location]['U2'].get('Developer', 54)
-            else:  # Offshore
-                if 'Architect' in role:
-                    rate = RATE_CARD[location]['P1'].get('Technical Architect', 26)
-                elif 'Manager' in role:
-                    rate = RATE_CARD[location]['U4'].get('Project Manager', 26)
-                elif 'Senior' in role:
-                    rate = RATE_CARD[location]['U3'].get('Senior Developer', 23)
-                elif 'Junior' in role:
-                    rate = RATE_CARD[location]['U1'].get('Junior Developer', 18)
-                else:
-                    rate = RATE_CARD[location]['U2'].get('Developer', 20)
-            
+    for location in ['Onsite', 'Nearshore', 'Offshore']:
+        for role, count in resources[location].items():
+            if role in st.session_state.rate_card[location]:
+                rate = st.session_state.rate_card[location][role]
+            else:
+                # Default rates
+                rate = 50 if location == 'Offshore' else 75 if location == 'Nearshore' else 100
             total_cost += count * rate * hours_per_week * duration_weeks
     
     return total_cost
 
-# Main Streamlit App
-st.title("🚀 Marken Digital Transformation - Project Estimation Tool")
-st.markdown("---")
+def get_team_size(phase_name):
+    """Get total team size for a phase"""
+    resources = st.session_state.resources[phase_name]
+    total = 0
+    for location in ['Onsite', 'Nearshore', 'Offshore']:
+        total += sum(resources[location].values())
+    return total
 
-# Sidebar for configuration
+def save_configuration():
+    """Save current configuration to JSON"""
+    config = {
+        'rate_card': st.session_state.rate_card,
+        'resources': st.session_state.resources
+    }
+    return json.dumps(config, indent=2)
+
+def load_configuration(config_json):
+    """Load configuration from JSON"""
+    try:
+        config = json.loads(config_json)
+        st.session_state.rate_card = config['rate_card']
+        st.session_state.resources = config['resources']
+        return True
+    except:
+        return False
+
+# Main App
+st.title("🚀 Marken Digital Transformation - Editable Estimation Tool")
+st.markdown("### Customize Resources and Rates for Each Phase")
+
+# Sidebar for quick actions
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("⚙️ Quick Actions")
     
-    velocity = st.slider("Team Velocity (points/person/sprint)", 5, 20, 10)
-    contingency = st.slider("Contingency %", 0, 30, 15)
+    # Contingency setting
+    contingency = st.slider("Contingency %", 0, 30, 20, key='contingency')
     
-    st.header("📊 Summary Statistics")
-    st.metric("Total Epics", 33)
-    st.metric("Total Capabilities", 165)
-    st.metric("Total User Stories", "750+")
+    st.markdown("---")
+    
+    # Save/Load configuration
+    st.subheader("📁 Configuration")
+    
+    if st.button("💾 Download Configuration"):
+        config_json = save_configuration()
+        st.download_button(
+            label="Download as JSON",
+            data=config_json,
+            file_name=f"marken_config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
+    
+    uploaded_file = st.file_uploader("Upload Configuration", type=['json'])
+    if uploaded_file is not None:
+        config_content = uploaded_file.read().decode('utf-8')
+        if load_configuration(config_content):
+            st.success("Configuration loaded successfully!")
+            st.rerun()
+        else:
+            st.error("Failed to load configuration")
+    
+    st.markdown("---")
+    
+    # Quick metrics
+    st.subheader("📊 Quick Metrics")
+    total_cost = sum(calculate_cost_for_phase(f"Phase {i}") for i in range(3))
+    st.metric("Total Base Cost", f"${total_cost:,.0f}")
+    st.metric("With Contingency", f"${total_cost * (1 + contingency/100):,.0f}")
 
-# Main content tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 Timeline", "👥 Resources", "💰 Costs", "📊 Complexity Analysis", "📈 Dashboard"])
-
-# Generate phase data
-phases = generate_phase_timeline()
+# Main tabs
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Dashboard", 
+    "👥 Edit Resources", 
+    "💵 Edit Rates", 
+    "📈 Analysis", 
+    "📋 Resource Summary",
+    "🎯 Skill Requirements"
+])
 
 with tab1:
-    st.header("Project Timeline")
-    
-    # Create Gantt chart
-    gantt_data = []
-    for phase_name, phase_info in phases.items():
-        end_date = phase_info['start'] + timedelta(weeks=phase_info['duration_weeks'])
-        gantt_data.append({
-            'Task': phase_name,
-            'Start': phase_info['start'],
-            'Finish': end_date,
-            'Duration': f"{phase_info['duration_weeks']} weeks"
-        })
-    
-    df_gantt = pd.DataFrame(gantt_data)
-    
-    fig = px.timeline(
-        df_gantt, 
-        x_start="Start", 
-        x_end="Finish", 
-        y="Task",
-        title="Project Phase Timeline",
-        height=400
-    )
-    fig.update_yaxes(autorange="reversed")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Phase details
-    for phase_name, phase_info in phases.items():
-        with st.expander(f"📌 {phase_name}"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"**Start Date:** {phase_info['start'].strftime('%Y-%m-%d')}")
-                st.write(f"**Duration:** {phase_info['duration_weeks']} weeks")
-                st.write(f"**Focus:** {phase_info['focus']}")
-            with col2:
-                st.write(f"**Epics Count:** {len(phase_info['epics'])}")
-                if phase_info['epics']:
-                    total_stories = sum(EPIC_COMPLEXITY[epic]['stories'] for epic in phase_info['epics'] if epic in EPIC_COMPLEXITY)
-                    st.write(f"**Total Stories:** {total_stories}")
-
-with tab2:
-    st.header("Resource Allocation")
-    
-    for phase_name, phase_info in phases.items():
-        st.subheader(phase_name)
-        
-        resources = calculate_resources(phase_name, phase_info['epics'], phase_info['duration_weeks'])
-        
-        # Display resources in columns
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.markdown("**🏢 Onsite**")
-            for role, count in resources['Onsite'].items():
-                st.write(f"• {role}: {count}")
-        
-        with col2:
-            st.markdown("**🌍 Nearshore**")
-            for role, count in resources['Nearshore'].items():
-                st.write(f"• {role}: {count}")
-        
-        with col3:
-            st.markdown("**🌏 Offshore**")
-            for role, count in resources['Offshore'].items():
-                st.write(f"• {role}: {count}")
-        
-        # Calculate total headcount
-        total_onsite = sum(resources['Onsite'].values())
-        total_nearshore = sum(resources['Nearshore'].values())
-        total_offshore = sum(resources['Offshore'].values())
-        
-        st.markdown(f"**Total Team Size:** {total_onsite + total_nearshore + total_offshore} "
-                   f"(Ratio - {total_onsite}:{total_nearshore}:{total_offshore})")
-
-with tab3:
-    st.header("Cost Analysis")
-    
-    total_project_cost = 0
-    cost_breakdown = []
-    
-    for phase_name, phase_info in phases.items():
-        resources = calculate_resources(phase_name, phase_info['epics'], phase_info['duration_weeks'])
-        phase_cost = calculate_cost(resources, phase_info['duration_weeks'])
-        total_project_cost += phase_cost
-        
-        cost_breakdown.append({
-            'Phase': phase_name,
-            'Base Cost': phase_cost,
-            'Contingency': phase_cost * (contingency/100),
-            'Total Cost': phase_cost * (1 + contingency/100)
-        })
-    
-    df_cost = pd.DataFrame(cost_breakdown)
-    
-    # Display cost summary
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Total Base Cost", f"${total_project_cost:,.0f}")
-    with col2:
-        st.metric("Contingency", f"${total_project_cost * (contingency/100):,.0f}")
-    with col3:
-        st.metric("Total Project Cost", f"${total_project_cost * (1 + contingency/100):,.0f}")
-    
-    # Cost breakdown table
-    st.subheader("Phase-wise Cost Breakdown")
-    st.dataframe(
-        df_cost.style.format({
-            'Base Cost': '${:,.0f}',
-            'Contingency': '${:,.0f}',
-            'Total Cost': '${:,.0f}'
-        }),
-        use_container_width=True
-    )
-    
-    # Cost distribution pie chart
-    fig = px.pie(
-        df_cost,
-        values='Total Cost',
-        names='Phase',
-        title='Cost Distribution by Phase'
-    )
-    st.plotly_chart(fig)
-
-with tab4:
-    st.header("Epic Complexity Analysis")
-    
-    # Prepare complexity data
-    complexity_data = []
-    for epic_id, epic_info in EPIC_COMPLEXITY.items():
-        complexity_data.append({
-            'Epic': epic_id,
-            'System': epic_id.split('-')[0],
-            'Complexity': epic_info['complexity'],
-            'Stories': epic_info['stories'],
-            'Effort Multiplier': epic_info['effort_multiplier'],
-            'Story Points': calculate_story_points(epic_id)
-        })
-    
-    df_complexity = pd.DataFrame(complexity_data)
-    
-    # Complexity distribution
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        fig = px.pie(
-            df_complexity.groupby('Complexity').size().reset_index(name='Count'),
-            values='Count',
-            names='Complexity',
-            title='Epic Complexity Distribution'
-        )
-        st.plotly_chart(fig)
-    
-    with col2:
-        fig = px.bar(
-            df_complexity.groupby('System')['Story Points'].sum().reset_index(),
-            x='System',
-            y='Story Points',
-            title='Story Points by System',
-            color='System'
-        )
-        st.plotly_chart(fig)
-    
-    # Detailed complexity table
-    st.subheader("Epic Complexity Details")
-    st.dataframe(
-        df_complexity.style.format({
-            'Effort Multiplier': '{:.1f}',
-            'Story Points': '{:.0f}'
-        }),
-        use_container_width=True
-    )
-
-with tab5:
     st.header("Executive Dashboard")
     
-    # Key metrics
+    # Calculate metrics for all phases
+    phase_data = []
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        cost = calculate_cost_for_phase(phase_name)
+        team_size = get_team_size(phase_name)
+        duration = st.session_state.resources[phase_name]['duration_weeks']
+        
+        phase_data.append({
+            'Phase': phase_name,
+            'Duration (weeks)': duration,
+            'Team Size': team_size,
+            'Base Cost': cost,
+            'Contingency': cost * (contingency/100),
+            'Total Cost': cost * (1 + contingency/100),
+            'Weekly Burn': cost / duration if duration > 0 else 0
+        })
+    
+    df_phases = pd.DataFrame(phase_data)
+    
+    # Display key metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        total_duration = sum(phase['duration_weeks'] for phase in phases.values())
+        total_duration = sum(p['Duration (weeks)'] for p in phase_data)
         st.metric("Total Duration", f"{total_duration} weeks")
+        st.caption(f"~{total_duration/4.33:.1f} months")
     
     with col2:
-        st.metric("Total Cost", f"${total_project_cost * (1 + contingency/100):,.0f}")
+        total_cost = sum(p['Total Cost'] for p in phase_data)
+        st.metric("Total Investment", f"${total_cost/1000000:.2f}M")
+        st.caption(f"Includes {contingency}% contingency")
     
     with col3:
-        total_resources = 0
-        for phase_name, phase_info in phases.items():
-            resources = calculate_resources(phase_name, phase_info['epics'], phase_info['duration_weeks'])
-            phase_resources = sum(sum(loc.values()) for loc in resources.values())
-            total_resources = max(total_resources, phase_resources)
-        st.metric("Peak Team Size", total_resources)
+        peak_team = max(p['Team Size'] for p in phase_data)
+        peak_phase = phase_data[[p['Team Size'] for p in phase_data].index(peak_team)]['Phase']
+        st.metric("Peak Team Size", f"{peak_team}")
+        st.caption(f"During {peak_phase}")
     
     with col4:
-        total_points = sum(calculate_story_points(epic) for epic in EPIC_COMPLEXITY.keys())
-        st.metric("Total Story Points", f"{total_points:.0f}")
+        avg_burn = sum(p['Weekly Burn'] for p in phase_data) / len(phase_data)
+        st.metric("Avg Weekly Burn", f"${avg_burn:,.0f}")
+        st.caption("Across all phases")
     
-    # Resource distribution over time
-    st.subheader("Resource Distribution Over Project Lifecycle")
+    # Phase summary table
+    st.subheader("Phase-by-Phase Summary")
+    st.dataframe(
+        df_phases.style.format({
+            'Base Cost': '${:,.0f}',
+            'Contingency': '${:,.0f}',
+            'Total Cost': '${:,.0f}',
+            'Weekly Burn': '${:,.0f}'
+        }).background_gradient(subset=['Total Cost', 'Team Size']),
+        use_container_width=True
+    )
     
-    resource_timeline = []
-    for phase_name, phase_info in phases.items():
-        resources = calculate_resources(phase_name, phase_info['epics'], phase_info['duration_weeks'])
-        resource_timeline.append({
+    # Cost breakdown chart
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig = px.bar(
+            df_phases,
+            x='Phase',
+            y='Total Cost',
+            title='Cost by Phase',
+            color='Total Cost',
+            color_continuous_scale='Blues'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        fig = px.pie(
+            df_phases,
+            values='Team Size',
+            names='Phase',
+            title='Team Size Distribution'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+with tab2:
+    st.header("Edit Resources by Phase")
+    
+    phase_select = st.selectbox("Select Phase", ["Phase 0", "Phase 1", "Phase 2"])
+    
+    # Duration editor
+    st.subheader(f"⏱️ {phase_select} Duration")
+    new_duration = st.number_input(
+        "Duration (weeks)",
+        min_value=1,
+        max_value=52,
+        value=st.session_state.resources[phase_select]['duration_weeks']
+    )
+    st.session_state.resources[phase_select]['duration_weeks'] = new_duration
+    
+    st.markdown("---")
+    
+    # Resource editors for each location
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("🏢 Onsite Resources")
+        onsite_resources = st.session_state.resources[phase_select]['Onsite'].copy()
+        
+        # Add new role
+        with st.expander("Add New Role"):
+            available_roles = [r for r in st.session_state.rate_card['Onsite'].keys() 
+                             if r not in onsite_resources]
+            if available_roles:
+                new_role = st.selectbox("Select Role", available_roles, key=f"onsite_new_{phase_select}")
+                new_count = st.number_input("Count", min_value=1, value=1, key=f"onsite_count_{phase_select}")
+                if st.button("Add", key=f"onsite_add_{phase_select}"):
+                    st.session_state.resources[phase_select]['Onsite'][new_role] = new_count
+                    st.rerun()
+        
+        # Edit existing roles
+        for role in list(onsite_resources.keys()):
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                new_count = st.number_input(
+                    role,
+                    min_value=0,
+                    value=onsite_resources[role],
+                    key=f"onsite_{phase_select}_{role}"
+                )
+                if new_count == 0:
+                    del st.session_state.resources[phase_select]['Onsite'][role]
+                else:
+                    st.session_state.resources[phase_select]['Onsite'][role] = new_count
+            with col_b:
+                rate = st.session_state.rate_card['Onsite'].get(role, 100)
+                st.caption(f"${rate}/hr")
+    
+    with col2:
+        st.subheader("🌍 Nearshore Resources")
+        nearshore_resources = st.session_state.resources[phase_select]['Nearshore'].copy()
+        
+        # Add new role
+        with st.expander("Add New Role"):
+            available_roles = [r for r in st.session_state.rate_card['Nearshore'].keys() 
+                             if r not in nearshore_resources]
+            if available_roles:
+                new_role = st.selectbox("Select Role", available_roles, key=f"nearshore_new_{phase_select}")
+                new_count = st.number_input("Count", min_value=1, value=1, key=f"nearshore_count_{phase_select}")
+                if st.button("Add", key=f"nearshore_add_{phase_select}"):
+                    st.session_state.resources[phase_select]['Nearshore'][new_role] = new_count
+                    st.rerun()
+        
+        # Edit existing roles
+        for role in list(nearshore_resources.keys()):
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                new_count = st.number_input(
+                    role,
+                    min_value=0,
+                    value=nearshore_resources[role],
+                    key=f"nearshore_{phase_select}_{role}"
+                )
+                if new_count == 0:
+                    del st.session_state.resources[phase_select]['Nearshore'][role]
+                else:
+                    st.session_state.resources[phase_select]['Nearshore'][role] = new_count
+            with col_b:
+                rate = st.session_state.rate_card['Nearshore'].get(role, 75)
+                st.caption(f"${rate}/hr")
+    
+    with col3:
+        st.subheader("🌏 Offshore Resources")
+        offshore_resources = st.session_state.resources[phase_select]['Offshore'].copy()
+        
+        # Add new role
+        with st.expander("Add New Role"):
+            available_roles = [r for r in st.session_state.rate_card['Offshore'].keys() 
+                             if r not in offshore_resources]
+            if available_roles:
+                new_role = st.selectbox("Select Role", available_roles, key=f"offshore_new_{phase_select}")
+                new_count = st.number_input("Count", min_value=1, value=1, key=f"offshore_count_{phase_select}")
+                if st.button("Add", key=f"offshore_add_{phase_select}"):
+                    st.session_state.resources[phase_select]['Offshore'][new_role] = new_count
+                    st.rerun()
+        
+        # Edit existing roles
+        for role in list(offshore_resources.keys()):
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                new_count = st.number_input(
+                    role,
+                    min_value=0,
+                    value=offshore_resources[role],
+                    key=f"offshore_{phase_select}_{role}"
+                )
+                if new_count == 0:
+                    del st.session_state.resources[phase_select]['Offshore'][role]
+                else:
+                    st.session_state.resources[phase_select]['Offshore'][role] = new_count
+            with col_b:
+                rate = st.session_state.rate_card['Offshore'].get(role, 50)
+                st.caption(f"${rate}/hr")
+    
+    # Show updated cost for this phase
+    st.markdown("---")
+    phase_cost = calculate_cost_for_phase(phase_select)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Phase Base Cost", f"${phase_cost:,.0f}")
+    with col2:
+        st.metric("With Contingency", f"${phase_cost * (1 + contingency/100):,.0f}")
+    with col3:
+        team_size = get_team_size(phase_select)
+        st.metric("Total Team Size", team_size)
+
+with tab3:
+    st.header("Edit Rate Cards")
+    
+    location_select = st.selectbox("Select Location", ["Onsite", "Nearshore", "Offshore"])
+    
+    st.subheader(f"💵 {location_select} Rates (USD per hour)")
+    
+    # Add new role to rate card
+    with st.expander("Add New Role"):
+        new_role_name = st.text_input("Role Name")
+        new_role_rate = st.number_input("Hourly Rate (USD)", min_value=10.0, value=50.0, step=0.5)
+        if st.button("Add Role") and new_role_name:
+            st.session_state.rate_card[location_select][new_role_name] = new_role_rate
+            st.rerun()
+    
+    # Edit existing rates
+    rates = st.session_state.rate_card[location_select].copy()
+    
+    # Display in two columns for better layout
+    col1, col2 = st.columns(2)
+    roles_list = list(rates.keys())
+    mid_point = len(roles_list) // 2
+    
+    with col1:
+        for role in roles_list[:mid_point]:
+            new_rate = st.number_input(
+                role,
+                min_value=10.0,
+                value=float(rates[role]),
+                step=0.5,
+                key=f"rate_{location_select}_{role}"
+            )
+            st.session_state.rate_card[location_select][role] = new_rate
+    
+    with col2:
+        for role in roles_list[mid_point:]:
+            new_rate = st.number_input(
+                role,
+                min_value=10.0,
+                value=float(rates[role]),
+                step=0.5,
+                key=f"rate_{location_select}_{role}"
+            )
+            st.session_state.rate_card[location_select][role] = new_rate
+    
+    # Show rate comparison
+    st.markdown("---")
+    st.subheader("Rate Comparison Across Locations")
+    
+    # Find common roles
+    common_roles = set()
+    for loc in ['Onsite', 'Nearshore', 'Offshore']:
+        common_roles.update(st.session_state.rate_card[loc].keys())
+    
+    comparison_data = []
+    for role in sorted(common_roles):
+        comparison_data.append({
+            'Role': role,
+            'Onsite': st.session_state.rate_card['Onsite'].get(role, 0),
+            'Nearshore': st.session_state.rate_card['Nearshore'].get(role, 0),
+            'Offshore': st.session_state.rate_card['Offshore'].get(role, 0)
+        })
+    
+    df_comparison = pd.DataFrame(comparison_data)
+    df_comparison['Savings (Nearshore)'] = ((df_comparison['Onsite'] - df_comparison['Nearshore']) / df_comparison['Onsite'] * 100).round(1)
+    df_comparison['Savings (Offshore)'] = ((df_comparison['Onsite'] - df_comparison['Offshore']) / df_comparison['Onsite'] * 100).round(1)
+    
+    st.dataframe(
+        df_comparison.style.format({
+            'Onsite': '${:.2f}',
+            'Nearshore': '${:.2f}',
+            'Offshore': '${:.2f}',
+            'Savings (Nearshore)': '{:.1f}%',
+            'Savings (Offshore)': '{:.1f}%'
+        }).background_gradient(subset=['Onsite', 'Nearshore', 'Offshore']),
+        use_container_width=True
+    )
+
+with tab4:
+    st.header("Resource & Cost Analysis")
+    
+    # Resource distribution across phases
+    st.subheader("Resource Distribution")
+    
+    distribution_data = []
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        resources = st.session_state.resources[phase_name]
+        distribution_data.append({
             'Phase': phase_name,
             'Onsite': sum(resources['Onsite'].values()),
             'Nearshore': sum(resources['Nearshore'].values()),
             'Offshore': sum(resources['Offshore'].values())
         })
     
-    df_resource_timeline = pd.DataFrame(resource_timeline)
+    df_dist = pd.DataFrame(distribution_data)
     
+    # Stacked bar chart
     fig = go.Figure()
-    fig.add_trace(go.Bar(name='Onsite', x=df_resource_timeline['Phase'], y=df_resource_timeline['Onsite']))
-    fig.add_trace(go.Bar(name='Nearshore', x=df_resource_timeline['Phase'], y=df_resource_timeline['Nearshore']))
-    fig.add_trace(go.Bar(name='Offshore', x=df_resource_timeline['Phase'], y=df_resource_timeline['Offshore']))
+    fig.add_trace(go.Bar(name='Onsite', x=df_dist['Phase'], y=df_dist['Onsite']))
+    fig.add_trace(go.Bar(name='Nearshore', x=df_dist['Phase'], y=df_dist['Nearshore']))
+    fig.add_trace(go.Bar(name='Offshore', x=df_dist['Phase'], y=df_dist['Offshore']))
     fig.update_layout(barmode='stack', title='Resource Stack by Phase')
     st.plotly_chart(fig, use_container_width=True)
     
-    # Risk assessment
-    st.subheader("Risk Assessment")
-    risks = [
-        {"Risk": "Integration Complexity", "Impact": "High", "Probability": "Medium", "Mitigation": "Early POCs, dedicated integration team"},
-        {"Risk": "Mobile App Performance", "Impact": "Medium", "Probability": "Low", "Mitigation": "Performance testing from Phase 1"},
-        {"Risk": "Data Migration", "Impact": "High", "Probability": "Medium", "Mitigation": "Phased migration approach"},
-        {"Risk": "Regulatory Compliance", "Impact": "Very High", "Probability": "Low", "Mitigation": "Continuous compliance checks"},
-        {"Risk": "User Adoption", "Impact": "Medium", "Probability": "Medium", "Mitigation": "Change management program"}
-    ]
+    # Cost breakdown by location
+    st.subheader("Cost Breakdown by Location")
     
-    df_risks = pd.DataFrame(risks)
-    st.dataframe(df_risks, use_container_width=True)
+    cost_breakdown = []
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        resources = st.session_state.resources[phase_name]
+        duration = resources['duration_weeks']
+        
+        for location in ['Onsite', 'Nearshore', 'Offshore']:
+            location_cost = 0
+            for role, count in resources[location].items():
+                rate = st.session_state.rate_card[location].get(role, 50)
+                location_cost += count * rate * 40 * duration
+            
+            if location_cost > 0:
+                cost_breakdown.append({
+                    'Phase': phase_name,
+                    'Location': location,
+                    'Cost': location_cost
+                })
+    
+    df_cost_breakdown = pd.DataFrame(cost_breakdown)
+    
+    fig = px.sunburst(
+        df_cost_breakdown,
+        path=['Phase', 'Location'],
+        values='Cost',
+        title='Cost Distribution Hierarchy'
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Efficiency metrics
+    st.subheader("Efficiency Metrics")
+    
+    efficiency_data = []
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        cost = calculate_cost_for_phase(phase_name)
+        team_size = get_team_size(phase_name)
+        duration = st.session_state.resources[phase_name]['duration_weeks']
+        
+        efficiency_data.append({
+            'Phase': phase_name,
+            'Cost per Person-Week': cost / (team_size * duration) if team_size > 0 and duration > 0 else 0,
+            'Average Team Cost/Hour': cost / (team_size * duration * 40) if team_size > 0 and duration > 0 else 0,
+            'Team Productivity': 1000 / (cost / (team_size * duration)) if cost > 0 and team_size > 0 and duration > 0 else 0
+        })
+    
+    df_efficiency = pd.DataFrame(efficiency_data)
+    
+    col1, col2, col3 = st.columns(3)
+    for i, phase in enumerate(efficiency_data):
+        with [col1, col2, col3][i]:
+            st.metric(
+                f"{phase['Phase']} Efficiency",
+                f"${phase['Cost per Person-Week']:,.0f}",
+                f"Avg: ${phase['Average Team Cost/Hour']:.2f}/hr"
+            )
 
-# Footer
-st.markdown("---")
-st.markdown("### 📝 Notes")
-st.info("""
-**Key Assumptions:**
-- Microservices architecture with React/Angular frontend
-- Android-based Zebra scanner application for Polar Scan
-- RESTful APIs with event-driven architecture
-- Cloud-native deployment (AWS/Azure)
-- CI/CD pipeline from Phase 1
-- Agile methodology with 2-week sprints
-""")
+with tab5:
+    st.header("📋 Complete Resource Summary")
+    
+    # Create comprehensive resource table
+    all_resources = []
+    
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        resources = st.session_state.resources[phase_name]
+        duration = resources['duration_weeks']
+        
+        for location in ['Onsite', 'Nearshore', 'Offshore']:
+            for role, count in resources[location].items():
+                if count > 0:
+                    rate = st.session_state.rate_card[location].get(role, 50)
+                    total_cost = count * rate * 40 * duration
+                    
+                    all_resources.append({
+                        'Phase': phase_name,
+                        'Location': location,
+                        'Role': role,
+                        'Count': count,
+                        'Rate/Hour': rate,
+                        'Duration (weeks)': duration,
+                        'Total Hours': count * 40 * duration,
+                        'Total Cost': total_cost
+                    })
+    
+    df_all_resources = pd.DataFrame(all_resources)
+    
+    # Display by phase
+    for phase_num in range(3):
+        phase_name = f"Phase {phase_num}"
+        st.subheader(f"{phase_name} Resources")
+        
+        phase_df = df_all_resources[df_all_resources['Phase'] == phase_name]
+        
+        if not phase_df.empty:
+            # Summary metrics for this phase
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                total_people = phase_df['Count'].sum()
+                st.metric("Total People", total_people)
+            with col2:
+                total_hours = phase_df['Total Hours'].sum()
+                st.metric("Total Hours", f"{total_hours:,}")
+            with col3:
+                total_cost = phase_df['Total Cost'].sum()
+                st.metric("Total Cost", f"${total_cost:,.0f}")
+            with col4:
+                avg_rate = phase_df['Total Cost'].sum() / phase_df['Total Hours'].sum()
+                st.metric("Avg Rate", f"${avg_rate:.2f}/hr")
+            
+            # Detailed table
+            st.dataframe(
+                phase_df.style.format({
+                    'Rate/Hour': '${:.2f}',
+                    'Total Hours': '{:,.0f}',
+                    'Total Cost': '${:,.0f}'
+                }),
+                use_container_width=True
+            )
+        
+        st.markdown("---")
+    
+    # Download full resource plan
+    if st.button("📥 Export Full Resource Plan"):
+        st.download_button(
+            label="Download as CSV",
+            data=df_all_resources.to_csv(index=False),
+            file_name=f"marken_resources_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
 
-st.warning("""
-**Critical Success Factors:**
-- Early stakeholder alignment in Phase 0
-- Strong integration between Scan and Track systems
-- Robust testing strategy for mobile applications
-- Performance optimization for real-time tracking
-- Compliance with healthcare regulations (GDPR, GDP)
-""")
-
-# Download functionality
-if st.button("📥 Export Estimation Report"):
-    report = {
-        "phases": phases,
-        "total_cost": total_project_cost * (1 + contingency/100),
-        "complexity_analysis": complexity_data,
-        "resource_summary": resource_timeline
+with tab6:
+    st.header("🎯 Skill Requirements by Phase")
+    
+    st.markdown("""
+    ### Phase-wise Skill Distribution and Technical Requirements
+    """)
+    
+    # Phase 0 Skills
+    with st.expander("📋 **Phase 0 - Due Diligence** (8 weeks)"):
+        st.markdown("""
+        **Core Focus:** Architecture Design, POCs, Business Alignment
+        
+        **Required Skillsets:**
+        - **Enterprise Architecture:** Microservices, Event-driven architecture, API design
+        - **Cloud Architecture:** AWS/Azure, Kubernetes, Docker
+        - **Integration Patterns:** ESB, API Gateway, Event streaming (Kafka)
+        - **Mobile Architecture:** Android development for Zebra scanners
+        - **IoT Architecture:** Temperature sensors, real-time data streaming
+        - **Business Analysis:** Process mapping, requirements gathering
+        - **UI/UX Design:** Design systems, mobile-first approach
+        
+        **Key Deliverables:**
+        - Technical architecture blueprint
+        - Integration strategy document
+        - POC for Zebra scanner app
+        - POC for IoT temperature monitoring
+        - Risk assessment and mitigation plan
+        """)
+    
+    # Phase 1 Skills
+    with st.expander("🚀 **Phase 1 - Polar Scan & Track** (28 weeks)"):
+        st.markdown("""
+        **Core Focus:** Mobile App, Real-time Systems, IoT Integration
+        
+        **Technical Stack & Skills Required:**
+        
+        **Frontend Development:**
+        - React/Angular for web applications
+        - React Native for cross-platform mobile
+        - Android native (Java/Kotlin) for Zebra scanner
+        - Progressive Web Apps (PWA)
+        - Responsive design, Material Design
+        
+        **Backend Development:**
+        - Microservices (Node.js, Java Spring Boot)
+        - RESTful APIs and GraphQL
+        - Event-driven architecture (Kafka, RabbitMQ)
+        - Real-time processing (WebSockets, Server-Sent Events)
+        - Caching strategies (Redis)
+        
+        **Mobile Development (Critical for Phase 1):**
+        - Android SDK for Zebra devices
+        - Barcode scanning libraries (ZXing)
+        - Offline-first architecture
+        - Background services and sync
+        - Hardware integration (scanner, printer)
+        
+        **IoT & Real-time Systems:**
+        - IoT protocols (MQTT, CoAP)
+        - Temperature sensor integration
+        - GPS/Telematics integration
+        - Real-time data pipelines
+        - Time-series databases (InfluxDB)
+        
+        **Integration & Middleware:**
+        - API Gateway (Kong, Apigee)
+        - ESB/Integration platforms
+        - EDI processing
+        - WMS/ERP integration (Dynamics 365)
+        - Third-party APIs (FedEx, UPS, DHL)
+        
+        **DevOps & Infrastructure:**
+        - CI/CD pipelines (Jenkins, GitLab CI)
+        - Container orchestration (Kubernetes)
+        - Infrastructure as Code (Terraform)
+        - Monitoring (Prometheus, Grafana)
+        - Log aggregation (ELK stack)
+        
+        **Data & Analytics:**
+        - PostgreSQL, MongoDB, Redis
+        - Data warehousing
+        - ETL pipelines
+        - Business intelligence tools
+        - Predictive analytics for route optimization
+        
+        **Testing & Quality:**
+        - Mobile app testing (Appium)
+        - API testing (Postman, REST Assured)
+        - Performance testing (JMeter, Gatling)
+        - Security testing
+        - Test automation frameworks
+        """)
+    
+    # Phase 2 Skills
+    with st.expander("💊 **Phase 2 - Patient Management** (16 weeks)"):
+        st.markdown("""
+        **Core Focus:** Web Portal, NHS Integration, Compliance
+        
+        **Technical Stack & Skills Required:**
+        
+        **Frontend Development:**
+        - React/Angular for patient portal
+        - Accessibility standards (WCAG)
+        - Responsive design
+        - Form validation and wizards
+        - Dashboard and reporting UI
+        
+        **Backend Development:**
+        - CRUD operations
+        - Workflow engines
+        - Business rules engine
+        - Notification services
+        - Document management
+        
+        **Healthcare Integration:**
+        - NHS API integration
+        - HL7/FHIR standards
+        - Electronic prescription handling
+        - Clinical data exchange
+        - Patient identity management
+        
+        **Security & Compliance:**
+        - GDPR compliance implementation
+        - GDP (Good Distribution Practice)
+        - OAuth 2.0/SAML authentication
+        - Data encryption at rest and transit
+        - Audit logging
+        - Role-based access control
+        
+        **Data Management:**
+        - Master data management
+        - Patient data privacy
+        - Clinical data modeling
+        - Report generation
+        - Data archival strategies
+        
+        **Quality & Testing:**
+        - Compliance testing
+        - Security testing
+        - User acceptance testing
+        - Accessibility testing
+        - Cross-browser testing
+        """)
+    
+    # Skills Matrix
+    st.markdown("---")
+    st.subheader("📊 Skills Distribution Matrix")
+    
+    skills_matrix = {
+        'Skill Category': [
+            'Mobile Development',
+            'Backend Development',
+            'Frontend Web',
+            'IoT/Real-time',
+            'Integration',
+            'DevOps/Cloud',
+            'Testing/QA',
+            'Business/Analysis',
+            'Security/Compliance',
+            'Data/Analytics'
+        ],
+        'Phase 0': ['Low', 'Medium', 'Low', 'Medium', 'High', 'High', 'Low', 'High', 'Medium', 'Low'],
+        'Phase 1': ['Very High', 'Very High', 'High', 'Very High', 'Very High', 'High', 'High', 'Medium', 'Medium', 'High'],
+        'Phase 2': ['Low', 'High', 'High', 'Low', 'Medium', 'Medium', 'High', 'Medium', 'Very High', 'Medium']
     }
     
-    st.download_button(
-        label="Download JSON Report",
-        data=json.dumps(report, default=str, indent=2),
-        file_name=f"marken_estimation_{datetime.now().strftime('%Y%m%d')}.json",
-        mime="application/json"
+    df_skills = pd.DataFrame(skills_matrix)
+    
+    # Color code the matrix
+    def color_skill_level(val):
+        colors = {
+            'Low': 'background-color: #90EE90',
+            'Medium': 'background-color: #FFD700',
+            'High': 'background-color: #FFA500',
+            'Very High': 'background-color: #FF6B6B'
+        }
+        return colors.get(val, '')
+    
+    st.dataframe(
+        df_skills.style.applymap(color_skill_level, subset=['Phase 0', 'Phase 1', 'Phase 2']),
+        use_container_width=True
     )
+    
+    st.info("""
+    **Skills Legend:**
+    - 🟩 **Low**: Minimal requirement or support role
+    - 🟨 **Medium**: Standard requirement, moderate complexity
+    - 🟠 **High**: Critical skill, significant effort needed
+    - 🔴 **Very High**: Mission-critical, specialized expertise required
+    """)
+    
+    # Critical Skills Alert
+    st.warning("""
+    **⚠️ Critical Skills for Success:**
+    
+    **Phase 1 Critical Skills:**
+    - Android developers with Zebra scanner experience
+    - IoT engineers for temperature monitoring
+    - Real-time system architects
+    - Mobile app performance optimization
+    - Integration specialists for WMS/ERP
+    
+    **Phase 2 Critical Skills:**
+    - NHS integration specialists
+    - Healthcare compliance experts
+    - GDPR/GDP compliance engineers
+    - Clinical workflow designers
+    """)
+
+# Footer with summary
+st.markdown("---")
+st.markdown("### 💼 Project Summary")
+
+total_cost = sum(calculate_cost_for_phase(f"Phase {i}") for i in range(3))
+total_duration = sum(st.session_state.resources[f"Phase {i}"]['duration_weeks'] for i in range(3))
+max_team_size = max(get_team_size(f"Phase {i}") for i in range(3))
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.info(f"**Total Duration:** {total_duration} weeks")
+with col2:
+    st.success(f"**Base Cost:** ${total_cost:,.0f}")
+with col3:
+    st.warning(f"**With {contingency}% Buffer:** ${total_cost * (1 + contingency/100):,.0f}")
+with col4:
+    st.error(f"**Peak Team:** {max_team_size} people")
