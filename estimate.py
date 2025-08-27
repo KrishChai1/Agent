@@ -1283,16 +1283,16 @@ with tab1:
     # Visualizations
     col1, col2 = st.columns(2)
     
-    with col1:
-        # Cost distribution
-        cost_data = [ps for ps in phase_summary]
-        fig = px.pie(
-            cost_data,
-            values=[float(ps['Total Cost'].replace('$', '').replace(',', '')) for ps in cost_data],
-            names=[ps['Name'] for ps in cost_data],
-            title='Cost Distribution by Phase'
-        )
-        st.plotly_chart(fig, use_container_width=True)
+   with col1:
+    # Cost distribution
+    cost_data = [ps for ps in phase_summary]
+    fig = px.pie(
+        cost_data,
+        values=[ps['Total Cost'] for ps in cost_data],  # Total Cost is already a float
+        names=[ps['Name'] for ps in cost_data],
+        title='Cost Distribution by Phase'
+    )
+    st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         # Complexity distribution
@@ -1710,3 +1710,4 @@ st.info("""
 - Strong integration capabilities for real-time systems
 - Healthcare compliance knowledge for Phase 2
 """)
+
