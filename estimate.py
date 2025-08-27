@@ -125,8 +125,997 @@ if 'epics' not in st.session_state:
                 }
             }
         },
-        # Add remaining epics here - truncated for brevity
-        # You would copy all the epic definitions from your original code
+        'PS-EPIC-03': {
+            'name': 'Warehouse & Inventory Management',
+            'system': 'Polar Scan',
+            'complexity': 'High',
+            'capabilities': {
+                'PS-CAP-3.1': {
+                    'name': 'Pharmacy inventory management',
+                    'stories': ['Real-time pharmaceutical visibility', 'Track controlled substances', 'Compliance tracking'],
+                    'points': 8
+                },
+                'PS-CAP-3.2': {
+                    'name': 'Location and bin management',
+                    'stories': ['Perform bin putaway', 'Move inventory between locations', 'Location optimization'],
+                    'points': 5
+                },
+                'PS-CAP-3.3': {
+                    'name': 'Cycle counting and adjustments',
+                    'stories': ['Perform cycle counting', 'Adjust inventory with reasons', 'Reconciliation workflows'],
+                    'points': 5
+                },
+                'PS-CAP-3.4': {
+                    'name': 'Lot/batch/serial tracking',
+                    'stories': ['Track lot numbers', 'Track expiry dates', 'Serial number management'],
+                    'points': 5
+                },
+                'PS-CAP-3.5': {
+                    'name': 'Expiry and FEFO management',
+                    'stories': ['Enforce FEFO rules', 'Quarantine expired items', 'Expiry alerts'],
+                    'points': 5
+                }
+            }
+        },
+        'PS-EPIC-04': {
+            'name': 'Temperature Zone Operations',
+            'system': 'Polar Scan',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PS-CAP-4.1': {
+                    'name': 'Temperature zone identification',
+                    'stories': ['Identify temperature requirements at scan', 'Temperature validation', 'Zone routing logic'],
+                    'points': 8
+                },
+                'PS-CAP-4.2': {
+                    'name': 'Ambient zone operations',
+                    'stories': ['Route items to ambient zones', 'Ambient zone management', 'Zone capacity tracking'],
+                    'points': 3
+                },
+                'PS-CAP-4.3': {
+                    'name': 'Chilled zone management',
+                    'stories': ['Route to chilled zones (2-8°C)', 'Chilled chamber monitoring', 'Temperature compliance'],
+                    'points': 8
+                },
+                'PS-CAP-4.4': {
+                    'name': 'Frozen zone management',
+                    'stories': ['Route to frozen zones (-20°C)', 'Frozen storage management', 'Deep freeze monitoring'],
+                    'points': 8
+                },
+                'PS-CAP-4.5': {
+                    'name': 'Temperature validation',
+                    'stories': ['Validate at checkpoints', 'Override with authorization', 'Compliance reports'],
+                    'points': 5
+                }
+            }
+        },
+        'PS-EPIC-05': {
+            'name': 'Staging & Bus Stop Management',
+            'system': 'Polar Scan',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PS-CAP-5.1': {
+                    'name': 'Staging area operations',
+                    'stories': ['Move pallets to staging', 'Staging area visibility', 'Optimize utilization'],
+                    'points': 3
+                },
+                'PS-CAP-5.2': {
+                    'name': 'Bus stop allocation',
+                    'stories': ['Assign bus stop locations', 'Scan pallets at bus stops', 'Bus stop management'],
+                    'points': 3
+                },
+                'PS-CAP-5.3': {
+                    'name': 'Vehicle presence detection',
+                    'stories': ['Detect vehicle arrival', 'Alert when vehicles present', 'Vehicle tracking'],
+                    'points': 5
+                },
+                'PS-CAP-5.4': {
+                    'name': 'Staging to loading workflows',
+                    'stories': ['Move staged pallets to vehicles', 'Loading sequence optimization', 'Clear staging areas'],
+                    'points': 3
+                },
+                'PS-CAP-5.5': {
+                    'name': 'Priority staging management',
+                    'stories': ['Prioritize urgent items', 'Express lane management', 'Priority alerts'],
+                    'points': 3
+                }
+            }
+        },
+        'PS-EPIC-06': {
+            'name': 'Cross-docking Operations',
+            'system': 'Polar Scan',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PS-CAP-6.1': {
+                    'name': 'Cross-dock identification',
+                    'stories': ['Identify cross-dock items', 'Cross-dock routing rules', 'Bypass storage logic'],
+                    'points': 3
+                },
+                'PS-CAP-6.2': {
+                    'name': 'Direct to outbound routing',
+                    'stories': ['Route directly to outbound', 'Scan confirmations', 'Skip putaway'],
+                    'points': 3
+                },
+                'PS-CAP-6.3': {
+                    'name': 'Cross-dock performance',
+                    'stories': ['Track dwell time', 'Performance metrics', 'Optimization reports'],
+                    'points': 3
+                },
+                'PS-CAP-6.4': {
+                    'name': 'Consolidation operations',
+                    'stories': ['Consolidate shipments', 'Merge orders', 'Consolidation rules'],
+                    'points': 5
+                }
+            }
+        },
+        'PS-EPIC-07': {
+            'name': 'Outbound & Final Mile Loading',
+            'system': 'Polar Scan',
+            'complexity': 'High',
+            'capabilities': {
+                'PS-CAP-7.1': {
+                    'name': 'Pick list generation',
+                    'stories': ['Receive pick lists on scanner', 'Optimized pick paths', 'Batch picking'],
+                    'points': 5
+                },
+                'PS-CAP-7.2': {
+                    'name': 'Pack and ship operations',
+                    'stories': ['Scan items during picking', 'Scan into packages', 'Print shipping labels'],
+                    'points': 5
+                },
+                'PS-CAP-7.3': {
+                    'name': 'Final mile vehicle loading',
+                    'stories': ['Scan by delivery route', 'Load ambient chamber', 'Load chilled chamber'],
+                    'points': 8
+                },
+                'PS-CAP-7.4': {
+                    'name': 'Route-based loading',
+                    'stories': ['Scan vehicle chambers', 'Route optimization', 'Loading sequence'],
+                    'points': 5
+                },
+                'PS-CAP-7.5': {
+                    'name': 'Load verification',
+                    'stories': ['Validate completeness', 'Confirm departure', 'Send departure events'],
+                    'points': 5
+                }
+            }
+        },
+        'PS-EPIC-08': {
+            'name': 'Exception & Misdelivery Management',
+            'system': 'Polar Scan',
+            'complexity': 'High',
+            'capabilities': {
+                'PS-CAP-8.1': {
+                    'name': 'Misdelivery detection',
+                    'stories': ['Identify misdelivered items', 'Generate re-routing', 'Misdelivery alerts'],
+                    'points': 5
+                },
+                'PS-CAP-8.2': {
+                    'name': 'Tote bin exception handling',
+                    'stories': ['Handle tote exceptions', 'Tote tracking', 'Exception workflows'],
+                    'points': 5
+                },
+                'PS-CAP-8.3': {
+                    'name': 'Damage reporting',
+                    'stories': ['Report damage with photos', 'Damage workflows', 'Claims processing'],
+                    'points': 5
+                },
+                'PS-CAP-8.4': {
+                    'name': 'Temperature excursion handling',
+                    'stories': ['Temperature exceptions', 'Excursion workflows', 'Quality alerts'],
+                    'points': 8
+                },
+                'PS-CAP-8.5': {
+                    'name': 'Quality exception workflows',
+                    'stories': ['Root cause analysis', 'Quarantine items', 'Exception analytics'],
+                    'points': 5
+                }
+            }
+        },
+        'PS-EPIC-09': {
+            'name': 'System Integration',
+            'system': 'Polar Scan',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PS-CAP-9.1': {
+                    'name': 'Track system integration',
+                    'stories': ['Post scan events real-time', 'Sync inventory with Track', 'Event streaming'],
+                    'points': 13
+                },
+                'PS-CAP-9.2': {
+                    'name': 'Temperature platform integration',
+                    'stories': ['Receive temperature data', 'Temperature sync', 'IoT integration'],
+                    'points': 13
+                },
+                'PS-CAP-9.3': {
+                    'name': 'WMS synchronization',
+                    'stories': ['Integrate with WMS', 'Location sync', 'Inventory sync'],
+                    'points': 8
+                },
+                'PS-CAP-9.4': {
+                    'name': 'ERP integration',
+                    'stories': ['Post to Dynamics 365', 'Financial integration', 'Master data sync'],
+                    'points': 8
+                },
+                'PS-CAP-9.5': {
+                    'name': 'Event streaming',
+                    'stories': ['Send notifications', 'Maintain consistency', 'Event architecture'],
+                    'points': 8
+                }
+            }
+        },
+        'PS-EPIC-10': {
+            'name': 'Mobile Scanner Application',
+            'system': 'Polar Scan',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PS-CAP-10.1': {
+                    'name': 'Zebra device optimization',
+                    'stories': ['Android app on Zebra', 'Device configuration', 'Performance optimization'],
+                    'points': 8
+                },
+                'PS-CAP-10.2': {
+                    'name': 'Offline scanning',
+                    'stories': ['Offline capability', 'Data sync', 'Queue management'],
+                    'points': 8
+                },
+                'PS-CAP-10.3': {
+                    'name': 'User interface',
+                    'stories': ['Barcode scanning UI', 'Large buttons for gloves', 'Multi-language support'],
+                    'points': 5
+                },
+                'PS-CAP-10.4': {
+                    'name': 'Voice-directed operations',
+                    'stories': ['Voice commands', 'Voice feedback', 'Hands-free operation'],
+                    'points': 8
+                },
+                'PS-CAP-10.5': {
+                    'name': 'Performance optimization',
+                    'stories': ['Battery optimization', 'Quick access functions', 'Remote configuration'],
+                    'points': 5
+                }
+            }
+        },
+        
+        # POLAR TRACK EPICS
+        'PT-EPIC-01': {
+            'name': 'Customer Onboarding & Contracts',
+            'system': 'Polar Track',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PT-CAP-1.1': {
+                    'name': 'Customer registration portal',
+                    'stories': ['Self-register online', 'Upload compliance docs', 'Digital signatures'],
+                    'points': 3
+                },
+                'PT-CAP-1.2': {
+                    'name': 'Contract management',
+                    'stories': ['Create customer contracts', 'Contract templates', 'Renewal workflows'],
+                    'points': 3
+                },
+                'PT-CAP-1.3': {
+                    'name': 'Service level configuration',
+                    'stories': ['Configure service levels', 'Temperature requirements', 'SLA management'],
+                    'points': 3
+                },
+                'PT-CAP-1.4': {
+                    'name': 'Pricing management',
+                    'stories': ['Pricing agreements', 'Credit limits', 'Billing setup'],
+                    'points': 3
+                },
+                'PT-CAP-1.5': {
+                    'name': 'Compliance documentation',
+                    'stories': ['Verify credentials', 'Compliance tracking', 'Document management'],
+                    'points': 3
+                }
+            }
+        },
+        'PT-EPIC-02': {
+            'name': 'Master Data Management',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-2.1': {
+                    'name': 'Product master',
+                    'stories': ['Maintain product master', 'Product hierarchy', 'Product attributes'],
+                    'points': 5
+                },
+                'PT-CAP-2.2': {
+                    'name': 'Location master',
+                    'stories': ['Location hierarchy', 'Facility management', 'Geographic data'],
+                    'points': 5
+                },
+                'PT-CAP-2.3': {
+                    'name': 'Carrier and services',
+                    'stories': ['Carrier information', 'Service types', 'Carrier contracts'],
+                    'points': 3
+                },
+                'PT-CAP-2.4': {
+                    'name': 'Route management',
+                    'stories': ['Route templates', 'Lane management', 'Route optimization'],
+                    'points': 5
+                },
+                'PT-CAP-2.5': {
+                    'name': 'Data governance',
+                    'stories': ['Data quality', 'Duplicate detection', 'Audit trails'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-03': {
+            'name': 'Order Management & Processing',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-3.1': {
+                    'name': 'Order creation',
+                    'stories': ['Create orders online', 'Bulk upload Excel', 'Order templates'],
+                    'points': 5
+                },
+                'PT-CAP-3.2': {
+                    'name': 'Order validation',
+                    'stories': ['Validate order details', 'Inventory allocation', 'Credit checks'],
+                    'points': 5
+                },
+                'PT-CAP-3.3': {
+                    'name': 'Order fulfillment',
+                    'stories': ['Fulfillment optimization', 'Route assignment', 'Order consolidation'],
+                    'points': 8
+                },
+                'PT-CAP-3.4': {
+                    'name': 'Order tracking',
+                    'stories': ['Track order status', 'Order modifications', 'Status notifications'],
+                    'points': 5
+                },
+                'PT-CAP-3.5': {
+                    'name': 'EDI/API integration',
+                    'stories': ['Receive EDI orders', 'API integration', 'Order confirmations'],
+                    'points': 8
+                }
+            }
+        },
+        'PT-EPIC-04': {
+            'name': 'Middle Mile Delivery Management',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-4.1': {
+                    'name': 'Hub-to-hub planning',
+                    'stories': ['Plan hub routes', 'Capacity planning', 'Load optimization'],
+                    'points': 5
+                },
+                'PT-CAP-4.2': {
+                    'name': 'Hub-to-depot optimization',
+                    'stories': ['Optimize depot routes', 'Multi-stop planning', 'Time windows'],
+                    'points': 5
+                },
+                'PT-CAP-4.3': {
+                    'name': 'Milk run operations',
+                    'stories': ['Schedule milk runs', 'Route optimization', 'Stop sequencing'],
+                    'points': 5
+                },
+                'PT-CAP-4.4': {
+                    'name': 'Consolidation planning',
+                    'stories': ['Calculate consolidations', 'LTL optimization', 'Load building'],
+                    'points': 5
+                },
+                'PT-CAP-4.5': {
+                    'name': 'Middle mile tracking',
+                    'stories': ['Track vehicles', 'Monitor SLAs', 'Event tracking'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-05': {
+            'name': 'Hub & Depot Network Operations',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-5.1': {
+                    'name': 'Network capacity planning',
+                    'stories': ['Model capacity', 'Predict needs', 'Capacity alerts'],
+                    'points': 8
+                },
+                'PT-CAP-5.2': {
+                    'name': 'Hub operations',
+                    'stories': ['Manage hub ops', 'Hub dashboards', 'Performance metrics'],
+                    'points': 5
+                },
+                'PT-CAP-5.3': {
+                    'name': 'Depot optimization',
+                    'stories': ['Optimize workflows', 'Depot management', 'Resource planning'],
+                    'points': 5
+                },
+                'PT-CAP-5.4': {
+                    'name': 'Inter-facility transfers',
+                    'stories': ['Schedule transfers', 'Transfer tracking', 'Balance inventory'],
+                    'points': 5
+                },
+                'PT-CAP-5.5': {
+                    'name': 'Network balancing',
+                    'stories': ['Balance loads', 'Identify bottlenecks', 'Utilization reports'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-06': {
+            'name': 'Final Mile Delivery Operations',
+            'system': 'Polar Track',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PT-CAP-6.1': {
+                    'name': 'Route optimization',
+                    'stories': ['Optimize delivery routes', 'Dynamic routing', 'Route planning'],
+                    'points': 8
+                },
+                'PT-CAP-6.2': {
+                    'name': 'Time window management',
+                    'stories': ['Select delivery windows', 'Window optimization', 'Customer preferences'],
+                    'points': 5
+                },
+                'PT-CAP-6.3': {
+                    'name': 'Proof of delivery',
+                    'stories': ['Capture POD', 'Electronic signatures', 'Photo capture'],
+                    'points': 5
+                },
+                'PT-CAP-6.4': {
+                    'name': 'Failed delivery management',
+                    'stories': ['Handle failures', 'Reschedule deliveries', 'Return management'],
+                    'points': 5
+                },
+                'PT-CAP-6.5': {
+                    'name': 'Customer preferences',
+                    'stories': ['Delivery instructions', 'Notification preferences', 'Special requests'],
+                    'points': 3
+                }
+            }
+        },
+        'PT-EPIC-07': {
+            'name': 'Fleet & Driver Management',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-7.1': {
+                    'name': 'Vehicle tracking',
+                    'stories': ['Track locations', 'Vehicle assignment', 'GPS monitoring'],
+                    'points': 5
+                },
+                'PT-CAP-7.2': {
+                    'name': 'Driver management',
+                    'stories': ['Driver hours', 'Compliance monitoring', 'Driver scheduling'],
+                    'points': 5
+                },
+                'PT-CAP-7.3': {
+                    'name': 'Maintenance management',
+                    'stories': ['Maintenance schedules', 'Service tracking', 'Preventive maintenance'],
+                    'points': 3
+                },
+                'PT-CAP-7.4': {
+                    'name': 'Performance tracking',
+                    'stories': ['Driver scores', 'Fuel consumption', 'Safety metrics'],
+                    'points': 5
+                },
+                'PT-CAP-7.5': {
+                    'name': 'Fleet optimization',
+                    'stories': ['Utilization metrics', 'Cost analysis', 'Fleet planning'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-08': {
+            'name': 'Real-time Tracking & Visibility',
+            'system': 'Polar Track',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PT-CAP-8.1': {
+                    'name': 'GPS/telematics integration',
+                    'stories': ['GPS tracking', 'Telematics integration', 'Real-time location'],
+                    'points': 8
+                },
+                'PT-CAP-8.2': {
+                    'name': 'Milestone events',
+                    'stories': ['Capture milestones', 'Event tracking', 'Status updates'],
+                    'points': 5
+                },
+                'PT-CAP-8.3': {
+                    'name': 'Customer tracking portal',
+                    'stories': ['Customer visibility', 'Tracking portal', 'Mobile tracking'],
+                    'points': 5
+                },
+                'PT-CAP-8.4': {
+                    'name': 'Scan event integration',
+                    'stories': ['Correlate scan/GPS', 'Event correlation', 'Data integration'],
+                    'points': 8
+                },
+                'PT-CAP-8.5': {
+                    'name': 'ETA calculations',
+                    'stories': ['Calculate ETAs', 'Update estimates', 'Predictive analytics'],
+                    'points': 8
+                }
+            }
+        },
+        'PT-EPIC-09': {
+            'name': 'Centralized IoT & Temperature Platform',
+            'system': 'Polar Track',
+            'complexity': 'Very High',
+            'capabilities': {
+                'PT-CAP-9.1': {
+                    'name': 'IoT device provisioning',
+                    'stories': ['Provision devices', 'Device management', 'Configuration'],
+                    'points': 8
+                },
+                'PT-CAP-9.2': {
+                    'name': 'Temperature monitoring',
+                    'stories': ['Real-time streaming', 'Threshold alerts', 'Temperature logging'],
+                    'points': 13
+                },
+                'PT-CAP-9.3': {
+                    'name': 'Environmental tracking',
+                    'stories': ['Multi-parameter tracking', 'Humidity monitoring', 'Shock detection'],
+                    'points': 8
+                },
+                'PT-CAP-9.4': {
+                    'name': 'Predictive analytics',
+                    'stories': ['Excursion predictions', 'MKT calculations', 'Stability budgets'],
+                    'points': 13
+                },
+                'PT-CAP-9.5': {
+                    'name': 'Compliance reporting',
+                    'stories': ['Compliance certificates', 'Audit trails', 'Temperature reports'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-10': {
+            'name': 'Inventory & Network Visibility',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-10.1': {
+                    'name': 'Real-time inventory',
+                    'stories': ['Real-time visibility', 'Stock levels', 'Inventory tracking'],
+                    'points': 5
+                },
+                'PT-CAP-10.2': {
+                    'name': 'Network visibility',
+                    'stories': ['Network-wide stock', 'Cross-depot visibility', 'Global inventory'],
+                    'points': 5
+                },
+                'PT-CAP-10.3': {
+                    'name': 'Inventory allocation',
+                    'stories': ['Allocation rules', 'Reservations', 'ATP visibility'],
+                    'points': 5
+                },
+                'PT-CAP-10.4': {
+                    'name': 'Stock in transit',
+                    'stories': ['Transit tracking', 'In-transit inventory', 'Pipeline stock'],
+                    'points': 5
+                },
+                'PT-CAP-10.5': {
+                    'name': 'Inventory sync',
+                    'stories': ['Synchronization', 'Reconciliation', 'Inventory accuracy'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-11': {
+            'name': 'Exception & Incident Management',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-11.1': {
+                    'name': 'Misload detection',
+                    'stories': ['Detect misloads', 'Misload alerts', 'Recovery workflows'],
+                    'points': 5
+                },
+                'PT-CAP-11.2': {
+                    'name': 'Delivery exceptions',
+                    'stories': ['Exception handling', 'Exception workflows', 'Customer notifications'],
+                    'points': 5
+                },
+                'PT-CAP-11.3': {
+                    'name': 'Claims management',
+                    'stories': ['Damage documentation', 'Claims processing', 'Insurance integration'],
+                    'points': 5
+                },
+                'PT-CAP-11.4': {
+                    'name': 'Temperature excursions',
+                    'stories': ['Excursion management', 'Quality workflows', 'Investigation'],
+                    'points': 8
+                },
+                'PT-CAP-11.5': {
+                    'name': 'Root cause analysis',
+                    'stories': ['Incident analysis', 'Corrective actions', 'Trend analytics'],
+                    'points': 5
+                }
+            }
+        },
+        'PT-EPIC-12': {
+            'name': 'Analytics & Reporting Platform',
+            'system': 'Polar Track',
+            'complexity': 'High',
+            'capabilities': {
+                'PT-CAP-12.1': {
+                    'name': 'Operational dashboards',
+                    'stories': ['Real-time dashboards', 'KPI monitoring', 'Performance tracking'],
+                    'points': 5
+                },
+                'PT-CAP-12.2': {
+                    'name': 'KPI scorecards',
+                    'stories': ['Executive scorecards', 'SLA monitoring', 'Benchmarking'],
+                    'points': 5
+                },
+                'PT-CAP-12.3': {
+                    'name': 'Custom reporting',
+                    'stories': ['Report builder', 'Scheduled reports', 'Ad-hoc queries'],
+                    'points': 5
+                },
+                'PT-CAP-12.4': {
+                    'name': 'Compliance reporting',
+                    'stories': ['Regulatory reports', 'Audit reports', 'Compliance tracking'],
+                    'points': 5
+                },
+                'PT-CAP-12.5': {
+                    'name': 'Executive analytics',
+                    'stories': ['Predictive analytics', 'Trend analysis', 'Business intelligence'],
+                    'points': 8
+                }
+            }
+        },
+        
+        # PATIENT MANAGEMENT EPICS
+        'PM-EPIC-01': {
+            'name': 'Patient Registration & NHS Integration',
+            'system': 'Patient Management',
+            'complexity': 'High',
+            'capabilities': {
+                'PM-CAP-1.1': {
+                    'name': 'Patient self-registration',
+                    'stories': ['Self-register online', 'Personal details capture', 'Account creation'],
+                    'points': 3
+                },
+                'PM-CAP-1.2': {
+                    'name': 'NHS validation',
+                    'stories': ['Validate NHS numbers', 'NHS lookup', 'Demographics retrieval'],
+                    'points': 5
+                },
+                'PM-CAP-1.3': {
+                    'name': 'Summary Care Record',
+                    'stories': ['Access care records', 'Medical history', 'Allergy information'],
+                    'points': 8
+                },
+                'PM-CAP-1.4': {
+                    'name': 'Identity verification',
+                    'stories': ['Verify identity', 'Duplicate checking', 'Patient matching'],
+                    'points': 5
+                },
+                'PM-CAP-1.5': {
+                    'name': 'Consent management',
+                    'stories': ['Data sharing consent', 'Family access', 'Consent tracking'],
+                    'points': 5
+                }
+            }
+        },
+        'PM-EPIC-02': {
+            'name': 'Trust & Payer Management',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-2.1': {
+                    'name': 'Trust registration',
+                    'stories': ['Register trusts', 'Trust management', 'Trust contracts'],
+                    'points': 3
+                },
+                'PM-CAP-2.2': {
+                    'name': 'Coverage validation',
+                    'stories': ['Validate coverage', 'Patient eligibility', 'Coverage rules'],
+                    'points': 3
+                },
+                'PM-CAP-2.3': {
+                    'name': 'Funding workflows',
+                    'stories': ['Funding authorization', 'Approval workflows', 'Budget tracking'],
+                    'points': 5
+                },
+                'PM-CAP-2.4': {
+                    'name': 'Trust billing',
+                    'stories': ['Trust invoicing', 'Billing workflows', 'Payment tracking'],
+                    'points': 3
+                },
+                'PM-CAP-2.5': {
+                    'name': 'Budget management',
+                    'stories': ['Budget limits', 'Utilization tracking', 'Cost control'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-03': {
+            'name': 'Prescription Receipt & Processing',
+            'system': 'Patient Management',
+            'complexity': 'High',
+            'capabilities': {
+                'PM-CAP-3.1': {
+                    'name': 'Electronic prescriptions',
+                    'stories': ['Receive e-prescriptions', 'Hospital integration', 'Prescription queue'],
+                    'points': 5
+                },
+                'PM-CAP-3.2': {
+                    'name': 'Prescription validation',
+                    'stories': ['Validate prescriptions', 'Verification workflows', 'Completeness checks'],
+                    'points': 5
+                },
+                'PM-CAP-3.3': {
+                    'name': 'Clinical review',
+                    'stories': ['Clinical checking', 'Pharmacist review', 'Intervention tracking'],
+                    'points': 5
+                },
+                'PM-CAP-3.4': {
+                    'name': 'Drug interactions',
+                    'stories': ['Interaction checking', 'Allergy alerts', 'Contraindications'],
+                    'points': 8
+                },
+                'PM-CAP-3.5': {
+                    'name': 'Status tracking',
+                    'stories': ['Prescription status', 'Progress tracking', 'Status notifications'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-04': {
+            'name': 'Treatment Planning & Protocols',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-4.1': {
+                    'name': 'Protocol definition',
+                    'stories': ['Create protocols', 'Protocol templates', 'Clinical guidelines'],
+                    'points': 5
+                },
+                'PM-CAP-4.2': {
+                    'name': 'Care planning',
+                    'stories': ['Develop care plans', 'Treatment schedules', 'Care pathways'],
+                    'points': 3
+                },
+                'PM-CAP-4.3': {
+                    'name': 'Dosage management',
+                    'stories': ['Dosage calculations', 'Schedule management', 'Dose adjustments'],
+                    'points': 3
+                },
+                'PM-CAP-4.4': {
+                    'name': 'Timeline tracking',
+                    'stories': ['Treatment timelines', 'Milestone tracking', 'Progress monitoring'],
+                    'points': 3
+                },
+                'PM-CAP-4.5': {
+                    'name': 'Compliance monitoring',
+                    'stories': ['Protocol compliance', 'Adherence tracking', 'Deviation alerts'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-05': {
+            'name': 'Pharmacy Network & Operations',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-5.1': {
+                    'name': 'Pharmacy assignment',
+                    'stories': ['Assign pharmacies', 'Patient allocation', 'Workload balancing'],
+                    'points': 3
+                },
+                'PM-CAP-5.2': {
+                    'name': 'Pharmacy inventory',
+                    'stories': ['Inventory management', 'Stock tracking', 'Reorder management'],
+                    'points': 3
+                },
+                'PM-CAP-5.3': {
+                    'name': 'Dispensing workflows',
+                    'stories': ['Dispensing process', 'Label printing', 'Verification checks'],
+                    'points': 3
+                },
+                'PM-CAP-5.4': {
+                    'name': 'Controlled substances',
+                    'stories': ['CD handling', 'Register management', 'Compliance tracking'],
+                    'points': 5
+                },
+                'PM-CAP-5.5': {
+                    'name': 'Performance tracking',
+                    'stories': ['Pharmacy metrics', 'Performance KPIs', 'Quality monitoring'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-06': {
+            'name': 'Scheduling & Care Coordination',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-6.1': {
+                    'name': 'Appointment scheduling',
+                    'stories': ['Schedule appointments', 'Calendar management', 'Booking system'],
+                    'points': 3
+                },
+                'PM-CAP-6.2': {
+                    'name': 'Care coordination',
+                    'stories': ['Team coordination', 'Task assignment', 'Communication'],
+                    'points': 3
+                },
+                'PM-CAP-6.3': {
+                    'name': 'Resource optimization',
+                    'stories': ['Resource scheduling', 'Capacity management', 'Optimization'],
+                    'points': 5
+                },
+                'PM-CAP-6.4': {
+                    'name': 'MDT management',
+                    'stories': ['Multi-disciplinary teams', 'Team meetings', 'Care conferences'],
+                    'points': 3
+                },
+                'PM-CAP-6.5': {
+                    'name': 'Conflict resolution',
+                    'stories': ['Conflict detection', 'Schedule adjustments', 'Priority management'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-07': {
+            'name': 'Phlebotomy Services Management',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-7.1': {
+                    'name': 'Phlebotomy scheduling',
+                    'stories': ['Schedule blood draws', 'Route planning', 'Time slots'],
+                    'points': 3
+                },
+                'PM-CAP-7.2': {
+                    'name': 'Mobile operations',
+                    'stories': ['Mobile phlebotomy', 'Daily schedules', 'Route optimization'],
+                    'points': 5
+                },
+                'PM-CAP-7.3': {
+                    'name': 'Sample tracking',
+                    'stories': ['Sample collection', 'Chain of custody', 'Sample management'],
+                    'points': 3
+                },
+                'PM-CAP-7.4': {
+                    'name': 'Lab integration',
+                    'stories': ['Lab systems', 'Result retrieval', 'Result notifications'],
+                    'points': 5
+                },
+                'PM-CAP-7.5': {
+                    'name': 'Home services',
+                    'stories': ['Home visits', 'Service coordination', 'Supply management'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-08': {
+            'name': 'Clinical Services & Documentation',
+            'system': 'Patient Management',
+            'complexity': 'High',
+            'capabilities': {
+                'PM-CAP-8.1': {
+                    'name': 'Clinical documentation',
+                    'stories': ['Document encounters', 'Clinical notes', 'Record sharing'],
+                    'points': 5
+                },
+                'PM-CAP-8.2': {
+                    'name': 'Medication records',
+                    'stories': ['MAR documentation', 'Administration tracking', 'Medication history'],
+                    'points': 5
+                },
+                'PM-CAP-8.3': {
+                    'name': 'Vital signs',
+                    'stories': ['Record vitals', 'Monitoring data', 'Trend analysis'],
+                    'points': 3
+                },
+                'PM-CAP-8.4': {
+                    'name': 'Lab results',
+                    'stories': ['Order lab tests', 'View results', 'Result trending'],
+                    'points': 5
+                },
+                'PM-CAP-8.5': {
+                    'name': 'Adverse events',
+                    'stories': ['Report events', 'Clinical alerts', 'Safety monitoring'],
+                    'points': 5
+                }
+            }
+        },
+        'PM-EPIC-09': {
+            'name': 'Delivery to Patients & Hospitals',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-9.1': {
+                    'name': 'Patient delivery',
+                    'stories': ['Home delivery scheduling', 'Delivery tracking', 'Delivery preferences'],
+                    'points': 3
+                },
+                'PM-CAP-9.2': {
+                    'name': 'Hospital delivery',
+                    'stories': ['Hospital coordination', 'Bulk deliveries', 'Ward deliveries'],
+                    'points': 3
+                },
+                'PM-CAP-9.3': {
+                    'name': 'Temperature control',
+                    'stories': ['Cold chain', 'Temperature monitoring', 'Compliance'],
+                    'points': 5
+                },
+                'PM-CAP-9.4': {
+                    'name': 'Verification',
+                    'stories': ['Signature capture', 'Identity verification', 'Delivery confirmation'],
+                    'points': 3
+                },
+                'PM-CAP-9.5': {
+                    'name': 'Returns management',
+                    'stories': ['Returns processing', 'Waste management', 'Destruction records'],
+                    'points': 3
+                }
+            }
+        },
+        'PM-EPIC-10': {
+            'name': 'Compliance & Quality Management',
+            'system': 'Patient Management',
+            'complexity': 'High',
+            'capabilities': {
+                'PM-CAP-10.1': {
+                    'name': 'GDPR compliance',
+                    'stories': ['GDPR tools', 'Data privacy', 'Rights management'],
+                    'points': 5
+                },
+                'PM-CAP-10.2': {
+                    'name': 'GDP compliance',
+                    'stories': ['GDP tracking', 'Distribution standards', 'Quality assurance'],
+                    'points': 5
+                },
+                'PM-CAP-10.3': {
+                    'name': 'Audit trails',
+                    'stories': ['Complete auditing', 'Data retention', 'Audit reports'],
+                    'points': 5
+                },
+                'PM-CAP-10.4': {
+                    'name': 'Quality metrics',
+                    'stories': ['KPI monitoring', 'Quality dashboards', 'Performance tracking'],
+                    'points': 3
+                },
+                'PM-CAP-10.5': {
+                    'name': 'Regulatory reporting',
+                    'stories': ['Regulatory submissions', 'Compliance reports', 'Incident reporting'],
+                    'points': 5
+                }
+            }
+        },
+        'PM-EPIC-11': {
+            'name': 'Patient Portal & Engagement',
+            'system': 'Patient Management',
+            'complexity': 'Medium',
+            'capabilities': {
+                'PM-CAP-11.1': {
+                    'name': 'Portal access',
+                    'stories': ['Patient login', 'Information access', 'Portal navigation'],
+                    'points': 3
+                },
+                'PM-CAP-11.2': {
+                    'name': 'Reminders',
+                    'stories': ['Appointment reminders', 'Medication alerts', 'Refill reminders'],
+                    'points': 3
+                },
+                'PM-CAP-11.3': {
+                    'name': 'Communication',
+                    'stories': ['Secure messaging', 'Notification preferences', 'Care team contact'],
+                    'points': 3
+                },
+                'PM-CAP-11.4': {
+                    'name': 'Feedback',
+                    'stories': ['Satisfaction surveys', 'Feedback submission', 'Quality ratings'],
+                    'points': 3
+                },
+                'PM-CAP-11.5': {
+                    'name': 'Educational resources',
+                    'stories': ['Health education', 'Treatment information', 'Resource library'],
+                    'points': 3
+                }
+            }
+        }
     }
 
 # Cost calculation functions
