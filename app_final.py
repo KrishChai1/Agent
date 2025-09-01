@@ -49,6 +49,16 @@ def extract_field_names_from_uploadlike(name: str, raw: bytes) -> List[str]:
             return flatten_keys(obj)
     return []
 
+# ==================== SAFE PDF OPEN =====================
+def safe_open_pdf(raw: bytes):
+    """Safely open PDF bytes with PyMuPDF."""
+    if not raw or not isinstance(raw, (bytes, bytearray)):
+        raise RuntimeError("Empty or invalid PDF bytes")
+    try:
+        return fitz.open(stream=raw, filetype="pdf")
+    except Exception as e:
+        raise RuntimeError(f"Failed to open PDF: {e}")
+
 # ==================== PDF PARSING =====================
 PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.I)
 FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
@@ -56,11 +66,7 @@ FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
     """Parse a single USCIS PDF into parts/fields."""
     parts = defaultdict(list)
-    try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    except Exception as e:
-        st.error(f"❌ Could not parse PDF: {e}")
-        return {}
+    doc = safe_open_pdf(pdf_bytes)
     current_part = None
     for pno in range(len(doc)):
         for line in doc[pno].get_text("text").splitlines():
@@ -135,7 +141,7 @@ def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
 def llm_enhance_parts(pdf_bytes_list, merged_parts):
     if not OPENAI_API_KEY or not pdf_bytes_list: return merged_parts
     try:
-        doc = fitz.open(stream=pdf_bytes_list[0], filetype="pdf")
+        doc = safe_open_pdf(pdf_bytes_list[0])
         raw_text = "\n".join([doc[p].get_text("text") for p in range(len(doc))])[:20000]
     except Exception:
         return merged_parts
@@ -176,10 +182,15 @@ merged, pdf_bytes_list = {}, []
 if pdf_files:
     part_maps = []
     for up in pdf_files:
-        raw = to_bytes(up.getbuffer())
+        raw = up.read()  # always use .read()
+        if not raw:
+            st.error(f"❌ {up.name} is empty or unreadable")
+            continue
         try:
             parsed = parse_pdf_parts_and_fields(raw)
-            if parsed: part_maps.append(parsed); pdf_bytes_list.append(raw)
+            if parsed:
+                part_maps.append(parsed)
+                pdf_bytes_list.append(raw)
         except Exception as e:
             st.error(f"❌ Skipped file {up.name}: {e}")
     if part_maps:
@@ -239,3 +250,8 @@ st.download_button("⬇️ Download Questionnaire JSON", qjson, "questionnaire.j
 st.download_button("⬇️ Download Full Mappings JSON",
                    json.dumps(st.session_state["mappings"], indent=2),
                    "field_mappings.json", "application/json")
+
+# Enhancement button
+if st.button("✨ Run LLM Enhancement (optional)"):
+    merged = llm_enhance_parts(pdf_bytes_list, merged)
+    st.success("LLM enhancement applied. Reopen the expanders to see updated fields.")
