@@ -31,7 +31,7 @@ except ImportError:
 
 # Page config
 st.set_page_config(
-    page_title="USCIS Form Reader",
+    page_title="USCIS KK Form Reader",
     page_icon="📄",
     layout="wide"
 )
