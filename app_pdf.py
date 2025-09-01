@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-UNIVERSAL USCIS FORM READER - WITH COMPLETE DATABASE SCHEMA
-============================================================
-Works with ANY USCIS form - Complete database paths included
+UNIVERSAL USCIS FORM READER - WITH PROPER SUBFIELD SPLITTING
+=============================================================
+Automatically splits fields with multiple values into a, b, c subfields
 """
 
 import streamlit as st
@@ -67,16 +67,14 @@ st.markdown("""
         border-left: 4px solid #ff9800;
         background: #fff8e1;
     }
-    .field-manual {
-        border-left: 4px solid #9c27b0;
-        background: #f3e5f5;
+    .field-subfield {
+        margin-left: 30px;
+        border-left: 3px dashed #9e9e9e;
+        padding-left: 15px;
     }
-    .stats-box {
-        background: white;
-        padding: 1rem;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        margin: 1rem 0;
+    .parent-field {
+        background: #f5f5f5;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -85,18 +83,19 @@ st.markdown("""
 
 @dataclass
 class FormField:
-    """Universal field structure"""
+    """Universal field structure with subfield support"""
     item_number: str
     label: str
     field_type: str = "text"
     value: str = ""
     part_number: int = 1
     page_number: int = 1
-    parent_item: str = ""
+    parent_number: str = ""  # Parent field number (e.g., "1" for "1.a")
+    is_parent: bool = False  # True if this field has subfields
     is_subfield: bool = False
+    subfield_labels: List[str] = field(default_factory=list)  # For parent fields
     is_mapped: bool = False
     in_questionnaire: bool = False
-    is_manual: bool = False
     db_object: str = ""
     db_path: str = ""
     unique_id: str = ""
@@ -107,7 +106,7 @@ class FormField:
 
 @dataclass
 class FormPart:
-    """Generic part structure"""
+    """Part structure"""
     number: int
     title: str
     fields: List[FormField] = field(default_factory=list)
@@ -116,7 +115,7 @@ class FormPart:
 
 @dataclass
 class USCISForm:
-    """Universal form container"""
+    """Form container"""
     form_number: str = "Unknown"
     form_title: str = "USCIS Form"
     edition_date: str = ""
@@ -190,10 +189,7 @@ DATABASE_SCHEMA = {
             "grossAnnualIncome",
             "netAnnualIncome",
             "nafcsCode",
-            "businessType",
-            "irsNumber",
-            "immigrationStatus",
-            "certificateNumber"
+            "businessType"
         ]
     },
     "dependent": {
@@ -208,22 +204,11 @@ DATABASE_SCHEMA = {
             "dependent[].alienNumber",
             "dependent[].i94Number",
             "dependent[].passportNumber",
-            "dependent[].passportCountry",
-            "dependent[].passportExpiration",
             "dependent[].relationship",
-            "dependent[].daytimePhone",
-            "dependent[].mobilePhone",
-            "dependent[].emailAddress",
             "dependent[].address.street",
             "dependent[].address.city",
             "dependent[].address.state",
-            "dependent[].address.zip",
-            "dependent[].currentStatus",
-            "dependent[].statusExpiration",
-            "spouseName",
-            "spouseDateOfBirth",
-            "childrenNames[]",
-            "childrenDatesOfBirth[]"
+            "dependent[].address.zip"
         ]
     },
     "attorney": {
@@ -241,19 +226,8 @@ DATABASE_SCHEMA = {
             "attorneyAddress.city",
             "attorneyAddress.state",
             "attorneyAddress.zip",
-            "attorneyAddress.country",
             "lawFirmName",
-            "lawFirmFein",
-            "preparerLastName",
-            "preparerFirstName",
-            "preparerOrganization",
-            "preparerDaytimePhone",
-            "preparerEmailAddress",
-            "interpreterLastName",
-            "interpreterFirstName",
-            "interpreterOrganization",
-            "interpreterDaytimePhone",
-            "interpreterLanguage"
+            "lawFirmFein"
         ]
     },
     "application": {
@@ -267,100 +241,12 @@ DATABASE_SCHEMA = {
             "applicationType",
             "requestedStatus",
             "requestedClassification",
-            "requestedDuration",
             "changeEffectiveDate",
-            "previousApplicationNumber",
             "previousReceiptNumber",
             "consulateLocation",
             "portOfEntry",
-            "reasonForRequest",
-            "basisForEligibility",
-            "requestedAction",
-            "processingLocation",
             "schoolName",
-            "programStartDate",
-            "programEndDate",
-            "degreeType",
-            "fieldOfStudy",
-            "jobTitle",
-            "socCode",
-            "wageRate",
-            "wagePeriod"
-        ]
-    },
-    "travel": {
-        "label": "✈️ Travel Information",
-        "paths": [
-            "lastEntryDate",
-            "lastEntryPlace",
-            "lastEntryStatus",
-            "i94ArrivalNumber",
-            "i94DepartureNumber",
-            "travelDocumentNumber",
-            "travelDocumentCountry",
-            "travelDocumentExpiration",
-            "intendedDepartureDate",
-            "intendedReturnDate",
-            "tripsAbroad[].departureDate",
-            "tripsAbroad[].returnDate",
-            "tripsAbroad[].destination",
-            "tripsAbroad[].purpose",
-            "visaNumber",
-            "visaIssuanceDate",
-            "visaExpirationDate",
-            "consulateOfIssuance"
-        ]
-    },
-    "biographic": {
-        "label": "📝 Biographic Information",
-        "paths": [
-            "ethnicity",
-            "race",
-            "height.feet",
-            "height.inches",
-            "weight.pounds",
-            "eyeColor",
-            "hairColor",
-            "gender",
-            "maritalStatus",
-            "previousMarriages",
-            "dateOfMarriage",
-            "placeOfMarriage",
-            "spouseImmigrationStatus",
-            "motherName",
-            "fatherName",
-            "mothersDateOfBirth",
-            "fathersDateOfBirth",
-            "countryOfNationality",
-            "countryOfLastResidence",
-            "nationalIdNumber",
-            "taxIdNumber"
-        ]
-    },
-    "employment": {
-        "label": "💼 Employment Information",
-        "paths": [
-            "currentEmployer",
-            "employerAddress",
-            "employerPhone",
-            "jobTitle",
-            "employmentStartDate",
-            "employmentEndDate",
-            "previousEmployer[].name",
-            "previousEmployer[].address",
-            "previousEmployer[].jobTitle",
-            "previousEmployer[].startDate",
-            "previousEmployer[].endDate",
-            "occupation",
-            "yearsInOccupation",
-            "qualifications",
-            "education.degree",
-            "education.fieldOfStudy",
-            "education.institution",
-            "education.dateCompleted",
-            "licenseNumber",
-            "licenseState",
-            "licenseExpiration"
+            "sevisId"
         ]
     },
     "custom": {
@@ -368,6 +254,56 @@ DATABASE_SCHEMA = {
         "paths": []
     }
 }
+
+# ===== SUBFIELD PATTERNS =====
+
+SUBFIELD_PATTERNS = {
+    "name": ["Family Name", "Given Name", "Middle Name"],
+    "address": ["Street Number and Name", "Apt/Ste/Flr", "City", "State", "ZIP Code", "Country"],
+    "physical_address": ["Street Number and Name", "City", "State", "ZIP Code"],
+    "foreign_address": ["Street Number and Name", "City", "Province", "Postal Code", "Country"]
+}
+
+# ===== FIELD TYPE DETECTION =====
+
+def detect_field_type(label: str) -> str:
+    """Detect field type from label"""
+    label_lower = label.lower()
+    
+    if any(word in label_lower for word in ["date", "dob", "birth", "expir", "issued"]):
+        return "date"
+    elif any(word in label_lower for word in ["check", "select", "mark", "yes/no", "indicate"]):
+        return "checkbox"
+    elif any(word in label_lower for word in ["number", "ssn", "ein", "a-number", "receipt"]):
+        return "number"
+    elif any(word in label_lower for word in ["email", "e-mail"]):
+        return "email"
+    elif any(word in label_lower for word in ["phone", "telephone", "mobile", "cell"]):
+        return "phone"
+    elif any(word in label_lower for word in ["address", "street", "city", "state", "zip"]):
+        return "address"
+    
+    return "text"
+
+def detect_subfield_components(label: str) -> List[str]:
+    """Detect if a field should have subfields based on its label"""
+    label_lower = label.lower()
+    
+    # Check for name fields
+    if "name" in label_lower:
+        if "full" in label_lower or "legal" in label_lower:
+            return ["Family Name (Last Name)", "Given Name (First Name)", "Middle Name"]
+        elif "company" in label_lower or "organization" in label_lower:
+            return []  # Company names are single fields
+    
+    # Check for address fields
+    if "address" in label_lower:
+        if "mailing" in label_lower or "physical" in label_lower:
+            return ["Street Number and Name", "Apt/Ste/Flr", "City or Town", "State", "ZIP Code"]
+        elif "foreign" in label_lower:
+            return ["Street Number and Name", "City or Town", "Province", "Postal Code", "Country"]
+    
+    return []
 
 # ===== PDF EXTRACTION =====
 
@@ -400,31 +336,10 @@ def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
         st.error(f"PDF error: {e}")
         return "", {}, 0
 
-# ===== FIELD TYPE DETECTOR =====
-
-def detect_field_type(label: str) -> str:
-    """Detect field type from label"""
-    label_lower = label.lower()
-    
-    if any(word in label_lower for word in ["date", "dob", "birth", "expir", "issued"]):
-        return "date"
-    elif any(word in label_lower for word in ["check", "select", "mark", "yes/no", "indicate"]):
-        return "checkbox"
-    elif any(word in label_lower for word in ["number", "ssn", "ein", "a-number", "receipt"]):
-        return "number"
-    elif any(word in label_lower for word in ["email", "e-mail"]):
-        return "email"
-    elif any(word in label_lower for word in ["phone", "telephone", "mobile", "cell"]):
-        return "phone"
-    elif any(word in label_lower for word in ["address", "street", "city", "state", "zip"]):
-        return "address"
-    
-    return "text"
-
 # ===== UNIVERSAL FORM EXTRACTOR =====
 
 class UniversalFormExtractor:
-    """Extracts ANY USCIS form"""
+    """Extracts ANY USCIS form with proper subfield splitting"""
     
     def __init__(self):
         self.setup_openai()
@@ -440,7 +355,7 @@ class UniversalFormExtractor:
             st.warning("Add OPENAI_API_KEY to secrets")
     
     def extract_form(self, full_text: str, page_texts: Dict[int, str], total_pages: int) -> USCISForm:
-        """Extract any form structure"""
+        """Extract form with automatic subfield detection"""
         
         # Identify form
         form_info = self._identify_form(full_text[:3000])
@@ -465,32 +380,8 @@ class UniversalFormExtractor:
                 page_end=part_data.get("page_end", 1)
             )
             
-            # Extract fields
-            fields_data = self._extract_fields(full_text, part_data)
-            
-            # Convert to FormField objects
-            fields = []
-            for field_data in fields_data:
-                # Detect parent-child relationships
-                item_num = field_data.get("item_number", "")
-                parent_item = ""
-                is_subfield = False
-                
-                # Check if it's a subfield (e.g., 1.a, 1.b)
-                if re.match(r'^\d+\.[a-z]$', item_num):
-                    parent_item = item_num.split('.')[0]
-                    is_subfield = True
-                
-                field = FormField(
-                    item_number=item_num,
-                    label=field_data.get("label", ""),
-                    field_type=detect_field_type(field_data.get("label", "")),
-                    part_number=part.number,
-                    parent_item=parent_item,
-                    is_subfield=is_subfield
-                )
-                fields.append(field)
-            
+            # Extract fields with subfield detection
+            fields = self._extract_and_split_fields(full_text, part_data)
             part.fields = fields
             form.parts[part.number] = part
         
@@ -500,7 +391,7 @@ class UniversalFormExtractor:
         """Identify form type"""
         
         if not self.client:
-            # Fallback pattern matching
+            # Fallback
             form_match = re.search(r'Form\s+([A-Z]-?\d+[A-Z]?)', text)
             form_number = form_match.group(1) if form_match else "Unknown"
             
@@ -544,7 +435,6 @@ class UniversalFormExtractor:
         """Extract parts from form"""
         
         if not self.client:
-            # Fallback
             parts = []
             part_matches = re.finditer(r'Part\s+(\d+)[.\s]+([^\n]+)', text)
             
@@ -592,14 +482,84 @@ class UniversalFormExtractor:
             st.error(f"Parts extraction error: {e}")
             return [{"number": 1, "title": "Main Section", "page_start": 1, "page_end": 1}]
     
-    def _extract_fields(self, text: str, part_data: Dict) -> List[Dict]:
-        """Extract fields from part"""
+    def _extract_and_split_fields(self, text: str, part_data: Dict) -> List[FormField]:
+        """Extract fields and automatically split multi-component fields"""
+        
+        part_num = part_data["number"]
+        part_title = part_data["title"]
+        
+        # First, get raw fields from AI or fallback
+        raw_fields = self._extract_raw_fields(text, part_data)
+        
+        # Process and split fields that need subfields
+        processed_fields = []
+        
+        for field_data in raw_fields:
+            item_number = field_data.get("item_number", "")
+            label = field_data.get("label", "")
+            
+            # Check if this field should be split into subfields
+            subfield_components = detect_subfield_components(label)
+            
+            if subfield_components:
+                # This is a parent field with subfields
+                parent_field = FormField(
+                    item_number=item_number,
+                    label=label,
+                    field_type="parent",
+                    part_number=part_num,
+                    is_parent=True,
+                    subfield_labels=subfield_components
+                )
+                processed_fields.append(parent_field)
+                
+                # Create subfields a, b, c, etc.
+                letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+                for i, component in enumerate(subfield_components):
+                    if i < len(letters):
+                        subfield = FormField(
+                            item_number=f"{item_number}.{letters[i]}",
+                            label=component,
+                            field_type=detect_field_type(component),
+                            part_number=part_num,
+                            parent_number=item_number,
+                            is_subfield=True
+                        )
+                        processed_fields.append(subfield)
+            
+            else:
+                # Regular field or already a subfield
+                if re.match(r'^\d+\.[a-z]$', item_number):
+                    # This is already a subfield (like 2.a)
+                    parent_num = item_number.split('.')[0]
+                    field = FormField(
+                        item_number=item_number,
+                        label=label,
+                        field_type=detect_field_type(label),
+                        part_number=part_num,
+                        parent_number=parent_num,
+                        is_subfield=True
+                    )
+                else:
+                    # Regular field
+                    field = FormField(
+                        item_number=item_number,
+                        label=label,
+                        field_type=detect_field_type(label),
+                        part_number=part_num
+                    )
+                processed_fields.append(field)
+        
+        return processed_fields
+    
+    def _extract_raw_fields(self, text: str, part_data: Dict) -> List[Dict]:
+        """Extract raw fields from text"""
         
         part_num = part_data["number"]
         part_title = part_data["title"]
         
         if not self.client:
-            # Fallback
+            # Fallback to regex
             fields = []
             field_matches = re.finditer(r'(\d+\.?[a-z]?\.?)\s+([^\n]+)', text[:5000])
             
@@ -613,6 +573,11 @@ class UniversalFormExtractor:
         
         prompt = f"""
         Extract ALL fields from Part {part_num}: {part_title}.
+        
+        Important: 
+        - Include the main field labels (like "1. Your Full Legal Name")
+        - If you see subfields already labeled (1.a, 1.b), include those too
+        - If a field clearly has multiple input boxes but no letter labels, just extract the main field
         
         Return ONLY a JSON array:
         [
@@ -646,14 +611,18 @@ class UniversalFormExtractor:
 # ===== UI COMPONENTS =====
 
 def display_field(field: FormField, key_prefix: str):
-    """Display field with mapping interface"""
+    """Display field with proper parent/child visualization"""
     
     unique_key = f"{key_prefix}_{field.unique_id}"
     
     # Determine style
-    if field.is_manual:
-        card_class = "field-manual"
-        status = "✏️ Manual"
+    card_class = ""
+    if field.is_parent:
+        card_class = "parent-field"
+        status = "📁 Parent"
+    elif field.is_subfield:
+        card_class = "field-subfield"
+        status = f"↳ Sub of {field.parent_number}"
     elif field.in_questionnaire:
         card_class = "field-questionnaire"
         status = "📝 Quest"
@@ -669,44 +638,51 @@ def display_field(field: FormField, key_prefix: str):
     col1, col2, col3 = st.columns([3, 2, 2])
     
     with col1:
-        if field.is_subfield:
-            st.markdown(f"↳ **{field.item_number}. {field.label}**")
-            st.caption(f"Subfield of {field.parent_item}")
+        if field.is_parent:
+            st.markdown(f"**{field.item_number}. {field.label}** (Parent Field)")
+            if field.subfield_labels:
+                st.caption(f"Has subfields: {', '.join(field.subfield_labels)}")
+        elif field.is_subfield:
+            st.markdown(f"&nbsp;&nbsp;&nbsp;↳ **{field.item_number}. {field.label}**")
         else:
             st.markdown(f"**{field.item_number}. {field.label}**")
     
     with col2:
-        # Value input based on type
-        if field.field_type == "date":
-            date_val = st.date_input("", key=f"{unique_key}_date", label_visibility="collapsed")
-            field.value = str(date_val) if date_val else ""
-        elif field.field_type == "checkbox":
-            field.value = st.selectbox("", ["", "Yes", "No"], key=f"{unique_key}_check", label_visibility="collapsed")
+        # Only show value input for non-parent fields
+        if not field.is_parent:
+            if field.field_type == "date":
+                date_val = st.date_input("", key=f"{unique_key}_date", label_visibility="collapsed")
+                field.value = str(date_val) if date_val else ""
+            elif field.field_type == "checkbox":
+                field.value = st.selectbox("", ["", "Yes", "No"], key=f"{unique_key}_check", label_visibility="collapsed")
+            else:
+                field.value = st.text_input("", value=field.value, key=f"{unique_key}_val", label_visibility="collapsed")
         else:
-            field.value = st.text_input("", value=field.value, key=f"{unique_key}_val", label_visibility="collapsed")
+            st.info("Parent field - enter values in subfields")
     
     with col3:
         st.markdown(f"**{status}**")
         
-        c1, c2 = st.columns(2)
-        with c1:
-            if not field.is_mapped and not field.in_questionnaire:
-                if st.button("Map", key=f"{unique_key}_map"):
-                    st.session_state[f"mapping_{field.unique_id}"] = True
-                    st.rerun()
-        with c2:
-            if not field.is_mapped and not field.in_questionnaire:
-                if st.button("Quest", key=f"{unique_key}_quest"):
-                    field.in_questionnaire = True
-                    st.rerun()
-            elif field.is_mapped or field.in_questionnaire:
-                if st.button("Clear", key=f"{unique_key}_clear"):
-                    field.is_mapped = False
-                    field.in_questionnaire = False
-                    field.is_manual = False
-                    field.db_object = ""
-                    field.db_path = ""
-                    st.rerun()
+        # Only show mapping buttons for non-parent fields
+        if not field.is_parent:
+            c1, c2 = st.columns(2)
+            with c1:
+                if not field.is_mapped and not field.in_questionnaire:
+                    if st.button("Map", key=f"{unique_key}_map"):
+                        st.session_state[f"mapping_{field.unique_id}"] = True
+                        st.rerun()
+            with c2:
+                if not field.is_mapped and not field.in_questionnaire:
+                    if st.button("Quest", key=f"{unique_key}_quest"):
+                        field.in_questionnaire = True
+                        st.rerun()
+                elif field.is_mapped or field.in_questionnaire:
+                    if st.button("Clear", key=f"{unique_key}_clear"):
+                        field.is_mapped = False
+                        field.in_questionnaire = False
+                        field.db_object = ""
+                        field.db_path = ""
+                        st.rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -715,7 +691,7 @@ def display_field(field: FormField, key_prefix: str):
         show_mapping(field, unique_key)
 
 def show_mapping(field: FormField, unique_key: str):
-    """Mapping interface with full database schema"""
+    """Mapping interface"""
     
     st.markdown("---")
     st.markdown("### 🔗 Map Field to Database")
@@ -761,7 +737,6 @@ def show_mapping(field: FormField, unique_key: str):
         if st.button("✅ Apply", key=f"{unique_key}_apply", type="primary"):
             if selected_obj and path:
                 field.is_mapped = True
-                field.is_manual = (selected_obj == "custom")
                 field.db_object = selected_obj
                 field.db_path = path
                 del st.session_state[f"mapping_{field.unique_id}"]
@@ -780,7 +755,7 @@ def show_mapping(field: FormField, unique_key: str):
 def main():
     st.markdown('<div class="main-header">', unsafe_allow_html=True)
     st.title("📄 Universal USCIS Form Reader")
-    st.markdown("Works with ANY USCIS form - Complete database schema included")
+    st.markdown("Automatically splits multi-value fields into subfields (a, b, c...)")
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Initialize
@@ -796,14 +771,14 @@ def main():
         for key, info in DATABASE_SCHEMA.items():
             with st.expander(info["label"]):
                 if key == "custom":
-                    st.info("Enter any custom path for fields not covered by other objects")
+                    st.info("Enter any custom path")
                 else:
                     paths = info["paths"]
-                    st.info(f"{len(paths)} predefined paths available")
-                    for path in paths[:8]:
+                    st.info(f"{len(paths)} paths available")
+                    for path in paths[:5]:
                         st.code(path)
-                    if len(paths) > 8:
-                        st.caption(f"... and {len(paths)-8} more paths")
+                    if len(paths) > 5:
+                        st.caption(f"... +{len(paths)-5} more")
         
         st.markdown("---")
         
@@ -815,42 +790,47 @@ def main():
             st.rerun()
         
         if st.session_state.form:
-            st.markdown("## 📈 Form Statistics")
+            st.markdown("## 📈 Statistics")
             form = st.session_state.form
             
-            st.markdown('<div class="stats-box">', unsafe_allow_html=True)
-            st.metric("Form", form.form_number)
-            st.metric("Pages", form.total_pages)
-            st.metric("Parts", len(form.parts))
+            # Count fields
+            total_fields = 0
+            parent_fields = 0
+            subfields = 0
+            mapped = 0
             
-            total_fields = sum(len(p.fields) for p in form.parts.values())
-            mapped = sum(1 for p in form.parts.values() for f in p.fields if f.is_mapped)
-            quest = sum(1 for p in form.parts.values() for f in p.fields if f.in_questionnaire)
+            for part in form.parts.values():
+                for field in part.fields:
+                    total_fields += 1
+                    if field.is_parent:
+                        parent_fields += 1
+                    elif field.is_subfield:
+                        subfields += 1
+                    if field.is_mapped:
+                        mapped += 1
             
             st.metric("Total Fields", total_fields)
+            st.metric("Parent Fields", parent_fields)
+            st.metric("Subfields", subfields)
             st.metric("Mapped", mapped)
-            st.metric("Questionnaire", quest)
-            st.metric("Unmapped", total_fields - mapped - quest)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
     
     # Main tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🔗 Map Fields", "📝 Questionnaire", "💾 Export"])
     
     with tab1:
-        st.markdown("### Upload ANY USCIS Form")
-        st.info("This reader works with all USCIS forms without any hardcoding")
+        st.markdown("### Upload USCIS Form")
+        st.info("Fields with multiple values (like names, addresses) will be automatically split into subfields")
         
         uploaded_file = st.file_uploader("Choose PDF file", type=['pdf'])
         
         if uploaded_file:
             if st.button("🚀 Extract Form", type="primary", use_container_width=True):
-                with st.spinner("Extracting form structure..."):
+                with st.spinner("Extracting and splitting fields..."):
                     # Extract PDF
                     full_text, page_texts, total_pages = extract_pdf_text(uploaded_file)
                     
                     if full_text:
-                        # Extract form
+                        # Extract form with subfield splitting
                         form = st.session_state.extractor.extract_form(
                             full_text, page_texts, total_pages
                         )
@@ -858,23 +838,31 @@ def main():
                         st.session_state.form = form
                         
                         # Show results
-                        st.success(f"✅ Successfully extracted: {form.form_number}")
+                        st.success(f"✅ Extracted: {form.form_number}")
                         
                         # Statistics
-                        col1, col2, col3 = st.columns(3)
+                        total_fields = sum(len(p.fields) for p in form.parts.values())
+                        parent_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_parent)
+                        subfield_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_subfield)
+                        
+                        col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric("Parts Found", len(form.parts))
+                            st.metric("Parts", len(form.parts))
                         with col2:
-                            total_fields = sum(len(p.fields) for p in form.parts.values())
-                            st.metric("Fields Found", total_fields)
+                            st.metric("Total Fields", total_fields)
                         with col3:
-                            st.metric("Pages", total_pages)
+                            st.metric("Parent Fields", parent_count)
+                        with col4:
+                            st.metric("Subfields", subfield_count)
+                        
+                        if parent_count > 0:
+                            st.info(f"✨ Automatically split {parent_count} fields into {subfield_count} subfields")
                     else:
-                        st.error("Could not extract text from PDF")
+                        st.error("Could not extract text")
     
     with tab2:
         st.markdown("### Map Fields to Database")
-        st.info("Select the appropriate database object and path for each field")
+        st.info("Parent fields are shown in gray. Map the subfields individually.")
         
         if st.session_state.form:
             form = st.session_state.form
@@ -882,42 +870,54 @@ def main():
             for part_num, part in form.parts.items():
                 with st.expander(f"Part {part_num}: {part.title}", expanded=(part_num == 1)):
                     
-                    # Part statistics
-                    part_fields = len(part.fields)
-                    part_mapped = sum(1 for f in part.fields if f.is_mapped)
-                    part_quest = sum(1 for f in part.fields if f.in_questionnaire)
+                    # Statistics
+                    regular = sum(1 for f in part.fields if not f.is_parent and not f.is_subfield)
+                    parents = sum(1 for f in part.fields if f.is_parent)
+                    subs = sum(1 for f in part.fields if f.is_subfield)
                     
-                    col1, col2, col3, col4 = st.columns(4)
+                    col1, col2, col3 = st.columns(3)
                     with col1:
-                        st.metric("Fields", part_fields)
+                        st.metric("Regular Fields", regular)
                     with col2:
-                        st.metric("Mapped", part_mapped)
+                        st.metric("Parent Fields", parents)
                     with col3:
-                        st.metric("Quest", part_quest)
-                    with col4:
-                        st.metric("Unmapped", part_fields - part_mapped - part_quest)
+                        st.metric("Subfields", subs)
                     
                     st.markdown("---")
                     
-                    # Display fields
+                    # Display fields with proper hierarchy
+                    displayed_subfields = set()
+                    
                     for field in part.fields:
+                        # Skip already displayed subfields
+                        if field.item_number in displayed_subfields:
+                            continue
+                        
+                        # Display field
                         display_field(field, f"p{part_num}")
+                        
+                        # If it's a parent, immediately show its subfields
+                        if field.is_parent:
+                            for subfield in part.fields:
+                                if subfield.parent_number == field.item_number:
+                                    display_field(subfield, f"p{part_num}")
+                                    displayed_subfields.add(subfield.item_number)
         else:
-            st.info("Upload a form first to begin mapping")
+            st.info("Upload a form first")
     
     with tab3:
         st.markdown("### Questionnaire Fields")
-        st.info("Fields that need manual completion")
         
         if st.session_state.form:
             quest_fields = []
             for part in st.session_state.form.parts.values():
-                quest_fields.extend([f for f in part.fields if f.in_questionnaire])
+                quest_fields.extend([f for f in part.fields if f.in_questionnaire and not f.is_parent])
             
             if quest_fields:
                 for field in quest_fields:
                     st.markdown(f"**{field.item_number}. {field.label}**")
-                    st.caption(f"From Part {field.part_number}")
+                    if field.is_subfield:
+                        st.caption(f"Subfield of {field.parent_number}")
                     
                     field.value = st.text_area(
                         "Answer", 
@@ -926,13 +926,13 @@ def main():
                         height=100
                     )
                     
-                    if st.button("Remove from questionnaire", key=f"qr_{field.unique_id}"):
+                    if st.button("Remove", key=f"qr_{field.unique_id}"):
                         field.in_questionnaire = False
                         st.rerun()
                     
                     st.markdown("---")
             else:
-                st.info("No questionnaire fields. Use 'Quest' button to add fields here.")
+                st.info("No questionnaire fields")
         else:
             st.info("Upload a form first")
     
@@ -948,14 +948,10 @@ def main():
                     "form_number": form.form_number,
                     "form_title": form.form_title,
                     "edition_date": form.edition_date,
-                    "total_pages": form.total_pages,
-                    "export_date": datetime.now().isoformat()
+                    "total_pages": form.total_pages
                 },
-                "database_objects": list(DATABASE_SCHEMA.keys()),
                 "parts": [],
-                "mapped_fields": [],
-                "questionnaire_fields": [],
-                "all_fields": []
+                "field_hierarchy": {}
             }
             
             for part in form.parts.values():
@@ -971,40 +967,47 @@ def main():
                         "label": field.label,
                         "value": field.value,
                         "type": field.field_type,
-                        "part": part.number,
-                        "is_subfield": field.is_subfield,
-                        "parent_item": field.parent_item
+                        "is_parent": field.is_parent,
+                        "is_subfield": field.is_subfield
                     }
                     
+                    if field.is_subfield:
+                        field_data["parent_number"] = field.parent_number
+                    
                     if field.is_mapped:
-                        field_data["database_object"] = field.db_object
-                        field_data["database_path"] = field.db_path
-                        field_data["is_manual"] = field.is_manual
-                        export_data["mapped_fields"].append(field_data)
-                    elif field.in_questionnaire:
-                        export_data["questionnaire_fields"].append(field_data)
+                        field_data["mapping"] = f"{field.db_object}.{field.db_path}"
                     
                     part_data["fields"].append(field_data)
-                    export_data["all_fields"].append(field_data)
+                    
+                    # Build hierarchy
+                    if field.is_parent:
+                        export_data["field_hierarchy"][field.item_number] = {
+                            "label": field.label,
+                            "subfields": field.subfield_labels
+                        }
                 
                 export_data["parts"].append(part_data)
             
             # Summary
+            total = sum(len(p["fields"]) for p in export_data["parts"])
+            parents = sum(1 for p in export_data["parts"] for f in p["fields"] if f["is_parent"])
+            subfields = sum(1 for p in export_data["parts"] for f in p["fields"] if f["is_subfield"])
+            
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total Fields", len(export_data["all_fields"]))
+                st.metric("Total Fields", total)
             with col2:
-                st.metric("Mapped", len(export_data["mapped_fields"]))
+                st.metric("Parent Fields", parents)
             with col3:
-                st.metric("Questionnaire", len(export_data["questionnaire_fields"]))
+                st.metric("Subfields", subfields)
             
             # Download
             json_str = json.dumps(export_data, indent=2)
             
             st.download_button(
-                "📥 Download Complete JSON",
+                "📥 Download JSON",
                 json_str,
-                f"{form.form_number}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                f"{form.form_number}_export.json",
                 "application/json",
                 use_container_width=True
             )
