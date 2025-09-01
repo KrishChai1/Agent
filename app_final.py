@@ -15,9 +15,6 @@ FORCE_INCLUDE_FILES = [
 ]
 
 # ==================== HELPERS =====================
-def to_bytes(buf) -> bytes:
-    return bytes(buf) if isinstance(buf, (bytes, bytearray)) else str(buf).encode()
-
 def normalize(s: str) -> str:
     return re.sub(r'\s+', ' ', s or '').strip()
 
@@ -61,7 +58,7 @@ def safe_open_pdf(raw: bytes):
 
 # ==================== PDF PARSING =====================
 PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.I)
-FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:\.)?([a-z]?)\.\s*(.*)$')
+FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:[\.\)]\s*([a-z])?)?\s*(.*)$')
 
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
     """Parse a single USCIS PDF into parts/fields."""
@@ -71,17 +68,23 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
     for pno in range(len(doc)):
         for line in doc[pno].get_text("text").splitlines():
             line = line.strip()
-            if not line: continue
+            if not line:
+                continue
+
+            # detect "Part N"
             m_part = PART_RX.match(line)
             if m_part:
                 idx, title = m_part.groups()
                 current_part = f"Part {idx}: {title.strip()}"
                 continue
+
+            # detect "1.", "1)", "1.a.", "6.a In Care Of Name"
             m_field = FIELD_HEAD_RX.match(line)
             if m_field and current_part:
                 num, sub, rest = m_field.groups()
                 fid = f"{num}.{sub}" if sub else num
-                parts[current_part].append({"id": fid, "label": normalize(rest), "page": pno+1})
+                label = normalize(rest) or line  # fallback to full line
+                parts[current_part].append({"id": fid, "label": label, "page": pno+1})
     return parts
 
 def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[Dict[str, Any]]]:
@@ -96,7 +99,7 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
             if fid not in byid:
                 byid[fid] = it
             else:
-                if it["page"] and (not byid[fid]["page"] or it["page"] < byid[fid]["page"]):
+                if it.get("page") and (not byid[fid].get("page") or it["page"] < byid[fid]["page"]):
                     byid[fid]["page"] = it["page"]
                 if len(it.get("label","")) > len(byid[fid].get("label","")):
                     byid[fid]["label"] = it["label"]
@@ -124,12 +127,14 @@ def auto_split_fields(merged_parts, patterns=DEFAULT_PATTERNS):
                         new_parts[part].append({"id": f"{f['id']}.{sub}", "label": term, "page": f["page"]})
                     matched = True
                     break
-            if not matched: new_parts[part].append(f)
+            if not matched:
+                new_parts[part].append(f)
     return new_parts
 
 # ==================== LLM-ENHANCEMENT =====================
 def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
-    if not OPENAI_API_KEY: return None
+    if not OPENAI_API_KEY:
+        return None
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
@@ -139,7 +144,8 @@ def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
         return None
 
 def llm_enhance_parts(pdf_bytes_list, merged_parts):
-    if not OPENAI_API_KEY or not pdf_bytes_list: return merged_parts
+    if not OPENAI_API_KEY or not pdf_bytes_list:
+        return merged_parts
     try:
         doc = safe_open_pdf(pdf_bytes_list[0])
         raw_text = "\n".join([doc[p].get_text("text") for p in range(len(doc))])[:20000]
@@ -148,7 +154,8 @@ def llm_enhance_parts(pdf_bytes_list, merged_parts):
     system = "You are a USCIS form extractor. Return clean JSON only."
     user = f"Extract parts/fields from this USCIS form:\n{raw_text}"
     content = oai_chat([{"role":"system","content":system},{"role":"user","content":user}], max_tokens=4000)
-    if not content: return merged_parts
+    if not content:
+        return merged_parts
     try:
         data = json.loads(content[content.find("{"):content.rfind("}")+1])
         for part in data.get("parts", []):
@@ -158,7 +165,8 @@ def llm_enhance_parts(pdf_bytes_list, merged_parts):
                 fid, lbl = f.get("id"), normalize(f.get("label",""))
                 if fid and fid not in exist_ids:
                     merged_parts.setdefault(pname, []).append({"id": fid, "label": lbl, "page": None})
-    except: pass
+    except:
+        pass
     return merged_parts
 
 # ==================== UI =====================
@@ -204,8 +212,17 @@ if not merged:
     st.info("Upload at least one USCIS PDF to begin.")
     st.stop()
 
-if "mappings" not in st.session_state: st.session_state["mappings"] = {}
+if "mappings" not in st.session_state:
+    st.session_state["mappings"] = {}
 
+# ---- PREVIEW ----
+st.subheader("📝 Extracted Fields Preview")
+for part, rows in merged.items():
+    st.write(f"**{part}** ({len(rows)} fields)")
+    st.code("\n".join([f"{r['id']} → {r['label']}" for r in rows[:15]]))  # show first 15
+
+# ---- MAPPING ----
+st.subheader("📄 Parts & Mapping")
 for part_name in sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).group())):
     with st.expander(part_name, expanded=False):
         if part_name not in st.session_state["mappings"]:
@@ -230,7 +247,7 @@ for part_name in sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).gr
             }
 
 # ==================== EXPORT =====================
-st.header("Exports")
+st.header("⬇️ Exports")
 
 # TypeScript interface
 all_ids = [f"{p.replace(' ', '_')}_{fid}" for p, fields in st.session_state["mappings"].items() for fid in fields]
