@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-UNIVERSAL USCIS FORM READER - ADVANCED VERSION WITH VALIDATION
-==============================================================
-Features: Option extraction with context, validation agent, improved field detection
+UNIVERSAL USCIS FORM READER - FIXED VERSION
+============================================
+Stable version with proper error handling and part extraction
 """
 
 import streamlit as st
@@ -10,14 +10,13 @@ import json
 import re
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any, Set
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, field as dataclass_field
 import uuid
-import traceback
 
 # Page config
 st.set_page_config(
-    page_title="Advanced USCIS Form Reader",
+    page_title="USCIS Form Reader",
     page_icon="📄",
     layout="wide"
 )
@@ -94,19 +93,6 @@ st.markdown("""
         border-radius: 16px;
         font-size: 0.9em;
     }
-    .option-context {
-        font-size: 0.85em;
-        color: #666;
-        margin-left: 20px;
-        font-style: italic;
-    }
-    .validation-warning {
-        background: #fff3cd;
-        border-left: 4px solid #ffc107;
-        padding: 10px;
-        margin: 10px 0;
-        border-radius: 4px;
-    }
     .validation-error {
         background: #f8d7da;
         border-left: 4px solid #dc3545;
@@ -120,15 +106,8 @@ st.markdown("""
 # ===== DATA STRUCTURES =====
 
 @dataclass
-class FieldOption:
-    """Option with associated context"""
-    value: str
-    context: str = ""  # Additional text/instructions for this option
-    sub_options: List[str] = field(default_factory=list)
-
-@dataclass
 class FormField:
-    """Enhanced field structure with validation"""
+    """Field structure"""
     item_number: str
     label: str
     field_type: str = "text"
@@ -138,17 +117,16 @@ class FormField:
     parent_number: str = ""
     is_parent: bool = False
     is_subfield: bool = False
-    subfield_labels: List[str] = field(default_factory=list)
+    subfield_labels: List[str] = dataclass_field(default_factory=list)
     is_mapped: bool = False
     in_questionnaire: bool = False
     db_object: str = ""
     db_path: str = ""
     unique_id: str = ""
-    options: List[FieldOption] = field(default_factory=list)
+    options: List[str] = dataclass_field(default_factory=list)
+    option_contexts: Dict[str, str] = dataclass_field(default_factory=dict)
     has_options: bool = False
-    validation_rules: List[str] = field(default_factory=list)
-    validation_errors: List[str] = field(default_factory=list)
-    field_context: str = ""  # Additional context from form
+    validation_errors: List[str] = dataclass_field(default_factory=list)
     
     def __post_init__(self):
         if not self.unique_id:
@@ -161,10 +139,9 @@ class FormPart:
     """Part structure"""
     number: int
     title: str
-    fields: List[FormField] = field(default_factory=list)
+    fields: List[FormField] = dataclass_field(default_factory=list)
     page_start: int = 1
     page_end: int = 1
-    instructions: str = ""  # Part-specific instructions
 
 @dataclass
 class USCISForm:
@@ -173,1040 +150,88 @@ class USCISForm:
     form_title: str = "USCIS Form"
     edition_date: str = ""
     total_pages: int = 0
-    parts: Dict[int, FormPart] = field(default_factory=dict)
+    parts: Dict[int, FormPart] = dataclass_field(default_factory=dict)
     raw_text: str = ""
-    validation_summary: Dict = field(default_factory=dict)
 
-# ===== COMPLETE DATABASE SCHEMA =====
+# ===== DATABASE SCHEMA =====
 
 DATABASE_SCHEMA = {
     "beneficiary": {
-        "label": "👤 Beneficiary/Applicant Information",
+        "label": "👤 Beneficiary/Applicant",
         "paths": [
             "beneficiaryLastName",
             "beneficiaryFirstName", 
             "beneficiaryMiddleName",
-            "beneficiaryOtherNames",
             "beneficiaryDateOfBirth",
             "beneficiarySsn",
             "alienNumber",
             "uscisOnlineAccount",
             "beneficiaryCountryOfBirth",
             "beneficiaryCityOfBirth",
-            "beneficiaryProvinceOfBirth",
             "beneficiaryCitizenOfCountry",
-            "beneficiaryCellNumber",
-            "beneficiaryWorkNumber",
-            "beneficiaryPrimaryEmailAddress",
+            "beneficiaryPhone",
+            "beneficiaryEmail",
             "homeAddress.inCareOf",
             "homeAddress.streetNumber",
             "homeAddress.streetName",
-            "homeAddress.apartmentType",
-            "homeAddress.apartmentNumber",
+            "homeAddress.aptType",
+            "homeAddress.aptNumber",
             "homeAddress.city",
             "homeAddress.state",
             "homeAddress.zipCode",
-            "homeAddress.zipCodePlus4",
-            "homeAddress.province",
-            "homeAddress.postalCode",
             "homeAddress.country",
-            "physicalAddress.streetNumber",
-            "physicalAddress.streetName",
-            "physicalAddress.city",
-            "physicalAddress.state",
-            "physicalAddress.zipCode",
-            "currentNonimmigrantStatus",
+            "currentStatus",
             "statusExpirationDate",
-            "lastArrivalDate",
             "passportNumber",
             "passportCountry",
-            "passportIssuedDate",
-            "passportExpirationDate",
             "i94Number",
-            "travelDocumentNumber",
-            "sevisId",
-            "dsNumber",
-            "maritalStatus",
-            "numberOfMarriages",
-            "dateOfCurrentMarriage",
-            "placeOfCurrentMarriage"
+            "maritalStatus"
         ]
     },
     "petitioner": {
-        "label": "🏢 Petitioner/Employer Information",
+        "label": "🏢 Petitioner/Employer",
         "paths": [
-            "petitionerName",
-            "petitionerLastName",
-            "petitionerFirstName",
-            "petitionerMiddleName",
             "companyName",
-            "companyTradeName",
             "companyTaxId",
-            "companyFein",
-            "companyWebsite",
             "signatoryFirstName",
             "signatoryLastName",
-            "signatoryMiddleName",
-            "signatoryJobTitle",
-            "signatoryWorkPhone",
-            "signatoryWorkPhoneExt",
-            "signatoryMobilePhone",
-            "signatoryEmailAddress",
+            "signatoryTitle",
+            "signatoryPhone",
+            "signatoryEmail",
             "companyAddress.streetNumber",
             "companyAddress.streetName",
             "companyAddress.suite",
             "companyAddress.city",
             "companyAddress.state",
             "companyAddress.zipCode",
-            "companyAddress.province",
-            "companyAddress.postalCode",
-            "companyAddress.country",
             "yearEstablished",
             "numberOfEmployees",
-            "numberOfUSEmployees",
             "grossAnnualIncome",
-            "netAnnualIncome",
-            "naicsCode",
-            "businessType",
-            "ownershipType"
-        ]
-    },
-    "dependent": {
-        "label": "👥 Dependent/Family Member Information",
-        "paths": [
-            "dependent[].lastName",
-            "dependent[].firstName",
-            "dependent[].middleName",
-            "dependent[].dateOfBirth",
-            "dependent[].countryOfBirth",
-            "dependent[].countryOfCitizenship",
-            "dependent[].alienNumber",
-            "dependent[].i94Number",
-            "dependent[].passportNumber",
-            "dependent[].passportCountry",
-            "dependent[].relationship",
-            "dependent[].maritalStatus",
-            "dependent[].address.streetNumber",
-            "dependent[].address.streetName",
-            "dependent[].address.apartment",
-            "dependent[].address.city",
-            "dependent[].address.state",
-            "dependent[].address.zipCode",
-            "dependent[].applyingWithYou"
+            "businessType"
         ]
     },
     "attorney": {
-        "label": "⚖️ Attorney/Representative Information",
+        "label": "⚖️ Attorney",
         "paths": [
             "attorneyLastName",
             "attorneyFirstName",
-            "attorneyMiddleName",
-            "attorneyWorkPhone",
-            "attorneyWorkPhoneExt",
-            "attorneyMobilePhone",
-            "attorneyEmailAddress",
-            "attorneyStateBarNumber",
-            "attorneyUscisOnlineAccount",
-            "attorneyAddress.streetNumber",
-            "attorneyAddress.streetName",
-            "attorneyAddress.suite",
-            "attorneyAddress.city",
-            "attorneyAddress.state",
-            "attorneyAddress.zipCode",
-            "lawFirmName",
-            "lawFirmFein",
-            "attorneyEligibilityCategory"
-        ]
-    },
-    "application": {
-        "label": "📋 Application/Case Information",
-        "paths": [
-            "caseNumber",
-            "receiptNumber",
-            "priorityDate",
-            "filingDate",
-            "approvalDate",
-            "applicationType",
-            "requestedStatus",
-            "requestedClassification",
-            "changeOfStatusFrom",
-            "changeOfStatusTo",
-            "extensionFrom",
-            "extensionTo",
-            "processingLocation",
-            "consulateLocation",
-            "portOfEntry",
-            "dateOfEntry",
-            "mannerOfEntry",
-            "previousPetitionReceipt",
-            "basisForClassification",
-            "requestedValidityPeriod"
-        ]
-    },
-    "employment": {
-        "label": "💼 Employment Information",
-        "paths": [
-            "jobTitle",
-            "jobCode",
-            "socCode",
-            "workLocation.streetNumber",
-            "workLocation.streetName",
-            "workLocation.city",
-            "workLocation.state",
-            "workLocation.zipCode",
-            "annualSalary",
-            "wagePerHour",
-            "hoursPerWeek",
-            "employmentStartDate",
-            "employmentEndDate",
-            "previousEmployer",
-            "previousJobTitle",
-            "previousEmploymentDates"
+            "attorneyPhone",
+            "attorneyEmail",
+            "attorneyBarNumber",
+            "lawFirmName"
         ]
     },
     "custom": {
-        "label": "✏️ Manual/Custom Fields",
+        "label": "✏️ Custom",
         "paths": []
     }
 }
 
-# ===== VALIDATION RULES =====
-
-VALIDATION_RULES = {
-    "ssn": {
-        "pattern": r'^\d{3}-?\d{2}-?\d{4}$',
-        "message": "SSN must be in format XXX-XX-XXXX"
-    },
-    "ein": {
-        "pattern": r'^\d{2}-?\d{7}$',
-        "message": "EIN must be in format XX-XXXXXXX"
-    },
-    "alien_number": {
-        "pattern": r'^[A]\d{8,9}$|^\d{8,9}$',
-        "message": "Alien Number must be 8-9 digits, optionally starting with 'A'"
-    },
-    "email": {
-        "pattern": r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
-        "message": "Invalid email format"
-    },
-    "phone": {
-        "pattern": r'^(\+1)?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}$',
-        "message": "Phone must be in format (XXX) XXX-XXXX"
-    },
-    "date": {
-        "pattern": r'^\d{2}/\d{2}/\d{4}$|^\d{4}-\d{2}-\d{2}$',
-        "message": "Date must be in format MM/DD/YYYY or YYYY-MM-DD"
-    },
-    "zip": {
-        "pattern": r'^\d{5}(-\d{4})?$',
-        "message": "ZIP code must be in format XXXXX or XXXXX-XXXX"
-    }
-}
-
-# ===== ENHANCED EXTRACTION FUNCTIONS =====
-
-def extract_field_options_with_context(label: str, form_text: str, field_number: str) -> List[FieldOption]:
-    """Extract options with their associated context/instructions"""
-    options = []
-    label_lower = label.lower()
-    
-    # Try to find the field in the form text for context
-    field_context = ""
-    try:
-        # Look for the field number in the text
-        pattern = re.escape(field_number) + r'[.\s]+' + re.escape(label[:30])
-        match = re.search(pattern, form_text, re.IGNORECASE)
-        if match:
-            start = match.start()
-            end = min(start + 1000, len(form_text))
-            field_context = form_text[start:end]
-    except:
-        pass
-    
-    # Extract checkbox/radio options from context
-    if field_context:
-        # Look for checkbox patterns: □ Option or ☐ Option
-        checkbox_pattern = r'[□☐]\s*([^\n□☐]{3,100})'
-        matches = re.findall(checkbox_pattern, field_context)
-        for match in matches:
-            option_text = match.strip()
-            if option_text:
-                # Check if there's additional context after the option
-                context = ""
-                context_pattern = re.escape(option_text) + r'\s*[:\-]?\s*([^\n□☐]{5,200})'
-                context_match = re.search(context_pattern, field_context)
-                if context_match:
-                    context = context_match.group(1).strip()
-                
-                options.append(FieldOption(
-                    value=option_text.split('.')[0].strip(),
-                    context=context
-                ))
-    
-    # Common field types with predefined options
-    if not options:
-        if any(word in label_lower for word in ["yes/no", "yes or no", "check if", "are you", "do you", "have you"]):
-            options = [
-                FieldOption(value="Yes", context="Select if applicable"),
-                FieldOption(value="No", context="Select if not applicable")
-            ]
-        elif "gender" in label_lower or "sex" in label_lower:
-            options = [
-                FieldOption(value="Male"),
-                FieldOption(value="Female"),
-                FieldOption(value="Other", context="Specify if selected")
-            ]
-        elif "marital" in label_lower:
-            options = [
-                FieldOption(value="Single", context="Never married"),
-                FieldOption(value="Married", context="Currently married"),
-                FieldOption(value="Divorced", context="Marriage legally ended"),
-                FieldOption(value="Widowed", context="Spouse deceased"),
-                FieldOption(value="Separated", context="Legally separated")
-            ]
-        elif "employment" in label_lower and "status" in label_lower:
-            options = [
-                FieldOption(value="Employed", context="Currently working"),
-                FieldOption(value="Unemployed", context="Not currently working"),
-                FieldOption(value="Self-employed", context="Own business"),
-                FieldOption(value="Student", context="Full-time student"),
-                FieldOption(value="Retired", context="No longer working")
-            ]
-        elif "relationship" in label_lower:
-            options = [
-                FieldOption(value="Spouse", context="Husband or wife"),
-                FieldOption(value="Child", context="Son or daughter"),
-                FieldOption(value="Parent", context="Mother or father"),
-                FieldOption(value="Sibling", context="Brother or sister"),
-                FieldOption(value="Other", context="Specify relationship")
-            ]
-        elif "status" in label_lower and any(word in label_lower for word in ["immigration", "visa", "nonimmigrant"]):
-            options = [
-                FieldOption(value="H-1B", context="Specialty occupation"),
-                FieldOption(value="L-1", context="Intracompany transferee"),
-                FieldOption(value="F-1", context="Student"),
-                FieldOption(value="B-1/B-2", context="Business/Tourist"),
-                FieldOption(value="O-1", context="Extraordinary ability"),
-                FieldOption(value="Other", context="Specify status")
-            ]
-    
-    return options
-
-def detect_field_type_enhanced(label: str, context: str = "") -> Tuple[str, List[FieldOption]]:
-    """Enhanced field type detection with better categorization"""
-    label_lower = label.lower()
-    
-    # Check for specific field types
-    if any(word in label_lower for word in ["check", "select", "mark", "choose", "indicate"]):
-        options = extract_field_options_with_context(label, context, "")
-        return ("checkbox" if len(options) <= 2 else "select"), options
-    
-    # Date fields
-    if any(word in label_lower for word in ["date", "dob", "birth", "expir", "issued", "validity"]):
-        return "date", []
-    
-    # Number fields with specific types
-    if "ssn" in label_lower or "social security" in label_lower:
-        return "ssn", []
-    elif "ein" in label_lower or "tax id" in label_lower:
-        return "ein", []
-    elif "alien" in label_lower and "number" in label_lower:
-        return "alien_number", []
-    elif any(word in label_lower for word in ["number", "receipt", "case"]):
-        return "number", []
-    
-    # Contact fields
-    if any(word in label_lower for word in ["email", "e-mail"]):
-        return "email", []
-    elif any(word in label_lower for word in ["phone", "telephone", "mobile", "cell", "fax"]):
-        return "phone", []
-    
-    # Address components
-    if "zip" in label_lower or "postal code" in label_lower:
-        return "zip", []
-    elif any(word in label_lower for word in ["address", "street", "city", "state"]):
-        return "address", []
-    
-    # Text area for longer responses
-    if any(word in label_lower for word in ["explain", "describe", "list", "additional"]):
-        return "textarea", []
-    
-    return "text", []
-
-def detect_address_components(label: str) -> List[str]:
-    """Enhanced address component detection"""
-    label_lower = label.lower()
-    
-    # US Address
-    if "address" in label_lower and "foreign" not in label_lower:
-        if "mailing" in label_lower:
-            return [
-                "In Care Of Name (if any)",
-                "Street Number",
-                "Street Name",
-                "Apt./Ste./Flr. Type",
-                "Apt./Ste./Flr. Number",
-                "City or Town",
-                "State",
-                "ZIP Code",
-                "ZIP Code Plus 4"
-            ]
-        else:
-            return [
-                "Street Number",
-                "Street Name",
-                "Apt./Ste./Flr. Number",
-                "City or Town",
-                "State",
-                "ZIP Code"
-            ]
-    
-    # Foreign Address
-    elif "foreign" in label_lower or "abroad" in label_lower:
-        return [
-            "Street Number",
-            "Street Name",
-            "Apartment Number",
-            "City or Town",
-            "Province or State",
-            "Postal Code",
-            "Country"
-        ]
-    
-    # Name fields
-    elif "name" in label_lower:
-        if "full" in label_lower or "legal" in label_lower:
-            return [
-                "Family Name (Last Name)",
-                "Given Name (First Name)",
-                "Middle Name (if any)",
-                "Other Names Used (if any)"
-            ]
-        elif "maiden" in label_lower or "other" in label_lower:
-            return ["Family Name", "Given Name", "Middle Name"]
-    
-    return []
-
-# ===== VALIDATION AGENT =====
-
-class ValidationAgent:
-    """AI-powered validation agent for form fields"""
-    
-    def __init__(self, openai_client=None):
-        self.client = openai_client
-        
-    def validate_field(self, field: FormField) -> List[str]:
-        """Validate a single field and return errors/warnings"""
-        errors = []
-        
-        if not field.value:
-            if field.field_type not in ["checkbox", "select"]:
-                return []  # Empty fields are okay unless required
-        
-        # Type-specific validation
-        if field.field_type == "ssn":
-            if not re.match(VALIDATION_RULES["ssn"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["ssn"]["message"])
-                
-        elif field.field_type == "ein":
-            if not re.match(VALIDATION_RULES["ein"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["ein"]["message"])
-                
-        elif field.field_type == "alien_number":
-            if not re.match(VALIDATION_RULES["alien_number"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["alien_number"]["message"])
-                
-        elif field.field_type == "email":
-            if not re.match(VALIDATION_RULES["email"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["email"]["message"])
-                
-        elif field.field_type == "phone":
-            if not re.match(VALIDATION_RULES["phone"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["phone"]["message"])
-                
-        elif field.field_type == "date":
-            if not re.match(VALIDATION_RULES["date"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["date"]["message"])
-                
-        elif field.field_type == "zip":
-            if not re.match(VALIDATION_RULES["zip"]["pattern"], field.value):
-                errors.append(VALIDATION_RULES["zip"]["message"])
-        
-        return errors
-    
-    def validate_form_with_ai(self, form: USCISForm) -> Dict:
-        """Use AI to validate entire form and provide feedback"""
-        if not self.client:
-            return {"status": "AI validation not available", "issues": []}
-        
-        # Collect all field data
-        form_data = []
-        for part in form.parts.values():
-            for field in part.fields:
-                if not field.is_parent and field.value:
-                    form_data.append({
-                        "field": field.item_number,
-                        "label": field.label,
-                        "value": field.value,
-                        "type": field.field_type
-                    })
-        
-        if not form_data:
-            return {"status": "No data to validate", "issues": []}
-        
-        try:
-            prompt = f"""
-            Review this USCIS form data for completeness and accuracy.
-            Identify any issues, inconsistencies, or missing critical information.
-            
-            Form: {form.form_number}
-            Data: {json.dumps(form_data[:50], indent=2)}  
-            
-            Return JSON with structure:
-            {{
-                "overall_status": "complete/incomplete/needs_review",
-                "completeness_score": 0-100,
-                "critical_missing": ["list of critical missing fields"],
-                "warnings": ["list of warnings"],
-                "suggestions": ["list of suggestions"]
-            }}
-            """
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=1000
-            )
-            
-            content = response.choices[0].message.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            return json.loads(content)
-            
-        except Exception as e:
-            return {"status": "Validation error", "error": str(e)[:100]}
-    
-    def suggest_improvements(self, field: FormField) -> List[str]:
-        """Suggest improvements for field values"""
-        suggestions = []
-        
-        if field.field_type == "phone" and field.value:
-            # Suggest formatting
-            digits = re.sub(r'\D', '', field.value)
-            if len(digits) == 10:
-                formatted = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
-                if formatted != field.value:
-                    suggestions.append(f"Consider formatting as: {formatted}")
-        
-        elif field.field_type == "date" and field.value:
-            # Suggest consistent date format
-            if "-" in field.value:
-                suggestions.append("Consider using MM/DD/YYYY format for consistency")
-        
-        return suggestions
-
-# ===== FORM EXTRACTOR =====
-
-class UniversalFormExtractor:
-    """Advanced form extractor with AI validation"""
-    
-    def __init__(self):
-        self.setup_openai()
-        self.validator = ValidationAgent(self.client)
-    
-    def setup_openai(self):
-        """Setup OpenAI client"""
-        if not OPENAI_AVAILABLE:
-            self.client = None
-            return
-            
-        api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-        
-        if api_key:
-            try:
-                self.client = openai.OpenAI(api_key=api_key)
-                st.success("✅ OpenAI connected - using GPT-4o for enhanced extraction")
-            except Exception as e:
-                st.warning(f"Could not initialize OpenAI: {str(e)[:100]}")
-                self.client = None
-        else:
-            self.client = None
-            st.info("Add OPENAI_API_KEY for AI-powered extraction and validation")
-    
-    def extract_form(self, full_text: str, page_texts: Dict[int, str], total_pages: int) -> USCISForm:
-        """Extract form with enhanced field detection"""
-        try:
-            form_info = self._identify_form(full_text[:3000])
-            
-            form = USCISForm(
-                form_number=form_info.get("form_number", "Unknown"),
-                form_title=form_info.get("form_title", "USCIS Form"),
-                edition_date=form_info.get("edition_date", ""),
-                total_pages=total_pages,
-                raw_text=full_text
-            )
-            
-            parts_data = self._extract_parts_enhanced(full_text)
-            
-            for part_data in parts_data:
-                part = FormPart(
-                    number=part_data["number"],
-                    title=part_data["title"],
-                    page_start=part_data.get("page_start", 1),
-                    page_end=part_data.get("page_end", 1),
-                    instructions=part_data.get("instructions", "")
-                )
-                
-                try:
-                    part.fields = self._extract_fields_with_options(full_text, part_data)
-                except Exception as e:
-                    st.warning(f"Error extracting Part {part_data['number']}: {str(e)[:100]}")
-                    part.fields = []
-                
-                form.parts[part.number] = part
-            
-            return form
-            
-        except Exception as e:
-            st.error(f"Form extraction error: {str(e)}")
-            return USCISForm(
-                form_number="Unknown",
-                form_title="USCIS Form",
-                parts={1: FormPart(number=1, title="Main Section", fields=[])}
-            )
-    
-    def _identify_form(self, text: str) -> Dict:
-        """Identify form using AI"""
-        form_match = re.search(r'Form\s+([A-Z]-?\d+[A-Z]?)', text)
-        form_number = form_match.group(1) if form_match else "Unknown"
-        
-        if not self.client:
-            return {"form_number": form_number, "form_title": "USCIS Form", "edition_date": ""}
-        
-        try:
-            prompt = """Extract form number, title, and edition date. Return JSON only."""
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt + "\n\n" + text}],
-                temperature=0,
-                max_tokens=200
-            )
-            
-            content = response.choices[0].message.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            return json.loads(content)
-        except:
-            return {"form_number": form_number, "form_title": "USCIS Form", "edition_date": ""}
-    
-    def _extract_parts_enhanced(self, text: str) -> List[Dict]:
-        """Extract parts with instructions"""
-        if self.client:
-            try:
-                prompt = """
-                Extract ALL parts from this USCIS form.
-                Include any instructions or notes for each part.
-                
-                Return JSON array:
-                [{
-                    "number": 1,
-                    "title": "Part Title",
-                    "instructions": "Any specific instructions for this part",
-                    "page_start": 1,
-                    "page_end": 2
-                }]
-                """
-                
-                response = self.client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": prompt + "\n\n" + text[:12000]}],
-                    temperature=0,
-                    max_tokens=2000
-                )
-                
-                content = response.choices[0].message.content.strip()
-                if "```" in content:
-                    content = content.split("```")[1].replace("json", "").strip()
-                
-                parts = json.loads(content)
-                if parts:
-                    return parts
-            except:
-                pass
-        
-        # Fallback
-        parts = []
-        part_matches = re.finditer(r'Part\s+(\d+)[.\s]+([^\n]+)', text)
-        for match in part_matches:
-            parts.append({
-                "number": int(match.group(1)),
-                "title": match.group(2).strip(),
-                "instructions": "",
-                "page_start": 1,
-                "page_end": 1
-            })
-        
-        return parts if parts else [{"number": 1, "title": "Main Section"}]
-    
-    def _extract_fields_with_options(self, text: str, part_data: Dict) -> List[FormField]:
-        """Extract fields with complete options and context"""
-        part_num = part_data["number"]
-        
-        # Use AI if available
-        if self.client:
-            try:
-                fields = self._extract_with_ai(text, part_data)
-                if fields:
-                    return fields
-            except:
-                pass
-        
-        # Fallback to pattern matching
-        return self._extract_with_patterns(text, part_data)
-    
-    def _extract_with_ai(self, text: str, part_data: Dict) -> List[FormField]:
-        """Use GPT-4o for accurate field extraction"""
-        try:
-            # Find part-specific text
-            part_text = self._get_part_text(text, part_data["number"])
-            
-            prompt = f"""
-            Extract ALL form fields from Part {part_data['number']}: {part_data['title']}.
-            
-            For EACH field provide:
-            1. Field number (e.g., "1", "1.a", "2.b")
-            2. Complete field label
-            3. Field type (text, date, checkbox, select, address, name, etc.)
-            4. All available options with their context/instructions
-            5. Whether it has subfields
-            
-            For address fields, include ALL components:
-            - Street Number (separate from Street Name)
-            - Street Name
-            - Apartment/Suite/Floor Type
-            - Apartment/Suite/Floor Number
-            - City, State, ZIP, ZIP+4
-            
-            Return JSON array with complete field information.
-            Include parent fields AND their subfields.
-            """
-            
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt + "\n\n" + part_text[:10000]}],
-                temperature=0,
-                max_tokens=4000
-            )
-            
-            content = response.choices[0].message.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            raw_fields = json.loads(content)
-            return self._process_ai_fields(raw_fields, part_data["number"], text)
-            
-        except Exception as e:
-            st.warning(f"AI extraction failed: {str(e)[:100]}")
-            return []
-    
-    def _process_ai_fields(self, raw_fields: List[Dict], part_num: int, full_text: str) -> List[FormField]:
-        """Process AI-extracted fields into FormField objects"""
-        processed_fields = []
-        
-        for field_data in raw_fields:
-            item_number = str(field_data.get("item_number", "")).strip()
-            label = field_data.get("label", "").strip()
-            field_type = field_data.get("type", "text")
-            
-            # Extract options with context
-            options = []
-            if "options" in field_data:
-                for opt in field_data["options"]:
-                    if isinstance(opt, dict):
-                        options.append(FieldOption(
-                            value=opt.get("value", ""),
-                            context=opt.get("context", "")
-                        ))
-                    else:
-                        options.append(FieldOption(value=str(opt)))
-            
-            # Determine if parent/subfield
-            is_subfield = '.' in item_number and len(item_number.split('.')[1]) == 1
-            is_parent = field_data.get("has_subfields", False)
-            
-            field = FormField(
-                item_number=item_number,
-                label=label,
-                field_type=field_type,
-                part_number=part_num,
-                is_parent=is_parent,
-                is_subfield=is_subfield,
-                options=options,
-                field_context=field_data.get("context", "")
-            )
-            
-            if is_subfield:
-                field.parent_number = item_number.split('.')[0]
-            
-            # Auto-detect address components if needed
-            if is_parent and "address" in label.lower():
-                field.subfield_labels = detect_address_components(label)
-            
-            processed_fields.append(field)
-        
-        return processed_fields
-    
-    def _extract_with_patterns(self, text: str, part_data: Dict) -> List[FormField]:
-        """Fallback pattern-based extraction"""
-        fields = []
-        part_text = self._get_part_text(text, part_data["number"])
-        
-        # Pattern for fields
-        pattern = r'(\d+\.?[a-z]?)\s+([^\n]{5,150})'
-        matches = re.finditer(pattern, part_text[:8000])
-        
-        for match in matches:
-            item_number = match.group(1).rstrip('.')
-            label = match.group(2).strip()
-            
-            # Get field context
-            start = match.start()
-            end = min(start + 500, len(part_text))
-            context = part_text[start:end]
-            
-            # Detect type and options
-            field_type, options = detect_field_type_enhanced(label, context)
-            
-            # Check if address field needs components
-            components = detect_address_components(label)
-            
-            is_subfield = '.' in item_number and len(item_number.split('.')[1]) == 1
-            is_parent = bool(components)
-            
-            field = FormField(
-                item_number=item_number,
-                label=label,
-                field_type=field_type if not is_parent else "parent",
-                part_number=part_data["number"],
-                is_parent=is_parent,
-                is_subfield=is_subfield,
-                options=options,
-                subfield_labels=components
-            )
-            
-            if is_subfield:
-                field.parent_number = item_number.split('.')[0]
-            
-            fields.append(field)
-            
-            # Create subfields for components
-            if components and not is_subfield:
-                for i, comp in enumerate(components):
-                    letter = chr(ord('a') + i)
-                    sub_type, _ = detect_field_type_enhanced(comp)
-                    
-                    subfield = FormField(
-                        item_number=f"{item_number}.{letter}",
-                        label=comp,
-                        field_type=sub_type,
-                        part_number=part_data["number"],
-                        parent_number=item_number,
-                        is_subfield=True
-                    )
-                    fields.append(subfield)
-        
-        return fields[:100]  # Limit fields
-    
-    def _get_part_text(self, text: str, part_num: int) -> str:
-        """Extract text for specific part"""
-        try:
-            pattern = f"Part\\s+{part_num}"
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                start = match.start()
-                next_pattern = f"Part\\s+{part_num + 1}"
-                next_match = re.search(next_pattern, text[start:], re.IGNORECASE)
-                if next_match:
-                    return text[start:start + next_match.start()]
-                return text[start:start + 15000]
-        except:
-            pass
-        return text[:15000]
-
-# ===== UI COMPONENTS =====
-
-def display_field_enhanced(field: FormField, key_prefix: str, validator: ValidationAgent):
-    """Enhanced field display with validation feedback"""
-    unique_key = f"{key_prefix}_{field.unique_id}"
-    
-    # Validate field
-    if field.value:
-        field.validation_errors = validator.validate_field(field)
-    
-    # Determine style
-    card_class = ""
-    if field.is_parent:
-        card_class = "parent-field"
-        status = "📁 Parent"
-    elif field.validation_errors:
-        card_class = "field-card validation-error"
-        status = "⚠️ Invalid"
-    elif field.in_questionnaire:
-        card_class = "field-questionnaire"
-        status = "📝 Quest"
-    elif field.is_mapped:
-        card_class = "field-mapped"
-        status = "✅ Mapped"
-    else:
-        card_class = "field-unmapped"
-        status = "❓ Unmapped"
-    
-    st.markdown(f'<div class="field-card {card_class}">', unsafe_allow_html=True)
-    
-    col1, col2, col3 = st.columns([3, 2, 2])
-    
-    with col1:
-        st.markdown(f'<span class="field-number-badge">{field.item_number}</span>**{field.label}**', unsafe_allow_html=True)
-        
-        # Show options with context
-        if field.has_options and field.options:
-            for opt in field.options:
-                opt_html = f'<span class="option-chip">{opt.value}</span>'
-                if opt.context:
-                    opt_html += f'<span class="option-context"> - {opt.context}</span>'
-                st.markdown(opt_html, unsafe_allow_html=True)
-        
-        # Show validation errors
-        if field.validation_errors:
-            for error in field.validation_errors:
-                st.markdown(f'<div class="validation-error">⚠️ {error}</div>', unsafe_allow_html=True)
-        
-        # Show suggestions
-        suggestions = validator.suggest_improvements(field)
-        if suggestions:
-            for suggestion in suggestions:
-                st.info(f"💡 {suggestion}")
-    
-    with col2:
-        if not field.is_parent:
-            if field.field_type == "date":
-                date_val = st.date_input("", key=f"{unique_key}_date", label_visibility="collapsed")
-                field.value = str(date_val) if date_val else ""
-            elif field.field_type == "textarea":
-                field.value = st.text_area("", value=field.value, key=f"{unique_key}_area", height=100, label_visibility="collapsed")
-            elif field.options:
-                # Show select with option context as help
-                option_values = [opt.value for opt in field.options]
-                selected_idx = 0
-                if field.value in option_values:
-                    selected_idx = option_values.index(field.value) + 1
-                
-                field.value = st.selectbox(
-                    "",
-                    [""] + option_values,
-                    index=selected_idx,
-                    key=f"{unique_key}_sel",
-                    label_visibility="collapsed"
-                )
-                
-                # Show context for selected option
-                if field.value:
-                    for opt in field.options:
-                        if opt.value == field.value and opt.context:
-                            st.caption(opt.context)
-            else:
-                field.value = st.text_input("", value=field.value, key=f"{unique_key}_val", label_visibility="collapsed")
-    
-    with col3:
-        st.markdown(f"**{status}**")
-        if not field.is_parent:
-            c1, c2 = st.columns(2)
-            with c1:
-                if not field.is_mapped and not field.in_questionnaire:
-                    if st.button("Map", key=f"{unique_key}_map"):
-                        st.session_state[f"mapping_{field.unique_id}"] = True
-                        st.rerun()
-            with c2:
-                if not field.is_mapped and not field.in_questionnaire:
-                    if st.button("Quest", key=f"{unique_key}_quest"):
-                        field.in_questionnaire = True
-                        st.rerun()
-                elif field.is_mapped or field.in_questionnaire:
-                    if st.button("Clear", key=f"{unique_key}_clear"):
-                        field.is_mapped = False
-                        field.in_questionnaire = False
-                        field.db_object = ""
-                        field.db_path = ""
-                        st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Mapping dialog
-    if st.session_state.get(f"mapping_{field.unique_id}"):
-        show_mapping(field, unique_key)
-
-def show_mapping(field: FormField, unique_key: str):
-    """Mapping interface"""
-    st.markdown("---")
-    st.markdown("### 🔗 Map Field to Database")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        db_options = list(DATABASE_SCHEMA.keys())
-        db_labels = [DATABASE_SCHEMA[k]["label"] for k in db_options]
-        
-        selected_idx = st.selectbox(
-            "Database Object",
-            range(len(db_options)),
-            format_func=lambda x: db_labels[x],
-            key=f"{unique_key}_dbobj",
-            index=None,
-            placeholder="Select database object..."
-        )
-        selected_obj = db_options[selected_idx] if selected_idx is not None else None
-    
-    with col2:
-        if selected_obj:
-            if selected_obj == "custom":
-                path = st.text_input("Custom path", key=f"{unique_key}_custom", placeholder="Enter custom path")
-            else:
-                paths = DATABASE_SCHEMA[selected_obj]["paths"]
-                path = st.selectbox(
-                    "Field Path",
-                    [""] + paths + ["[custom]"],
-                    key=f"{unique_key}_path",
-                    placeholder="Select field path..."
-                )
-                
-                if path == "[custom]":
-                    path = st.text_input("Enter custom path", key=f"{unique_key}_custpath")
-    
-    if selected_obj and path:
-        st.info(f"📍 Mapping: {field.item_number} → {selected_obj}.{path}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✅ Apply", key=f"{unique_key}_apply", type="primary"):
-            if selected_obj and path:
-                field.is_mapped = True
-                field.db_object = selected_obj
-                field.db_path = path
-                del st.session_state[f"mapping_{field.unique_id}"]
-                st.success("Mapped successfully!")
-                st.rerun()
-    with col2:
-        if st.button("Cancel", key=f"{unique_key}_cancel"):
-            del st.session_state[f"mapping_{field.unique_id}"]
-            st.rerun()
+# ===== HELPER FUNCTIONS =====
 
 def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
     """Extract text from PDF"""
     if not PYMUPDF_AVAILABLE:
-        st.error("PyMuPDF is not available")
         return "", {}, 0
     
     try:
@@ -1230,249 +255,859 @@ def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
         return full_text, page_texts, total_pages
         
     except Exception as e:
-        st.error(f"PDF extraction error: {str(e)}")
+        st.error(f"PDF error: {str(e)[:200]}")
         return "", {}, 0
 
-# ===== MAIN APPLICATION =====
+def extract_field_options(label: str, context: str = "") -> Tuple[List[str], Dict[str, str]]:
+    """Extract options from field label and context"""
+    options = []
+    option_contexts = {}
+    label_lower = label.lower()
+    
+    # Look for checkbox patterns in context
+    if context:
+        # Pattern: □ Option or ☐ Option
+        checkbox_patterns = [
+            r'[□☐]\s*([^\n□☐]{2,50})',
+            r'\[\s*\]\s*([^\n\[\]]{2,50})',
+            r'○\s*([^\n○]{2,50})'
+        ]
+        
+        for pattern in checkbox_patterns:
+            matches = re.findall(pattern, context[:500])
+            for match in matches[:10]:  # Limit to 10 options
+                option = match.strip()
+                if option and len(option) > 1:
+                    options.append(option)
+                    # Try to find context after the option
+                    context_pattern = re.escape(option) + r'[:\-\s]*([^\n□☐\[\]○]{5,100})'
+                    context_match = re.search(context_pattern, context)
+                    if context_match:
+                        option_contexts[option] = context_match.group(1).strip()
+    
+    # Predefined options for common fields
+    if not options:
+        if any(word in label_lower for word in ["yes/no", "yes or no", "are you", "do you"]):
+            options = ["Yes", "No"]
+        elif "gender" in label_lower:
+            options = ["Male", "Female", "Other"]
+        elif "marital" in label_lower:
+            options = ["Single", "Married", "Divorced", "Widowed", "Separated"]
+        elif "relationship" in label_lower:
+            options = ["Spouse", "Child", "Parent", "Sibling", "Other"]
+    
+    return options, option_contexts
+
+def detect_field_type(label: str, context: str = "") -> str:
+    """Detect field type from label"""
+    label_lower = label.lower()
+    
+    if any(word in label_lower for word in ["date", "birth", "expir"]):
+        return "date"
+    elif any(word in label_lower for word in ["email"]):
+        return "email"
+    elif any(word in label_lower for word in ["phone", "telephone"]):
+        return "phone"
+    elif "ssn" in label_lower or "social security" in label_lower:
+        return "ssn"
+    elif "alien number" in label_lower or "a-number" in label_lower:
+        return "alien_number"
+    elif any(word in label_lower for word in ["check", "select", "choose"]):
+        return "checkbox"
+    elif any(word in label_lower for word in ["explain", "describe"]):
+        return "textarea"
+    elif "zip" in label_lower:
+        return "zip"
+    
+    return "text"
+
+def detect_address_components(label: str) -> List[str]:
+    """Detect address components"""
+    label_lower = label.lower()
+    
+    if "address" in label_lower:
+        if "foreign" in label_lower:
+            return [
+                "Street Number and Name",
+                "City or Town",
+                "Province",
+                "Postal Code",
+                "Country"
+            ]
+        else:
+            return [
+                "In Care Of Name",
+                "Street Number",
+                "Street Name",
+                "Apt./Ste./Flr. Type",
+                "Apt./Ste./Flr. Number",
+                "City or Town",
+                "State",
+                "ZIP Code",
+                "ZIP Code Plus 4"
+            ]
+    elif "name" in label_lower and ("full" in label_lower or "legal" in label_lower):
+        return [
+            "Family Name (Last Name)",
+            "Given Name (First Name)",
+            "Middle Name"
+        ]
+    
+    return []
+
+# ===== FORM EXTRACTOR =====
+
+class FormExtractor:
+    """Form extraction with AI support"""
+    
+    def __init__(self):
+        self.client = None
+        self.setup_openai()
+    
+    def setup_openai(self):
+        """Setup OpenAI client"""
+        if not OPENAI_AVAILABLE:
+            return
+        
+        try:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                api_key = st.secrets.get("OPENAI_API_KEY", None)
+            
+            if api_key:
+                self.client = openai.OpenAI(api_key=api_key)
+                st.success("✅ OpenAI connected")
+        except Exception as e:
+            st.warning(f"OpenAI setup failed: {str(e)[:100]}")
+            self.client = None
+    
+    def extract_form(self, full_text: str, page_texts: Dict[int, str], total_pages: int) -> USCISForm:
+        """Extract form structure and fields"""
+        try:
+            # Identify form
+            form_info = self._identify_form(full_text[:3000])
+            
+            form = USCISForm(
+                form_number=form_info.get("form_number", "Unknown"),
+                form_title=form_info.get("form_title", "USCIS Form"),
+                edition_date=form_info.get("edition_date", ""),
+                total_pages=total_pages,
+                raw_text=full_text
+            )
+            
+            # Extract parts
+            parts = self._extract_parts(full_text)
+            
+            # Process each part
+            for part_info in parts:
+                part = FormPart(
+                    number=part_info["number"],
+                    title=part_info["title"],
+                    page_start=part_info.get("page_start", 1),
+                    page_end=part_info.get("page_end", 1)
+                )
+                
+                # Extract fields for this part
+                part_fields = self._extract_fields(full_text, part_info)
+                part.fields = part_fields
+                
+                form.parts[part.number] = part
+            
+            # If no parts found, create default
+            if not form.parts:
+                form.parts[1] = FormPart(
+                    number=1,
+                    title="Main Section",
+                    fields=self._extract_fields(full_text, {"number": 1, "title": "Main"})
+                )
+            
+            return form
+            
+        except Exception as e:
+            st.error(f"Extraction error: {str(e)[:200]}")
+            # Return minimal form
+            return USCISForm(
+                form_number="Unknown",
+                form_title="USCIS Form",
+                total_pages=total_pages,
+                parts={1: FormPart(number=1, title="Main Section", fields=[])}
+            )
+    
+    def _identify_form(self, text: str) -> Dict:
+        """Identify form type"""
+        result = {"form_number": "Unknown", "form_title": "USCIS Form", "edition_date": ""}
+        
+        # Try regex first
+        form_match = re.search(r'Form\s+([A-Z]-?\d+[A-Z]?)', text)
+        if form_match:
+            result["form_number"] = form_match.group(1)
+        
+        # Try AI if available
+        if self.client:
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Extract form information. Return JSON only."},
+                        {"role": "user", "content": f"Extract form number, title, edition date from:\n{text[:1000]}"}
+                    ],
+                    temperature=0,
+                    max_tokens=200
+                )
+                
+                content = response.choices[0].message.content.strip()
+                if content.startswith("{"):
+                    result.update(json.loads(content))
+            except:
+                pass
+        
+        return result
+    
+    def _extract_parts(self, text: str) -> List[Dict]:
+        """Extract parts from form"""
+        parts = []
+        
+        # Try AI extraction
+        if self.client:
+            try:
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Extract form parts. Return JSON array only."},
+                        {"role": "user", "content": f"Extract all parts (number and title) from:\n{text[:5000]}"}
+                    ],
+                    temperature=0,
+                    max_tokens=1000
+                )
+                
+                content = response.choices[0].message.content.strip()
+                if content.startswith("["):
+                    parts = json.loads(content)
+                    if parts:
+                        return parts
+            except:
+                pass
+        
+        # Fallback to regex
+        part_pattern = r'Part\s+(\d+)[.\s\-]+([^\n]{3,100})'
+        matches = re.finditer(part_pattern, text, re.IGNORECASE)
+        
+        for match in matches:
+            try:
+                part_num = int(match.group(1))
+                part_title = match.group(2).strip()
+                # Clean title
+                part_title = re.sub(r'[.\s]+$', '', part_title)
+                
+                parts.append({
+                    "number": part_num,
+                    "title": part_title,
+                    "page_start": 1,
+                    "page_end": 1
+                })
+            except:
+                continue
+        
+        # If no parts found, create default
+        if not parts:
+            parts = [{"number": 1, "title": "Information", "page_start": 1, "page_end": 1}]
+        
+        return parts
+    
+    def _extract_fields(self, text: str, part_info: Dict) -> List[FormField]:
+        """Extract fields for a part"""
+        fields = []
+        part_num = part_info["number"]
+        
+        # Try to get part-specific text
+        part_text = self._get_part_text(text, part_num)
+        
+        # Try AI extraction
+        if self.client and len(part_text) > 100:
+            try:
+                ai_fields = self._extract_fields_with_ai(part_text, part_num)
+                if ai_fields:
+                    return ai_fields
+            except:
+                pass
+        
+        # Fallback to pattern extraction
+        return self._extract_fields_with_patterns(part_text, part_num)
+    
+    def _get_part_text(self, text: str, part_num: int) -> str:
+        """Get text for specific part"""
+        try:
+            # Find start of part
+            part_pattern = f"Part\\s+{part_num}\\b"
+            match = re.search(part_pattern, text, re.IGNORECASE)
+            
+            if match:
+                start = match.start()
+                # Find next part
+                next_pattern = f"Part\\s+{part_num + 1}\\b"
+                next_match = re.search(next_pattern, text[start:], re.IGNORECASE)
+                
+                if next_match:
+                    end = start + next_match.start()
+                    return text[start:end]
+                else:
+                    # Take up to 10000 chars
+                    return text[start:min(start + 10000, len(text))]
+        except:
+            pass
+        
+        # Return first portion if part not found
+        return text[:10000]
+    
+    def _extract_fields_with_ai(self, text: str, part_num: int) -> List[FormField]:
+        """Extract fields using AI"""
+        try:
+            prompt = f"""Extract all form fields from Part {part_num}.
+            For each field include:
+            - item_number (like "1", "1.a", "2.b")
+            - label (complete field label)
+            - type (text, date, checkbox, select, address, name)
+            - options (if checkbox/select)
+            
+            Return JSON array only."""
+            
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "Extract form fields. Return valid JSON array only."},
+                    {"role": "user", "content": prompt + "\n\n" + text[:4000]}
+                ],
+                temperature=0,
+                max_tokens=3000
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Clean response
+            if "```" in content:
+                content = content.split("```")[1].replace("json", "").strip()
+            
+            if not content.startswith("["):
+                # Try to find JSON array in response
+                match = re.search(r'\[.*\]', content, re.DOTALL)
+                if match:
+                    content = match.group(0)
+            
+            raw_fields = json.loads(content)
+            
+            # Convert to FormField objects
+            fields = []
+            for field_data in raw_fields:
+                item_number = str(field_data.get("item_number", "")).strip()
+                label = field_data.get("label", "").strip()
+                
+                if not item_number or not label:
+                    continue
+                
+                # Get field type and options
+                field_type = field_data.get("type", "text")
+                options = field_data.get("options", [])
+                
+                # Check if address field needs components
+                components = detect_address_components(label)
+                
+                # Determine if parent/subfield
+                is_subfield = '.' in item_number and len(item_number.split('.')) == 2
+                is_parent = bool(components) and not is_subfield
+                
+                field = FormField(
+                    item_number=item_number,
+                    label=label,
+                    field_type=field_type if not is_parent else "parent",
+                    part_number=part_num,
+                    is_parent=is_parent,
+                    is_subfield=is_subfield,
+                    subfield_labels=components,
+                    options=options if isinstance(options, list) else []
+                )
+                
+                if is_subfield:
+                    field.parent_number = item_number.split('.')[0]
+                
+                fields.append(field)
+                
+                # Add subfields for components
+                if components and not is_subfield:
+                    for i, comp in enumerate(components):
+                        letter = chr(ord('a') + i)
+                        subfield = FormField(
+                            item_number=f"{item_number}.{letter}",
+                            label=comp,
+                            field_type=detect_field_type(comp),
+                            part_number=part_num,
+                            parent_number=item_number,
+                            is_subfield=True
+                        )
+                        fields.append(subfield)
+            
+            return fields
+            
+        except Exception as e:
+            st.warning(f"AI extraction failed: {str(e)[:100]}")
+            return []
+    
+    def _extract_fields_with_patterns(self, text: str, part_num: int) -> List[FormField]:
+        """Extract fields using regex patterns"""
+        fields = []
+        
+        # Field pattern
+        field_pattern = r'(\d+\.?[a-z]?)\s*[.\-\s]*([^\n]{5,150})'
+        matches = re.finditer(field_pattern, text[:8000])
+        
+        count = 0
+        for match in matches:
+            if count >= 50:  # Limit fields
+                break
+            
+            item_number = match.group(1).strip('.').strip()
+            label = match.group(2).strip()
+            
+            # Skip if too short or invalid
+            if len(label) < 3 or not item_number[0].isdigit():
+                continue
+            
+            # Get context for options
+            start = match.start()
+            end = min(start + 500, len(text))
+            context = text[start:end]
+            
+            # Extract options
+            options, option_contexts = extract_field_options(label, context)
+            
+            # Detect type
+            field_type = detect_field_type(label, context)
+            
+            # Check for address components
+            components = detect_address_components(label)
+            
+            # Determine if parent/subfield
+            is_subfield = '.' in item_number and len(item_number.split('.')) == 2
+            is_parent = bool(components) and not is_subfield
+            
+            field = FormField(
+                item_number=item_number,
+                label=label,
+                field_type=field_type if not is_parent else "parent",
+                part_number=part_num,
+                is_parent=is_parent,
+                is_subfield=is_subfield,
+                subfield_labels=components,
+                options=options,
+                option_contexts=option_contexts
+            )
+            
+            if is_subfield:
+                field.parent_number = item_number.split('.')[0]
+            
+            fields.append(field)
+            count += 1
+            
+            # Add subfields for components
+            if components and not is_subfield:
+                for i, comp in enumerate(components):
+                    if i >= 10:  # Limit subfields
+                        break
+                    letter = chr(ord('a') + i)
+                    subfield = FormField(
+                        item_number=f"{item_number}.{letter}",
+                        label=comp,
+                        field_type=detect_field_type(comp),
+                        part_number=part_num,
+                        parent_number=item_number,
+                        is_subfield=True
+                    )
+                    fields.append(subfield)
+                    count += 1
+        
+        return fields
+
+# ===== VALIDATION =====
+
+def validate_field(field: FormField) -> List[str]:
+    """Validate field value"""
+    errors = []
+    
+    if not field.value:
+        return []
+    
+    if field.field_type == "ssn":
+        if not re.match(r'^\d{3}-?\d{2}-?\d{4}$', field.value):
+            errors.append("SSN format: XXX-XX-XXXX")
+    elif field.field_type == "email":
+        if "@" not in field.value or "." not in field.value:
+            errors.append("Invalid email format")
+    elif field.field_type == "phone":
+        digits = re.sub(r'\D', '', field.value)
+        if len(digits) != 10:
+            errors.append("Phone must have 10 digits")
+    elif field.field_type == "zip":
+        if not re.match(r'^\d{5}(-\d{4})?$', field.value):
+            errors.append("ZIP format: XXXXX or XXXXX-XXXX")
+    
+    return errors
+
+# ===== UI COMPONENTS =====
+
+def display_field(field: FormField, key_prefix: str):
+    """Display a field"""
+    unique_key = f"{key_prefix}_{field.unique_id}"
+    
+    # Validate
+    field.validation_errors = validate_field(field)
+    
+    # Determine style
+    if field.is_parent:
+        card_class = "parent-field"
+        status = "📁 Parent"
+    elif field.validation_errors:
+        card_class = "field-card validation-error"
+        status = "⚠️ Error"
+    elif field.in_questionnaire:
+        card_class = "field-questionnaire"
+        status = "📝 Quest"
+    elif field.is_mapped:
+        card_class = "field-mapped"
+        status = "✅ Mapped"
+    else:
+        card_class = "field-unmapped"
+        status = "❓ Unmapped"
+    
+    st.markdown(f'<div class="field-card {card_class}">', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([3, 2, 2])
+    
+    with col1:
+        st.markdown(f'<span class="field-number-badge">{field.item_number}</span>**{field.label}**', unsafe_allow_html=True)
+        
+        # Show options
+        if field.options:
+            st.caption("Options:")
+            for opt in field.options:
+                context = field.option_contexts.get(opt, "")
+                if context:
+                    st.markdown(f'<span class="option-chip">{opt}</span> - {context}', unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<span class="option-chip">{opt}</span>', unsafe_allow_html=True)
+        
+        # Show validation errors
+        for error in field.validation_errors:
+            st.error(error)
+    
+    with col2:
+        if not field.is_parent:
+            if field.field_type == "date":
+                field.value = st.date_input("", key=f"{unique_key}_date", label_visibility="collapsed")
+                field.value = str(field.value) if field.value else ""
+            elif field.field_type == "textarea":
+                field.value = st.text_area("", value=field.value, key=f"{unique_key}_area", height=80, label_visibility="collapsed")
+            elif field.options:
+                field.value = st.selectbox("", [""] + field.options, key=f"{unique_key}_sel", label_visibility="collapsed")
+            else:
+                field.value = st.text_input("", value=field.value, key=f"{unique_key}_val", label_visibility="collapsed")
+    
+    with col3:
+        st.markdown(f"**{status}**")
+        if not field.is_parent:
+            c1, c2 = st.columns(2)
+            with c1:
+                if not field.is_mapped and not field.in_questionnaire:
+                    if st.button("Map", key=f"{unique_key}_map"):
+                        st.session_state[f"mapping_{field.unique_id}"] = True
+                        st.rerun()
+            with c2:
+                if not field.is_mapped and not field.in_questionnaire:
+                    if st.button("Quest", key=f"{unique_key}_quest"):
+                        field.in_questionnaire = True
+                        st.rerun()
+                else:
+                    if st.button("Clear", key=f"{unique_key}_clear"):
+                        field.is_mapped = False
+                        field.in_questionnaire = False
+                        field.db_object = ""
+                        field.db_path = ""
+                        st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Mapping dialog
+    if st.session_state.get(f"mapping_{field.unique_id}"):
+        show_mapping(field, unique_key)
+
+def show_mapping(field: FormField, unique_key: str):
+    """Show mapping interface"""
+    st.markdown("---")
+    st.markdown("### Map Field")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        db_options = list(DATABASE_SCHEMA.keys())
+        selected = st.selectbox(
+            "Database Object",
+            db_options,
+            key=f"{unique_key}_dbobj"
+        )
+    
+    with col2:
+        if selected:
+            paths = DATABASE_SCHEMA[selected]["paths"]
+            if selected == "custom":
+                path = st.text_input("Custom path", key=f"{unique_key}_path")
+            else:
+                path = st.selectbox("Field Path", [""] + paths, key=f"{unique_key}_path")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Apply", key=f"{unique_key}_apply"):
+            if selected and path:
+                field.is_mapped = True
+                field.db_object = selected
+                field.db_path = path
+                del st.session_state[f"mapping_{field.unique_id}"]
+                st.rerun()
+    with col2:
+        if st.button("Cancel", key=f"{unique_key}_cancel"):
+            del st.session_state[f"mapping_{field.unique_id}"]
+            st.rerun()
+
+# ===== MAIN APP =====
 
 def main():
-    st.markdown('<div class="main-header"><h1>📄 Advanced USCIS Form Reader</h1><p>AI-Powered Extraction with Validation</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header"><h1>📄 USCIS Form Reader</h1></div>', unsafe_allow_html=True)
     
     # Initialize
     if 'form' not in st.session_state:
         st.session_state.form = None
     if 'extractor' not in st.session_state:
-        st.session_state.extractor = UniversalFormExtractor()
+        st.session_state.extractor = FormExtractor()
     
     # Sidebar
     with st.sidebar:
         st.markdown("## 📊 Database Schema")
-        
         for key, info in DATABASE_SCHEMA.items():
             with st.expander(info["label"]):
-                if key == "custom":
-                    st.info("Enter any custom path")
-                else:
-                    paths = info["paths"]
-                    st.info(f"{len(paths)} paths available")
-                    for path in paths[:5]:
-                        st.code(path)
-                    if len(paths) > 5:
-                        st.caption(f"... +{len(paths)-5} more")
+                paths = info["paths"]
+                for path in paths[:5]:
+                    st.code(path)
+                if len(paths) > 5:
+                    st.caption(f"+{len(paths)-5} more")
         
-        st.markdown("---")
-        
-        if st.button("🔄 Clear All", type="secondary", use_container_width=True):
+        if st.button("🔄 Clear All", use_container_width=True):
             st.session_state.clear()
             st.rerun()
-        
-        if st.session_state.form:
-            st.markdown("## 📈 Statistics")
-            form = st.session_state.form
-            
-            total_fields = sum(len(p.fields) for p in form.parts.values())
-            mapped = sum(1 for p in form.parts.values() for f in p.fields if f.is_mapped)
-            quest = sum(1 for p in form.parts.values() for f in p.fields if f.in_questionnaire)
-            with_options = sum(1 for p in form.parts.values() for f in p.fields if f.has_options)
-            
-            st.metric("Total Fields", total_fields)
-            st.metric("Mapped", mapped)
-            st.metric("Questionnaire", quest)
-            st.metric("With Options", with_options)
     
-    # Main tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📤 Upload", "🔗 Map", "📝 Questionnaire", "✅ Validate", "💾 Export"])
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🔗 Map Fields", "📝 Questionnaire", "💾 Export"])
     
     with tab1:
-        st.markdown("### Upload USCIS Form")
+        st.markdown("### Upload USCIS Form PDF")
         
-        uploaded_file = st.file_uploader("Choose PDF file", type=['pdf'])
+        uploaded_file = st.file_uploader("Choose PDF", type=['pdf'])
         
         if uploaded_file:
-            if st.button("🚀 Extract Form with AI", type="primary", use_container_width=True):
-                with st.spinner("Extracting with GPT-4o..."):
+            if st.button("🚀 Extract Form", type="primary", use_container_width=True):
+                with st.spinner("Extracting..."):
                     try:
+                        # Extract PDF text
                         full_text, page_texts, total_pages = extract_pdf_text(uploaded_file)
                         
                         if full_text:
-                            form = st.session_state.extractor.extract_form(full_text, page_texts, total_pages)
+                            # Extract form
+                            form = st.session_state.extractor.extract_form(
+                                full_text, page_texts, total_pages
+                            )
                             st.session_state.form = form
+                            
+                            # Show results
                             st.success(f"✅ Extracted: {form.form_number}")
                             
-                            # Show statistics
+                            # Statistics
+                            total_parts = len(form.parts)
                             total_fields = sum(len(p.fields) for p in form.parts.values())
-                            with_options = sum(1 for p in form.parts.values() for f in p.fields if f.has_options)
                             
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric("Parts", len(form.parts))
+                                st.metric("Parts", total_parts)
                             with col2:
                                 st.metric("Fields", total_fields)
                             with col3:
-                                st.metric("With Options", with_options)
+                                st.metric("Pages", total_pages)
                             
-                            if with_options > 0:
-                                st.info(f"🎯 Extracted {with_options} fields with complete options and context")
+                            # Show parts
+                            st.markdown("### Extracted Parts:")
+                            for part_num, part in form.parts.items():
+                                st.info(f"**Part {part_num}**: {part.title} ({len(part.fields)} fields)")
+                        else:
+                            st.error("Could not extract text from PDF")
+                    
                     except Exception as e:
-                        st.error(f"Error: {str(e)}")
+                        st.error(f"Error: {str(e)[:200]}")
     
     with tab2:
+        st.markdown("### Map Fields to Database")
+        
         if st.session_state.form:
-            st.markdown("### Map Fields to Database")
-            
             form = st.session_state.form
-            validator = st.session_state.extractor.validator
             
+            # Show each part
             for part_num, part in form.parts.items():
-                with st.expander(f"Part {part_num}: {part.title}", expanded=(part_num == 1)):
-                    if part.instructions:
-                        st.info(f"📋 {part.instructions}")
+                with st.expander(f"Part {part_num}: {part.title} ({len(part.fields)} fields)", expanded=(part_num == 1)):
                     
+                    if not part.fields:
+                        st.warning("No fields found in this part")
+                        continue
+                    
+                    # Display fields
                     displayed = set()
+                    
                     for field in part.fields:
-                        if field.item_number not in displayed:
-                            if not field.is_subfield:
-                                display_field_enhanced(field, f"p{part_num}", validator)
-                                displayed.add(field.item_number)
-                                
-                                if field.is_parent:
-                                    for sub in part.fields:
-                                        if sub.parent_number == field.item_number:
-                                            display_field_enhanced(sub, f"p{part_num}", validator)
-                                            displayed.add(sub.item_number)
+                        if field.item_number in displayed:
+                            continue
+                        
+                        # Skip subfields (shown with parent)
+                        if field.is_subfield:
+                            continue
+                        
+                        # Display field
+                        display_field(field, f"p{part_num}")
+                        displayed.add(field.item_number)
+                        
+                        # Display subfields
+                        if field.is_parent:
+                            for subfield in part.fields:
+                                if subfield.parent_number == field.item_number:
+                                    display_field(subfield, f"p{part_num}")
+                                    displayed.add(subfield.item_number)
         else:
-            st.info("Upload a form first")
+            st.info("Please upload a form first")
     
     with tab3:
+        st.markdown("### Questionnaire Fields")
+        
         if st.session_state.form:
-            st.markdown("### Questionnaire Fields")
+            has_questions = False
             
             for part in st.session_state.form.parts.values():
                 quest_fields = [f for f in part.fields if f.in_questionnaire and not f.is_parent]
                 
                 if quest_fields:
+                    has_questions = True
                     st.markdown(f"#### Part {part.number}: {part.title}")
                     
                     for field in quest_fields:
-                        st.markdown(f'<span class="field-number-badge">{field.item_number}</span>**{field.label}**', unsafe_allow_html=True)
+                        st.markdown(f"**{field.item_number}. {field.label}**")
                         
+                        # Show all options with contexts
                         if field.options:
-                            # Show all options with context
-                            st.markdown("**Available Options:**")
+                            st.caption("Available options:")
                             for opt in field.options:
-                                if opt.context:
-                                    st.markdown(f"• **{opt.value}** - {opt.context}")
+                                context = field.option_contexts.get(opt, "")
+                                if context:
+                                    st.write(f"• **{opt}** - {context}")
                                 else:
-                                    st.markdown(f"• {opt.value}")
+                                    st.write(f"• {opt}")
                             
-                            # Select answer
-                            option_values = [opt.value for opt in field.options]
                             field.value = st.selectbox(
                                 "Select answer",
-                                [""] + option_values,
+                                [""] + field.options,
                                 key=f"q_{field.unique_id}"
                             )
                         else:
-                            field.value = st.text_area("Answer", value=field.value, key=f"q_{field.unique_id}")
+                            field.value = st.text_area(
+                                "Answer",
+                                value=field.value,
+                                key=f"q_{field.unique_id}"
+                            )
                         
                         if st.button("Remove", key=f"qr_{field.unique_id}"):
                             field.in_questionnaire = False
                             st.rerun()
                         
                         st.markdown("---")
+            
+            if not has_questions:
+                st.info("No questionnaire fields. Use 'Quest' button in Map Fields tab.")
         else:
-            st.info("No questionnaire fields")
+            st.info("Please upload a form first")
     
     with tab4:
-        st.markdown("### AI Validation Agent")
-        
-        if st.session_state.form and st.session_state.extractor.client:
-            if st.button("🤖 Run AI Validation", type="primary"):
-                with st.spinner("Validating form with AI..."):
-                    validator = st.session_state.extractor.validator
-                    validation_result = validator.validate_form_with_ai(st.session_state.form)
-                    
-                    # Display results
-                    if "completeness_score" in validation_result:
-                        score = validation_result["completeness_score"]
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("Completeness Score", f"{score}%")
-                        with col2:
-                            status = validation_result.get("overall_status", "unknown")
-                            if status == "complete":
-                                st.success(f"Status: {status.upper()}")
-                            elif status == "incomplete":
-                                st.warning(f"Status: {status.upper()}")
-                            else:
-                                st.info(f"Status: {status.upper()}")
-                        
-                        # Critical missing fields
-                        if validation_result.get("critical_missing"):
-                            st.markdown("### ⚠️ Critical Missing Fields")
-                            for item in validation_result["critical_missing"]:
-                                st.error(f"• {item}")
-                        
-                        # Warnings
-                        if validation_result.get("warnings"):
-                            st.markdown("### ⚡ Warnings")
-                            for warning in validation_result["warnings"]:
-                                st.warning(f"• {warning}")
-                        
-                        # Suggestions
-                        if validation_result.get("suggestions"):
-                            st.markdown("### 💡 Suggestions")
-                            for suggestion in validation_result["suggestions"]:
-                                st.info(f"• {suggestion}")
-                    else:
-                        st.error("Validation failed")
-        else:
-            st.info("AI validation requires OpenAI API key and form data")
-    
-    with tab5:
         st.markdown("### Export Data")
         
         if st.session_state.form:
             form = st.session_state.form
             
-            # Export options
+            # Build export data
             export_data = {
                 "form_info": {
                     "form_number": form.form_number,
                     "form_title": form.form_title,
-                    "edition_date": form.edition_date
+                    "edition_date": form.edition_date,
+                    "total_pages": form.total_pages
                 },
-                "fields": []
+                "parts": [],
+                "mapped_fields": [],
+                "questionnaire_fields": []
             }
             
             for part in form.parts.values():
+                part_data = {
+                    "number": part.number,
+                    "title": part.title,
+                    "fields": []
+                }
+                
                 for field in part.fields:
                     if not field.is_parent:
                         field_data = {
                             "part": part.number,
                             "number": field.item_number,
                             "label": field.label,
-                            "value": field.value,
                             "type": field.field_type,
-                            "options": [{"value": opt.value, "context": opt.context} for opt in field.options] if field.options else None
+                            "value": field.value
                         }
+                        
+                        if field.options:
+                            field_data["options"] = field.options
+                            field_data["option_contexts"] = field.option_contexts
                         
                         if field.is_mapped:
                             field_data["mapping"] = f"{field.db_object}.{field.db_path}"
+                            export_data["mapped_fields"].append(field_data)
                         
-                        export_data["fields"].append(field_data)
+                        if field.in_questionnaire:
+                            export_data["questionnaire_fields"].append(field_data)
+                        
+                        part_data["fields"].append(field_data)
+                
+                export_data["parts"].append(part_data)
             
+            # Export button
             json_str = json.dumps(export_data, indent=2)
             
             st.download_button(
-                "📥 Download Complete Export",
+                "📥 Download Complete Export (JSON)",
                 json_str,
-                f"{form.form_number}_complete.json",
+                f"{form.form_number}_export.json",
                 "application/json",
-                use_container_width=True,
-                type="primary"
+                use_container_width=True
             )
+            
+            # Show summary
+            st.markdown("### Export Summary")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Fields", sum(len(p["fields"]) for p in export_data["parts"]))
+            with col2:
+                st.metric("Mapped Fields", len(export_data["mapped_fields"]))
+            with col3:
+                st.metric("Questionnaire", len(export_data["questionnaire_fields"]))
+        else:
+            st.info("Please upload a form first")
 
 if __name__ == "__main__":
     main()
