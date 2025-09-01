@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-UNIVERSAL USCIS FORM READER - ZERO HARDCODING
-==============================================
-Works with ANY USCIS form - no hardcoded patterns
+UNIVERSAL USCIS FORM READER - WITH COMPLETE DATABASE SCHEMA
+============================================================
+Works with ANY USCIS form - Complete database paths included
 """
 
 import streamlit as st
@@ -67,9 +67,9 @@ st.markdown("""
         border-left: 4px solid #ff9800;
         background: #fff8e1;
     }
-    .field-repeating {
-        border-left: 4px solid #00bcd4;
-        background: #e0f7fa;
+    .field-manual {
+        border-left: 4px solid #9c27b0;
+        background: #f3e5f5;
     }
     .stats-box {
         background: white;
@@ -85,7 +85,7 @@ st.markdown("""
 
 @dataclass
 class FormField:
-    """Universal field structure - no assumptions about form type"""
+    """Universal field structure"""
     item_number: str
     label: str
     field_type: str = "text"
@@ -94,11 +94,9 @@ class FormField:
     page_number: int = 1
     parent_item: str = ""
     is_subfield: bool = False
-    is_repeating: bool = False
-    repeat_pattern: str = ""  # Pattern detected (e.g., every 7 fields)
-    repeat_index: int = 0
     is_mapped: bool = False
     in_questionnaire: bool = False
+    is_manual: bool = False
     db_object: str = ""
     db_path: str = ""
     unique_id: str = ""
@@ -125,39 +123,248 @@ class USCISForm:
     total_pages: int = 0
     parts: Dict[int, FormPart] = field(default_factory=dict)
     raw_text: str = ""
-    detected_patterns: List[str] = field(default_factory=list)
 
-# ===== GENERIC DATABASE SCHEMA =====
+# ===== COMPLETE DATABASE SCHEMA =====
 
 DATABASE_SCHEMA = {
-    "applicant": {
-        "label": "👤 Applicant/Beneficiary",
-        "common_patterns": ["name", "birth", "address", "contact"],
-        "paths": []  # Will be dynamically generated
+    "beneficiary": {
+        "label": "👤 Beneficiary/Applicant Information",
+        "paths": [
+            "beneficiaryLastName",
+            "beneficiaryFirstName", 
+            "beneficiaryMiddleName",
+            "beneficiaryDateOfBirth",
+            "beneficiarySsn",
+            "alienNumber",
+            "uscisOnlineAccount",
+            "beneficiaryCountryOfBirth",
+            "beneficiaryCitizenOfCountry",
+            "beneficiaryCellNumber",
+            "beneficiaryWorkNumber",
+            "beneficiaryPrimaryEmailAddress",
+            "homeAddress.addressStreet",
+            "homeAddress.addressCity",
+            "homeAddress.addressState",
+            "homeAddress.addressZip",
+            "homeAddress.addressCountry",
+            "physicalAddress.addressStreet",
+            "physicalAddress.addressCity",
+            "physicalAddress.addressState",
+            "physicalAddress.addressZip",
+            "currentNonimmigrantStatus",
+            "statusExpirationDate",
+            "lastArrivalDate",
+            "passportNumber",
+            "passportCountry",
+            "passportExpirationDate",
+            "i94Number",
+            "travelDocumentNumber",
+            "sevisId",
+            "dsNumber"
+        ]
+    },
+    "petitioner": {
+        "label": "🏢 Petitioner/Employer Information",
+        "paths": [
+            "petitionerName",
+            "petitionerLastName",
+            "petitionerFirstName",
+            "petitionerMiddleName",
+            "companyName",
+            "companyTaxId",
+            "companyWebsite",
+            "signatoryFirstName",
+            "signatoryLastName",
+            "signatoryMiddleName",
+            "signatoryWorkPhone",
+            "signatoryMobilePhone",
+            "signatoryEmailAddress",
+            "signatoryJobTitle",
+            "companyAddress.street",
+            "companyAddress.city",
+            "companyAddress.state",
+            "companyAddress.zip",
+            "companyAddress.country",
+            "yearEstablished",
+            "numberOfEmployees",
+            "grossAnnualIncome",
+            "netAnnualIncome",
+            "nafcsCode",
+            "businessType",
+            "irsNumber",
+            "immigrationStatus",
+            "certificateNumber"
+        ]
     },
     "dependent": {
-        "label": "👥 Dependent/Family",
-        "common_patterns": ["dependent", "spouse", "child", "family"],
-        "paths": []
-    },
-    "employer": {
-        "label": "🏢 Employer/Organization",
-        "common_patterns": ["company", "organization", "employer"],
-        "paths": []
+        "label": "👥 Dependent/Family Member Information",
+        "paths": [
+            "dependent[].lastName",
+            "dependent[].firstName",
+            "dependent[].middleName",
+            "dependent[].dateOfBirth",
+            "dependent[].countryOfBirth",
+            "dependent[].countryOfCitizenship",
+            "dependent[].alienNumber",
+            "dependent[].i94Number",
+            "dependent[].passportNumber",
+            "dependent[].passportCountry",
+            "dependent[].passportExpiration",
+            "dependent[].relationship",
+            "dependent[].daytimePhone",
+            "dependent[].mobilePhone",
+            "dependent[].emailAddress",
+            "dependent[].address.street",
+            "dependent[].address.city",
+            "dependent[].address.state",
+            "dependent[].address.zip",
+            "dependent[].currentStatus",
+            "dependent[].statusExpiration",
+            "spouseName",
+            "spouseDateOfBirth",
+            "childrenNames[]",
+            "childrenDatesOfBirth[]"
+        ]
     },
     "attorney": {
-        "label": "⚖️ Attorney/Representative",
-        "common_patterns": ["attorney", "representative", "preparer"],
-        "paths": []
+        "label": "⚖️ Attorney/Representative Information",
+        "paths": [
+            "attorneyLastName",
+            "attorneyFirstName",
+            "attorneyMiddleName",
+            "attorneyWorkPhone",
+            "attorneyMobilePhone",
+            "attorneyEmailAddress",
+            "attorneyStateBarNumber",
+            "attorneyUscisOnlineAccount",
+            "attorneyAddress.street",
+            "attorneyAddress.city",
+            "attorneyAddress.state",
+            "attorneyAddress.zip",
+            "attorneyAddress.country",
+            "lawFirmName",
+            "lawFirmFein",
+            "preparerLastName",
+            "preparerFirstName",
+            "preparerOrganization",
+            "preparerDaytimePhone",
+            "preparerEmailAddress",
+            "interpreterLastName",
+            "interpreterFirstName",
+            "interpreterOrganization",
+            "interpreterDaytimePhone",
+            "interpreterLanguage"
+        ]
     },
     "application": {
-        "label": "📋 Application Details",
-        "common_patterns": ["application", "petition", "request"],
-        "paths": []
+        "label": "📋 Application/Case Information",
+        "paths": [
+            "caseNumber",
+            "receiptNumber",
+            "priorityDate",
+            "filingDate",
+            "approvalDate",
+            "applicationType",
+            "requestedStatus",
+            "requestedClassification",
+            "requestedDuration",
+            "changeEffectiveDate",
+            "previousApplicationNumber",
+            "previousReceiptNumber",
+            "consulateLocation",
+            "portOfEntry",
+            "reasonForRequest",
+            "basisForEligibility",
+            "requestedAction",
+            "processingLocation",
+            "schoolName",
+            "programStartDate",
+            "programEndDate",
+            "degreeType",
+            "fieldOfStudy",
+            "jobTitle",
+            "socCode",
+            "wageRate",
+            "wagePeriod"
+        ]
+    },
+    "travel": {
+        "label": "✈️ Travel Information",
+        "paths": [
+            "lastEntryDate",
+            "lastEntryPlace",
+            "lastEntryStatus",
+            "i94ArrivalNumber",
+            "i94DepartureNumber",
+            "travelDocumentNumber",
+            "travelDocumentCountry",
+            "travelDocumentExpiration",
+            "intendedDepartureDate",
+            "intendedReturnDate",
+            "tripsAbroad[].departureDate",
+            "tripsAbroad[].returnDate",
+            "tripsAbroad[].destination",
+            "tripsAbroad[].purpose",
+            "visaNumber",
+            "visaIssuanceDate",
+            "visaExpirationDate",
+            "consulateOfIssuance"
+        ]
+    },
+    "biographic": {
+        "label": "📝 Biographic Information",
+        "paths": [
+            "ethnicity",
+            "race",
+            "height.feet",
+            "height.inches",
+            "weight.pounds",
+            "eyeColor",
+            "hairColor",
+            "gender",
+            "maritalStatus",
+            "previousMarriages",
+            "dateOfMarriage",
+            "placeOfMarriage",
+            "spouseImmigrationStatus",
+            "motherName",
+            "fatherName",
+            "mothersDateOfBirth",
+            "fathersDateOfBirth",
+            "countryOfNationality",
+            "countryOfLastResidence",
+            "nationalIdNumber",
+            "taxIdNumber"
+        ]
+    },
+    "employment": {
+        "label": "💼 Employment Information",
+        "paths": [
+            "currentEmployer",
+            "employerAddress",
+            "employerPhone",
+            "jobTitle",
+            "employmentStartDate",
+            "employmentEndDate",
+            "previousEmployer[].name",
+            "previousEmployer[].address",
+            "previousEmployer[].jobTitle",
+            "previousEmployer[].startDate",
+            "previousEmployer[].endDate",
+            "occupation",
+            "yearsInOccupation",
+            "qualifications",
+            "education.degree",
+            "education.fieldOfStudy",
+            "education.institution",
+            "education.dateCompleted",
+            "licenseNumber",
+            "licenseState",
+            "licenseExpiration"
+        ]
     },
     "custom": {
-        "label": "✏️ Custom Mapping",
-        "common_patterns": [],
+        "label": "✏️ Manual/Custom Fields",
         "paths": []
     }
 }
@@ -193,110 +400,34 @@ def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
         st.error(f"PDF error: {e}")
         return "", {}, 0
 
-# ===== INTELLIGENT PATTERN DETECTOR =====
+# ===== FIELD TYPE DETECTOR =====
 
-class PatternDetector:
-    """Detects patterns in forms without hardcoding"""
+def detect_field_type(label: str) -> str:
+    """Detect field type from label"""
+    label_lower = label.lower()
     
-    @staticmethod
-    def detect_repeating_patterns(fields: List[FormField]) -> Dict[str, Any]:
-        """Detect repeating field patterns dynamically"""
-        patterns = {
-            "repeating_groups": [],
-            "field_sequences": []
-        }
-        
-        # Look for repeating label patterns
-        label_sequences = {}
-        for i, field in enumerate(fields):
-            # Clean label for pattern matching
-            clean_label = re.sub(r'\d+', 'N', field.label.lower())
-            
-            if clean_label not in label_sequences:
-                label_sequences[clean_label] = []
-            label_sequences[clean_label].append(i)
-        
-        # Find sequences that repeat
-        for label, positions in label_sequences.items():
-            if len(positions) > 1:
-                # Check if positions follow a pattern
-                if len(positions) >= 2:
-                    intervals = [positions[i+1] - positions[i] for i in range(len(positions)-1)]
-                    
-                    # If intervals are consistent, we have a pattern
-                    if intervals and all(abs(i - intervals[0]) <= 2 for i in intervals):
-                        patterns["repeating_groups"].append({
-                            "label_pattern": label,
-                            "positions": positions,
-                            "interval": intervals[0] if intervals else 0
-                        })
-        
-        return patterns
+    if any(word in label_lower for word in ["date", "dob", "birth", "expir", "issued"]):
+        return "date"
+    elif any(word in label_lower for word in ["check", "select", "mark", "yes/no", "indicate"]):
+        return "checkbox"
+    elif any(word in label_lower for word in ["number", "ssn", "ein", "a-number", "receipt"]):
+        return "number"
+    elif any(word in label_lower for word in ["email", "e-mail"]):
+        return "email"
+    elif any(word in label_lower for word in ["phone", "telephone", "mobile", "cell"]):
+        return "phone"
+    elif any(word in label_lower for word in ["address", "street", "city", "state", "zip"]):
+        return "address"
     
-    @staticmethod
-    def detect_field_types(label: str, text_context: str = "") -> str:
-        """Intelligently detect field type from label and context"""
-        label_lower = label.lower()
-        
-        # Date patterns
-        if any(word in label_lower for word in ["date", "dob", "birth", "expir", "issued"]):
-            return "date"
-        
-        # Checkbox patterns
-        if any(word in label_lower for word in ["check", "select", "mark", "yes/no", "indicate"]):
-            return "checkbox"
-        
-        # Number patterns
-        if any(word in label_lower for word in ["number", "ssn", "ein", "a-number", "receipt"]):
-            return "number"
-        
-        # Email patterns
-        if any(word in label_lower for word in ["email", "e-mail"]):
-            return "email"
-        
-        # Phone patterns
-        if any(word in label_lower for word in ["phone", "telephone", "mobile", "cell"]):
-            return "phone"
-        
-        # Address patterns
-        if any(word in label_lower for word in ["address", "street", "city", "state", "zip"]):
-            return "address"
-        
-        return "text"
-    
-    @staticmethod
-    def detect_subfields(fields: List[Dict]) -> List[Dict]:
-        """Detect parent-child relationships in fields"""
-        enhanced_fields = []
-        current_parent = None
-        
-        for field in fields:
-            item_num = field.get("item_number", "")
-            
-            # Pattern: N.a, N.b, N.c are subfields of N
-            if re.match(r'^\d+\.[a-z]$', item_num):
-                parent_num = item_num.split('.')[0]
-                field["parent_item"] = parent_num
-                field["is_subfield"] = True
-            
-            # Pattern: N-N (range) or N.N.N (nested)
-            elif '.' in item_num and len(item_num.split('.')) > 2:
-                parts = item_num.split('.')
-                field["parent_item"] = '.'.join(parts[:-1])
-                field["is_subfield"] = True
-            
-            enhanced_fields.append(field)
-        
-        return enhanced_fields
+    return "text"
 
 # ===== UNIVERSAL FORM EXTRACTOR =====
 
 class UniversalFormExtractor:
-    """Extracts ANY USCIS form without hardcoding"""
+    """Extracts ANY USCIS form"""
     
     def __init__(self):
         self.setup_openai()
-        self.pattern_detector = PatternDetector()
     
     def setup_openai(self):
         """Setup OpenAI client"""
@@ -309,7 +440,7 @@ class UniversalFormExtractor:
             st.warning("Add OPENAI_API_KEY to secrets")
     
     def extract_form(self, full_text: str, page_texts: Dict[int, str], total_pages: int) -> USCISForm:
-        """Extract any form dynamically"""
+        """Extract any form structure"""
         
         # Identify form
         form_info = self._identify_form(full_text[:3000])
@@ -322,7 +453,7 @@ class UniversalFormExtractor:
             raw_text=full_text
         )
         
-        # Extract parts dynamically
+        # Extract parts
         parts_data = self._extract_parts(full_text)
         
         # Extract fields for each part
@@ -334,50 +465,39 @@ class UniversalFormExtractor:
                 page_end=part_data.get("page_end", 1)
             )
             
-            # Extract fields without any assumptions
-            fields_data = self._extract_fields_generic(full_text, part_data)
-            
-            # Enhance with pattern detection
-            enhanced_fields = self.pattern_detector.detect_subfields(fields_data)
+            # Extract fields
+            fields_data = self._extract_fields(full_text, part_data)
             
             # Convert to FormField objects
             fields = []
-            for field_data in enhanced_fields:
+            for field_data in fields_data:
+                # Detect parent-child relationships
+                item_num = field_data.get("item_number", "")
+                parent_item = ""
+                is_subfield = False
+                
+                # Check if it's a subfield (e.g., 1.a, 1.b)
+                if re.match(r'^\d+\.[a-z]$', item_num):
+                    parent_item = item_num.split('.')[0]
+                    is_subfield = True
+                
                 field = FormField(
-                    item_number=field_data.get("item_number", ""),
+                    item_number=item_num,
                     label=field_data.get("label", ""),
-                    field_type=self.pattern_detector.detect_field_types(
-                        field_data.get("label", "")
-                    ),
+                    field_type=detect_field_type(field_data.get("label", "")),
                     part_number=part.number,
-                    parent_item=field_data.get("parent_item", ""),
-                    is_subfield=field_data.get("is_subfield", False)
+                    parent_item=parent_item,
+                    is_subfield=is_subfield
                 )
                 fields.append(field)
-            
-            # Detect repeating patterns
-            patterns = self.pattern_detector.detect_repeating_patterns(fields)
-            if patterns["repeating_groups"]:
-                form.detected_patterns.append(f"Part {part.number}: Repeating patterns detected")
-                
-                # Mark repeating fields
-                for pattern in patterns["repeating_groups"]:
-                    for pos in pattern["positions"]:
-                        if pos < len(fields):
-                            fields[pos].is_repeating = True
-                            fields[pos].repeat_pattern = pattern["label_pattern"]
-                            fields[pos].repeat_index = pattern["positions"].index(pos) + 1
             
             part.fields = fields
             form.parts[part.number] = part
         
-        # Generate dynamic database paths based on detected fields
-        self._generate_dynamic_paths(form)
-        
         return form
     
     def _identify_form(self, text: str) -> Dict:
-        """Identify form without assumptions"""
+        """Identify form type"""
         
         if not self.client:
             # Fallback pattern matching
@@ -391,13 +511,13 @@ class UniversalFormExtractor:
             }
         
         prompt = """
-        Identify the form number, title, and edition date from this text.
+        Identify the form from this text.
         
         Return ONLY JSON:
         {
-            "form_number": "form number here",
-            "form_title": "full form title",
-            "edition_date": "edition date if found"
+            "form_number": "form number",
+            "form_title": "form title",
+            "edition_date": "edition date"
         }
         
         Text: """ + text
@@ -417,14 +537,14 @@ class UniversalFormExtractor:
             return json.loads(content)
             
         except Exception as e:
-            st.error(f"Form identification error: {e}")
+            st.error(f"Identification error: {e}")
             return {"form_number": "Unknown", "form_title": "USCIS Form", "edition_date": ""}
     
     def _extract_parts(self, text: str) -> List[Dict]:
-        """Extract parts without knowing form structure"""
+        """Extract parts from form"""
         
         if not self.client:
-            # Fallback to regex pattern matching
+            # Fallback
             parts = []
             part_matches = re.finditer(r'Part\s+(\d+)[.\s]+([^\n]+)', text)
             
@@ -439,13 +559,13 @@ class UniversalFormExtractor:
             return parts if parts else [{"number": 1, "title": "Main Section", "page_start": 1, "page_end": 1}]
         
         prompt = """
-        Extract ALL parts/sections from this form.
+        Extract ALL parts from this form.
         
-        Return ONLY a JSON array of parts:
+        Return ONLY a JSON array:
         [
             {
                 "number": 1,
-                "title": "part title here",
+                "title": "part title",
                 "page_start": 1,
                 "page_end": 2
             }
@@ -472,38 +592,33 @@ class UniversalFormExtractor:
             st.error(f"Parts extraction error: {e}")
             return [{"number": 1, "title": "Main Section", "page_start": 1, "page_end": 1}]
     
-    def _extract_fields_generic(self, text: str, part_data: Dict) -> List[Dict]:
-        """Extract fields without any form-specific knowledge"""
+    def _extract_fields(self, text: str, part_data: Dict) -> List[Dict]:
+        """Extract fields from part"""
         
         part_num = part_data["number"]
         part_title = part_data["title"]
         
         if not self.client:
-            # Fallback to pattern matching
+            # Fallback
             fields = []
-            
-            # Look for numbered items
             field_matches = re.finditer(r'(\d+\.?[a-z]?\.?)\s+([^\n]+)', text[:5000])
             
             for match in field_matches:
                 fields.append({
                     "item_number": match.group(1),
-                    "label": match.group(2).strip()[:100]  # Limit label length
+                    "label": match.group(2).strip()[:100]
                 })
             
-            return fields[:50]  # Limit to 50 fields for performance
+            return fields[:50]
         
         prompt = f"""
         Extract ALL fields from Part {part_num}: {part_title}.
         
-        Look for ANY numbered or lettered items, questions, or input fields.
-        Include everything that looks like a form field.
-        
         Return ONLY a JSON array:
         [
             {{
-                "item_number": "field number here",
-                "label": "field label here"
+                "item_number": "field number",
+                "label": "field label"
             }}
         ]
         
@@ -527,40 +642,6 @@ class UniversalFormExtractor:
         except Exception as e:
             st.error(f"Field extraction error: {e}")
             return []
-    
-    def _generate_dynamic_paths(self, form: USCISForm):
-        """Generate database paths based on detected fields"""
-        
-        # Analyze all fields to suggest paths
-        all_labels = []
-        for part in form.parts.values():
-            for field in part.fields:
-                all_labels.append(field.label.lower())
-        
-        # Generate paths for each database object based on field labels
-        for obj_key, obj_data in DATABASE_SCHEMA.items():
-            if obj_key == "custom":
-                continue
-            
-            paths = []
-            
-            # Generate paths based on common patterns
-            for pattern in obj_data["common_patterns"]:
-                for label in all_labels:
-                    if pattern in label:
-                        # Create a suggested path
-                        clean_label = re.sub(r'[^\w\s]', '', label)
-                        clean_label = clean_label.replace(' ', '_')[:30]
-                        if clean_label and clean_label not in paths:
-                            paths.append(clean_label)
-            
-            # Add some generic paths
-            if obj_key == "applicant":
-                paths.extend(["name", "address", "phone", "email", "date_of_birth"])
-            elif obj_key == "dependent":
-                paths.extend(["dependent_name", "relationship", "date_of_birth"])
-            
-            obj_data["paths"] = paths[:20]  # Limit to 20 paths
 
 # ===== UI COMPONENTS =====
 
@@ -570,15 +651,15 @@ def display_field(field: FormField, key_prefix: str):
     unique_key = f"{key_prefix}_{field.unique_id}"
     
     # Determine style
-    if field.is_repeating:
-        card_class = "field-repeating"
-        status = f"🔁 Repeating"
+    if field.is_manual:
+        card_class = "field-manual"
+        status = "✏️ Manual"
     elif field.in_questionnaire:
         card_class = "field-questionnaire"
         status = "📝 Quest"
     elif field.is_mapped:
         card_class = "field-mapped"
-        status = f"✅ Mapped"
+        status = f"✅ {field.db_object}"
     else:
         card_class = "field-unmapped"
         status = "❓ Unmapped"
@@ -593,12 +674,9 @@ def display_field(field: FormField, key_prefix: str):
             st.caption(f"Subfield of {field.parent_item}")
         else:
             st.markdown(f"**{field.item_number}. {field.label}**")
-        
-        if field.is_repeating:
-            st.caption(f"Pattern: {field.repeat_pattern} | Instance #{field.repeat_index}")
     
     with col2:
-        # Value input
+        # Value input based on type
         if field.field_type == "date":
             date_val = st.date_input("", key=f"{unique_key}_date", label_visibility="collapsed")
             field.value = str(date_val) if date_val else ""
@@ -625,6 +703,7 @@ def display_field(field: FormField, key_prefix: str):
                 if st.button("Clear", key=f"{unique_key}_clear"):
                     field.is_mapped = False
                     field.in_questionnaire = False
+                    field.is_manual = False
                     field.db_object = ""
                     field.db_path = ""
                     st.rerun()
@@ -636,26 +715,24 @@ def display_field(field: FormField, key_prefix: str):
         show_mapping(field, unique_key)
 
 def show_mapping(field: FormField, unique_key: str):
-    """Mapping interface"""
+    """Mapping interface with full database schema"""
     
     st.markdown("---")
+    st.markdown("### 🔗 Map Field to Database")
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        # Suggest best database object based on field label
-        suggested_obj = suggest_database_object(field.label)
-        
         db_options = list(DATABASE_SCHEMA.keys())
         db_labels = [DATABASE_SCHEMA[k]["label"] for k in db_options]
-        
-        default_idx = db_options.index(suggested_obj) if suggested_obj in db_options else 0
         
         selected_idx = st.selectbox(
             "Database Object",
             range(len(db_options)),
             format_func=lambda x: db_labels[x],
             key=f"{unique_key}_dbobj",
-            index=default_idx
+            index=None,
+            placeholder="Select database object..."
         )
         
         selected_obj = db_options[selected_idx] if selected_idx is not None else None
@@ -663,25 +740,32 @@ def show_mapping(field: FormField, unique_key: str):
     with col2:
         if selected_obj:
             if selected_obj == "custom":
-                path = st.text_input("Custom path", key=f"{unique_key}_custom")
+                path = st.text_input("Custom path", key=f"{unique_key}_custom", placeholder="Enter custom path")
             else:
                 paths = DATABASE_SCHEMA[selected_obj]["paths"]
-                if not paths:
-                    paths = ["field1", "field2", "custom"]
-                
-                path = st.selectbox("Path", [""] + paths + ["[custom]"], key=f"{unique_key}_path")
+                path = st.selectbox(
+                    "Field Path",
+                    [""] + paths + ["[custom]"],
+                    key=f"{unique_key}_path",
+                    placeholder="Select field path..."
+                )
                 
                 if path == "[custom]":
-                    path = st.text_input("Enter path", key=f"{unique_key}_custpath")
+                    path = st.text_input("Enter custom path", key=f"{unique_key}_custpath")
+    
+    if selected_obj and path:
+        st.info(f"📍 Mapping: {field.item_number} → {selected_obj}.{path}")
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Apply", key=f"{unique_key}_apply", type="primary"):
+        if st.button("✅ Apply", key=f"{unique_key}_apply", type="primary"):
             if selected_obj and path:
                 field.is_mapped = True
+                field.is_manual = (selected_obj == "custom")
                 field.db_object = selected_obj
                 field.db_path = path
                 del st.session_state[f"mapping_{field.unique_id}"]
+                st.success("Mapped successfully!")
                 st.rerun()
     
     with col2:
@@ -691,27 +775,12 @@ def show_mapping(field: FormField, unique_key: str):
     
     st.markdown("---")
 
-def suggest_database_object(label: str) -> str:
-    """Suggest database object based on label"""
-    label_lower = label.lower()
-    
-    if any(word in label_lower for word in ["dependent", "spouse", "child", "family"]):
-        return "dependent"
-    elif any(word in label_lower for word in ["company", "employer", "organization"]):
-        return "employer"
-    elif any(word in label_lower for word in ["attorney", "representative", "preparer"]):
-        return "attorney"
-    elif any(word in label_lower for word in ["application", "petition", "request", "receipt"]):
-        return "application"
-    else:
-        return "applicant"
-
 # ===== MAIN APPLICATION =====
 
 def main():
     st.markdown('<div class="main-header">', unsafe_allow_html=True)
     st.title("📄 Universal USCIS Form Reader")
-    st.markdown("Works with ANY USCIS form - No hardcoding, fully dynamic")
+    st.markdown("Works with ANY USCIS form - Complete database schema included")
     st.markdown('</div>', unsafe_allow_html=True)
     
     # Initialize
@@ -722,22 +791,19 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.markdown("## 📊 Dynamic Database Schema")
-        st.info("Schema adapts to your form automatically")
+        st.markdown("## 📊 Database Schema")
         
         for key, info in DATABASE_SCHEMA.items():
             with st.expander(info["label"]):
                 if key == "custom":
-                    st.info("Enter any custom path")
+                    st.info("Enter any custom path for fields not covered by other objects")
                 else:
-                    paths = info.get("paths", [])
-                    if paths:
-                        for path in paths[:5]:
-                            st.code(path)
-                        if len(paths) > 5:
-                            st.caption(f"... +{len(paths)-5} more")
-                    else:
-                        st.info("Paths will be generated after extraction")
+                    paths = info["paths"]
+                    st.info(f"{len(paths)} predefined paths available")
+                    for path in paths[:8]:
+                        st.code(path)
+                    if len(paths) > 8:
+                        st.caption(f"... and {len(paths)-8} more paths")
         
         st.markdown("---")
         
@@ -758,32 +824,33 @@ def main():
             st.metric("Parts", len(form.parts))
             
             total_fields = sum(len(p.fields) for p in form.parts.values())
-            st.metric("Total Fields", total_fields)
+            mapped = sum(1 for p in form.parts.values() for f in p.fields if f.is_mapped)
+            quest = sum(1 for p in form.parts.values() for f in p.fields if f.in_questionnaire)
             
-            if form.detected_patterns:
-                st.markdown("**Detected Patterns:**")
-                for pattern in form.detected_patterns:
-                    st.caption(f"• {pattern}")
+            st.metric("Total Fields", total_fields)
+            st.metric("Mapped", mapped)
+            st.metric("Questionnaire", quest)
+            st.metric("Unmapped", total_fields - mapped - quest)
             
             st.markdown('</div>', unsafe_allow_html=True)
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🔗 Map", "📝 Questionnaire", "💾 Export"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🔗 Map Fields", "📝 Questionnaire", "💾 Export"])
     
     with tab1:
         st.markdown("### Upload ANY USCIS Form")
-        st.info("This reader automatically adapts to any USCIS form structure")
+        st.info("This reader works with all USCIS forms without any hardcoding")
         
-        uploaded_file = st.file_uploader("Choose PDF", type=['pdf'])
+        uploaded_file = st.file_uploader("Choose PDF file", type=['pdf'])
         
         if uploaded_file:
             if st.button("🚀 Extract Form", type="primary", use_container_width=True):
-                with st.spinner("Analyzing form structure..."):
+                with st.spinner("Extracting form structure..."):
                     # Extract PDF
                     full_text, page_texts, total_pages = extract_pdf_text(uploaded_file)
                     
                     if full_text:
-                        # Extract form dynamically
+                        # Extract form
                         form = st.session_state.extractor.extract_form(
                             full_text, page_texts, total_pages
                         )
@@ -791,9 +858,9 @@ def main():
                         st.session_state.form = form
                         
                         # Show results
-                        st.success(f"✅ Extracted: {form.form_number}")
+                        st.success(f"✅ Successfully extracted: {form.form_number}")
                         
-                        # Show what was found
+                        # Statistics
                         col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("Parts Found", len(form.parts))
@@ -801,16 +868,13 @@ def main():
                             total_fields = sum(len(p.fields) for p in form.parts.values())
                             st.metric("Fields Found", total_fields)
                         with col3:
-                            repeating = sum(1 for p in form.parts.values() for f in p.fields if f.is_repeating)
-                            st.metric("Repeating Fields", repeating)
-                        
-                        if form.detected_patterns:
-                            st.info(f"🔍 Detected patterns: {', '.join(form.detected_patterns)}")
+                            st.metric("Pages", total_pages)
                     else:
                         st.error("Could not extract text from PDF")
     
     with tab2:
         st.markdown("### Map Fields to Database")
+        st.info("Select the appropriate database object and path for each field")
         
         if st.session_state.form:
             form = st.session_state.form
@@ -818,17 +882,20 @@ def main():
             for part_num, part in form.parts.items():
                 with st.expander(f"Part {part_num}: {part.title}", expanded=(part_num == 1)):
                     
-                    # Stats
-                    mapped = sum(1 for f in part.fields if f.is_mapped)
-                    quest = sum(1 for f in part.fields if f.in_questionnaire)
+                    # Part statistics
+                    part_fields = len(part.fields)
+                    part_mapped = sum(1 for f in part.fields if f.is_mapped)
+                    part_quest = sum(1 for f in part.fields if f.in_questionnaire)
                     
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Fields", len(part.fields))
+                        st.metric("Fields", part_fields)
                     with col2:
-                        st.metric("Mapped", mapped)
+                        st.metric("Mapped", part_mapped)
                     with col3:
-                        st.metric("Questionnaire", quest)
+                        st.metric("Quest", part_quest)
+                    with col4:
+                        st.metric("Unmapped", part_fields - part_mapped - part_quest)
                     
                     st.markdown("---")
                     
@@ -836,10 +903,11 @@ def main():
                     for field in part.fields:
                         display_field(field, f"p{part_num}")
         else:
-            st.info("Upload a form first")
+            st.info("Upload a form first to begin mapping")
     
     with tab3:
         st.markdown("### Questionnaire Fields")
+        st.info("Fields that need manual completion")
         
         if st.session_state.form:
             quest_fields = []
@@ -849,15 +917,22 @@ def main():
             if quest_fields:
                 for field in quest_fields:
                     st.markdown(f"**{field.item_number}. {field.label}**")
-                    field.value = st.text_area("", value=field.value, key=f"q_{field.unique_id}", height=100)
+                    st.caption(f"From Part {field.part_number}")
                     
-                    if st.button("Remove", key=f"qr_{field.unique_id}"):
+                    field.value = st.text_area(
+                        "Answer", 
+                        value=field.value, 
+                        key=f"q_{field.unique_id}", 
+                        height=100
+                    )
+                    
+                    if st.button("Remove from questionnaire", key=f"qr_{field.unique_id}"):
                         field.in_questionnaire = False
                         st.rerun()
                     
                     st.markdown("---")
             else:
-                st.info("No questionnaire fields")
+                st.info("No questionnaire fields. Use 'Quest' button to add fields here.")
         else:
             st.info("Upload a form first")
     
@@ -874,9 +949,12 @@ def main():
                     "form_title": form.form_title,
                     "edition_date": form.edition_date,
                     "total_pages": form.total_pages,
-                    "detected_patterns": form.detected_patterns
+                    "export_date": datetime.now().isoformat()
                 },
+                "database_objects": list(DATABASE_SCHEMA.keys()),
                 "parts": [],
+                "mapped_fields": [],
+                "questionnaire_fields": [],
                 "all_fields": []
             }
             
@@ -893,30 +971,46 @@ def main():
                         "label": field.label,
                         "value": field.value,
                         "type": field.field_type,
-                        "is_repeating": field.is_repeating
+                        "part": part.number,
+                        "is_subfield": field.is_subfield,
+                        "parent_item": field.parent_item
                     }
                     
                     if field.is_mapped:
-                        field_data["mapping"] = f"{field.db_object}.{field.db_path}"
+                        field_data["database_object"] = field.db_object
+                        field_data["database_path"] = field.db_path
+                        field_data["is_manual"] = field.is_manual
+                        export_data["mapped_fields"].append(field_data)
+                    elif field.in_questionnaire:
+                        export_data["questionnaire_fields"].append(field_data)
                     
                     part_data["fields"].append(field_data)
                     export_data["all_fields"].append(field_data)
                 
                 export_data["parts"].append(part_data)
             
+            # Summary
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Fields", len(export_data["all_fields"]))
+            with col2:
+                st.metric("Mapped", len(export_data["mapped_fields"]))
+            with col3:
+                st.metric("Questionnaire", len(export_data["questionnaire_fields"]))
+            
             # Download
             json_str = json.dumps(export_data, indent=2)
             
             st.download_button(
-                "📥 Download JSON",
+                "📥 Download Complete JSON",
                 json_str,
-                f"{form.form_number}_export.json",
+                f"{form.form_number}_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 "application/json",
                 use_container_width=True
             )
             
             # Preview
-            with st.expander("Preview"):
+            with st.expander("Preview Export"):
                 st.json(export_data)
         else:
             st.info("No data to export")
