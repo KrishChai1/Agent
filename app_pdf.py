@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 import uuid
+import traceback
 
 # Page config
 st.set_page_config(
@@ -21,20 +22,21 @@ st.set_page_config(
     layout="wide"
 )
 
-# Check imports
+# Check imports and provide helpful messages
 try:
     import fitz
     PYMUPDF_AVAILABLE = True
-except:
+except ImportError:
     PYMUPDF_AVAILABLE = False
-    st.error("Install PyMuPDF: pip install pymupdf")
+    st.error("PyMuPDF not installed. Please run: pip install pymupdf")
 
 try:
     import openai
     OPENAI_AVAILABLE = True
-except:
+except ImportError:
     OPENAI_AVAILABLE = False
-    st.error("Install OpenAI: pip install openai")
+    st.warning("OpenAI not installed. Install with: pip install openai")
+    st.info("The app will work with basic extraction, but results will be better with OpenAI")
 
 # Styles
 st.markdown("""
@@ -362,11 +364,18 @@ def detect_subfield_components(label: str) -> List[str]:
 def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
     """Extract text from PDF"""
     if not PYMUPDF_AVAILABLE:
+        st.error("PyMuPDF is not available")
         return "", {}, 0
     
     try:
+        # Reset file pointer to beginning
         pdf_file.seek(0)
-        doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+        
+        # Read the file content
+        pdf_bytes = pdf_file.read()
+        
+        # Open PDF from bytes
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         
         full_text = ""
         page_texts = {}
@@ -380,9 +389,13 @@ def extract_pdf_text(pdf_file) -> Tuple[str, Dict[int, str], int]:
         
         total_pages = len(doc)
         doc.close()
+        
         return full_text, page_texts, total_pages
+        
     except Exception as e:
-        st.error(f"PDF error: {e}")
+        st.error(f"PDF extraction error: {str(e)}")
+        if st.checkbox("Show detailed error"):
+            st.code(traceback.format_exc())
         return "", {}, 0
 
 # ===== FORM EXTRACTOR =====
@@ -395,36 +408,65 @@ class UniversalFormExtractor:
     
     def setup_openai(self):
         """Setup OpenAI client"""
+        if not OPENAI_AVAILABLE:
+            self.client = None
+            return
+            
         api_key = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.client = openai.OpenAI(api_key=api_key) if api_key else None
-        if not self.client:
-            st.warning("Add OPENAI_API_KEY to secrets for better extraction")
+        
+        if api_key:
+            try:
+                self.client = openai.OpenAI(api_key=api_key)
+            except Exception as e:
+                st.warning(f"Could not initialize OpenAI client: {str(e)[:100]}")
+                self.client = None
+        else:
+            self.client = None
+            st.info("Add OPENAI_API_KEY to secrets for better extraction")
     
     def extract_form(self, full_text: str, page_texts: Dict[int, str], total_pages: int) -> USCISForm:
         """Extract form structure"""
-        form_info = self._identify_form(full_text[:3000])
-        
-        form = USCISForm(
-            form_number=form_info.get("form_number", "Unknown"),
-            form_title=form_info.get("form_title", "USCIS Form"),
-            edition_date=form_info.get("edition_date", ""),
-            total_pages=total_pages,
-            raw_text=full_text
-        )
-        
-        parts_data = self._extract_parts(full_text)
-        
-        for part_data in parts_data:
-            part = FormPart(
-                number=part_data["number"],
-                title=part_data["title"],
-                page_start=part_data.get("page_start", 1),
-                page_end=part_data.get("page_end", 1)
+        try:
+            form_info = self._identify_form(full_text[:3000])
+            
+            form = USCISForm(
+                form_number=form_info.get("form_number", "Unknown"),
+                form_title=form_info.get("form_title", "USCIS Form"),
+                edition_date=form_info.get("edition_date", ""),
+                total_pages=total_pages,
+                raw_text=full_text
             )
-            part.fields = self._extract_and_split_fields(full_text, part_data)
-            form.parts[part.number] = part
-        
-        return form
+            
+            parts_data = self._extract_parts(full_text)
+            
+            for part_data in parts_data:
+                part = FormPart(
+                    number=part_data["number"],
+                    title=part_data["title"],
+                    page_start=part_data.get("page_start", 1),
+                    page_end=part_data.get("page_end", 1)
+                )
+                
+                try:
+                    part.fields = self._extract_and_split_fields(full_text, part_data)
+                except Exception as e:
+                    st.warning(f"Error extracting fields for Part {part_data['number']}: {str(e)[:100]}")
+                    part.fields = []
+                
+                form.parts[part.number] = part
+            
+            return form
+            
+        except Exception as e:
+            st.error(f"Error extracting form: {str(e)}")
+            # Return a basic form structure
+            return USCISForm(
+                form_number="Unknown",
+                form_title="USCIS Form",
+                edition_date="",
+                total_pages=total_pages,
+                parts={1: FormPart(number=1, title="Main Section", fields=[])}
+            )
     
     def _identify_form(self, text: str) -> Dict:
         """Identify form type"""
@@ -451,6 +493,33 @@ class UniversalFormExtractor:
     def _extract_parts(self, text: str) -> List[Dict]:
         """Extract parts from form"""
         parts = []
+        
+        # Try OpenAI extraction first if available
+        if self.client:
+            try:
+                prompt = """Extract ALL parts from this form.
+                Return ONLY JSON array: [{"number": 1, "title": "Part Title", "page_start": 1, "page_end": 2}]
+                Text: """ + text[:10000]
+                
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=1000
+                )
+                
+                content = response.choices[0].message.content.strip()
+                if "```" in content:
+                    content = content.split("```")[1].replace("json", "").strip()
+                
+                parts = json.loads(content)
+                if parts:
+                    return parts
+                    
+            except Exception as e:
+                st.warning(f"OpenAI parts extraction failed, using fallback: {str(e)[:100]}")
+        
+        # Fallback to regex extraction
         part_matches = re.finditer(r'Part\s+(\d+)[.\s]+([^\n]+)', text)
         
         for match in part_matches:
@@ -466,14 +535,35 @@ class UniversalFormExtractor:
     def _extract_and_split_fields(self, text: str, part_data: Dict) -> List[FormField]:
         """Extract fields with subfield detection"""
         part_num = part_data["number"]
-        raw_fields = self._extract_raw_fields(text[:5000])
+        part_title = part_data.get("title", "")
+        
+        # Extract raw fields for this part
+        # Try to find part-specific text if possible
+        part_text = text
+        if part_num > 1:
+            # Try to extract text for this specific part
+            part_pattern = f"Part\\s+{part_num}"
+            match = re.search(part_pattern, text, re.IGNORECASE)
+            if match:
+                start_pos = match.start()
+                # Look for next part or end
+                next_part_pattern = f"Part\\s+{part_num + 1}"
+                next_match = re.search(next_part_pattern, text[start_pos:], re.IGNORECASE)
+                if next_match:
+                    part_text = text[start_pos:start_pos + next_match.start()]
+                else:
+                    part_text = text[start_pos:start_pos + 10000]  # Take next 10000 chars
+        
+        raw_fields = self._extract_raw_fields(part_text[:8000])
         
         # Track existing subfields
         existing_subfields = set()
         for field_data in raw_fields:
             item_num = field_data.get("item_number", "")
-            if '.' in item_num and len(item_num.split('.')[1]) == 1:
-                existing_subfields.add(item_num)
+            if '.' in item_num and len(item_num.split('.')) == 2:
+                parts = item_num.split('.')
+                if parts[0].isdigit() and parts[1].isalpha() and len(parts[1]) == 1:
+                    existing_subfields.add(item_num)
         
         processed_fields = []
         processed_numbers = set()
@@ -489,7 +579,11 @@ class UniversalFormExtractor:
             field_type, options = detect_field_type(label)
             
             # Check if already a subfield
-            is_subfield = '.' in item_number and len(item_number.split('.')[1]) == 1
+            is_subfield = False
+            if '.' in item_number and len(item_number.split('.')) == 2:
+                parts = item_number.split('.')
+                if parts[0].isdigit() and parts[1].isalpha() and len(parts[1]) == 1:
+                    is_subfield = True
             
             if is_subfield:
                 parent_num = item_number.split('.')[0]
@@ -505,7 +599,7 @@ class UniversalFormExtractor:
                 processed_fields.append(field)
             else:
                 subfield_components = detect_subfield_components(label)
-                has_existing = any(f"{item_number}.{l}" in existing_subfields for l in ['a','b','c'])
+                has_existing = any(f"{item_number}.{l}" in existing_subfields for l in ['a','b','c','d','e'])
                 
                 if subfield_components and not has_existing:
                     # Create parent and subfields
@@ -519,20 +613,22 @@ class UniversalFormExtractor:
                     )
                     processed_fields.append(parent_field)
                     
-                    for i, component in enumerate(subfield_components[:5]):
+                    for i, component in enumerate(subfield_components[:10]):  # Limit to 10 subfields
                         letter = chr(ord('a') + i)
-                        subfield_type, sub_options = detect_field_type(component)
-                        subfield = FormField(
-                            item_number=f"{item_number}.{letter}",
-                            label=component,
-                            field_type=subfield_type,
-                            part_number=part_num,
-                            parent_number=item_number,
-                            is_subfield=True,
-                            options=sub_options
-                        )
-                        processed_fields.append(subfield)
-                        processed_numbers.add(f"{item_number}.{letter}")
+                        subfield_num = f"{item_number}.{letter}"
+                        if subfield_num not in processed_numbers:
+                            subfield_type, sub_options = detect_field_type(component)
+                            subfield = FormField(
+                                item_number=subfield_num,
+                                label=component,
+                                field_type=subfield_type,
+                                part_number=part_num,
+                                parent_number=item_number,
+                                is_subfield=True,
+                                options=sub_options
+                            )
+                            processed_fields.append(subfield)
+                            processed_numbers.add(subfield_num)
                 elif has_existing:
                     # Parent with existing subfields
                     parent_field = FormField(
@@ -559,15 +655,46 @@ class UniversalFormExtractor:
     def _extract_raw_fields(self, text: str) -> List[Dict]:
         """Extract raw fields from text"""
         fields = []
-        # Simple regex extraction
+        
+        # Try OpenAI extraction first if available
+        if self.client:
+            try:
+                prompt = """Extract field numbers and labels from this form text.
+                Return ONLY JSON array: [{"item_number": "1.a", "label": "Field Label"}]
+                Include both regular fields (1, 2, 3) and subfields (1.a, 1.b).
+                Text: """ + text[:8000]
+                
+                response = self.client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=2000
+                )
+                
+                content = response.choices[0].message.content.strip()
+                if "```" in content:
+                    content = content.split("```")[1].replace("json", "").strip()
+                
+                fields = json.loads(content)
+                return fields[:100]  # Limit to 100 fields
+                
+            except Exception as e:
+                st.warning(f"OpenAI extraction failed, using fallback: {str(e)[:100]}")
+        
+        # Fallback to regex extraction
         pattern = r'(\d+\.?[a-z]?\.?)\s+([^\n]{5,100})'
         matches = re.finditer(pattern, text)
         
-        for match in matches[:50]:  # Limit to 50 fields
+        # Convert iterator to list and limit to 50 fields
+        count = 0
+        for match in matches:
+            if count >= 50:  # Limit to 50 fields
+                break
             fields.append({
                 "item_number": match.group(1).rstrip('.'),
                 "label": match.group(2).strip()
             })
+            count += 1
         
         return fields
 
@@ -910,42 +1037,52 @@ def main():
         st.markdown("### Upload USCIS Form")
         st.info("Fields with multiple values will be automatically split into subfields")
         
+        if not PYMUPDF_AVAILABLE:
+            st.error("⚠️ PyMuPDF is required to process PDFs. Please install it first.")
+            st.code("pip install pymupdf", language="bash")
+            st.stop()
+        
         uploaded_file = st.file_uploader("Choose PDF file", type=['pdf'])
         
         if uploaded_file:
             if st.button("🚀 Extract Form", type="primary", use_container_width=True):
                 with st.spinner("Extracting and analyzing fields..."):
-                    full_text, page_texts, total_pages = extract_pdf_text(uploaded_file)
+                    try:
+                        full_text, page_texts, total_pages = extract_pdf_text(uploaded_file)
+                        
+                        if full_text:
+                            form = st.session_state.extractor.extract_form(full_text, page_texts, total_pages)
+                            st.session_state.form = form
+                            st.success(f"✅ Extracted: {form.form_number}")
+                            
+                            # Show statistics
+                            total_fields = sum(len(p.fields) for p in form.parts.values())
+                            parent_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_parent)
+                            subfield_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_subfield)
+                            options_count = sum(1 for p in form.parts.values() for f in p.fields if f.has_options)
+                            
+                            col1, col2, col3, col4, col5 = st.columns(5)
+                            with col1:
+                                st.metric("Parts", len(form.parts))
+                            with col2:
+                                st.metric("Total Fields", total_fields)
+                            with col3:
+                                st.metric("Parent Fields", parent_count)
+                            with col4:
+                                st.metric("Subfields", subfield_count)
+                            with col5:
+                                st.metric("With Options", options_count)
+                            
+                            if parent_count > 0:
+                                st.info(f"✨ Automatically split {parent_count} fields into {subfield_count} subfields")
+                            if options_count > 0:
+                                st.info(f"🎯 Found {options_count} fields with multiple choice options")
+                        else:
+                            st.error("Could not extract text from PDF")
                     
-                    if full_text:
-                        form = st.session_state.extractor.extract_form(full_text, page_texts, total_pages)
-                        st.session_state.form = form
-                        st.success(f"✅ Extracted: {form.form_number}")
-                        
-                        # Show statistics
-                        total_fields = sum(len(p.fields) for p in form.parts.values())
-                        parent_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_parent)
-                        subfield_count = sum(1 for p in form.parts.values() for f in p.fields if f.is_subfield)
-                        options_count = sum(1 for p in form.parts.values() for f in p.fields if f.has_options)
-                        
-                        col1, col2, col3, col4, col5 = st.columns(5)
-                        with col1:
-                            st.metric("Parts", len(form.parts))
-                        with col2:
-                            st.metric("Total Fields", total_fields)
-                        with col3:
-                            st.metric("Parent Fields", parent_count)
-                        with col4:
-                            st.metric("Subfields", subfield_count)
-                        with col5:
-                            st.metric("With Options", options_count)
-                        
-                        if parent_count > 0:
-                            st.info(f"✨ Automatically split {parent_count} fields into {subfield_count} subfields")
-                        if options_count > 0:
-                            st.info(f"🎯 Found {options_count} fields with multiple choice options")
-                    else:
-                        st.error("Could not extract text from PDF")
+                    except Exception as e:
+                        st.error(f"Error processing PDF: {str(e)}")
+                        st.info("Please try uploading a different PDF or check the file format")
     
     with tab2:
         st.markdown("### Map Fields to Database")
