@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-UNIVERSAL USCIS FORM READER - FINAL PRODUCTION VERSION
-======================================================
-Complete extraction with proper subfield handling and DB mapping
+UNIVERSAL USCIS FORM READER - FIXED VERSION
+===========================================
+Fixed: Proper field sorting and DB object display
 """
 
 # Standard library imports
@@ -90,6 +90,22 @@ st.markdown("""
         font-size: 0.9em;
         margin-left: 5px;
     }
+    .db-object-card {
+        background: white;
+        padding: 10px;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        border: 1px solid #e0e0e0;
+        cursor: pointer;
+    }
+    .db-object-card:hover {
+        background: #f8f9ff;
+        border-color: #667eea;
+    }
+    .db-object-selected {
+        background: #e8f5e9;
+        border-color: #4caf50;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,21 +153,33 @@ class FormField:
         return hashlib.md5(unique_str.encode()).hexdigest()[:12]
     
     def get_sort_key(self) -> Tuple:
-        """Get sort key for proper ordering"""
+        """Get sort key for proper numerical ordering"""
         try:
+            # Split the number into main and sub parts
             parts = self.number.replace('-', '.').split('.')
-            main = int(parts[0]) if parts[0].isdigit() else 999
             
-            sub = 0
+            # Extract main number (should be integer)
+            main_num = 0
+            if parts[0].isdigit():
+                main_num = int(parts[0])
+            else:
+                # If not a digit, use position
+                return (999999, 0, self.position)
+            
+            # Extract sub part (letter or number)
+            sub_num = 0
             if len(parts) > 1 and parts[1]:
                 if parts[1][0].isalpha():
-                    sub = ord(parts[1][0].lower()) - ord('a') + 1
+                    # Convert letter to number (a=1, b=2, etc.)
+                    sub_num = ord(parts[1][0].lower()) - ord('a') + 1
                 elif parts[1].isdigit():
-                    sub = int(parts[1]) + 100
+                    # Use the actual number
+                    sub_num = int(parts[1])
             
-            return (main, sub, self.position)
-        except:
-            return (999, 0, self.position)
+            return (main_num, sub_num, self.position)
+        except Exception as e:
+            # Fallback to position-based sorting
+            return (999999, 0, self.position)
     
     def to_dict(self) -> Dict:
         """Convert to dictionary for export"""
@@ -198,7 +226,7 @@ class FormPart:
         }
     
     def get_field_hierarchy(self) -> Dict:
-        """Get fields organized by hierarchy"""
+        """Get fields organized by hierarchy with proper sorting"""
         hierarchy = {}
         
         # Group parent fields
@@ -214,6 +242,10 @@ class FormPart:
             if field.parent_number and field.parent_number in hierarchy:
                 hierarchy[field.parent_number]['children'].append(field)
         
+        # Sort children within each parent
+        for parent_num in hierarchy:
+            hierarchy[parent_num]['children'].sort(key=lambda f: f.get_sort_key())
+        
         return hierarchy
 
 # ===== DATABASE SCHEMA =====
@@ -221,6 +253,8 @@ class FormPart:
 DB_SCHEMA = {
     "beneficiary": {
         "label": "👤 Beneficiary/Applicant",
+        "icon": "👤",
+        "description": "Primary applicant information",
         "fields": [
             "lastName",
             "firstName", 
@@ -246,6 +280,8 @@ DB_SCHEMA = {
     },
     "petitioner": {
         "label": "🏢 Petitioner/Employer",
+        "icon": "🏢",
+        "description": "Petitioner or employer details",
         "fields": [
             "lastName",
             "firstName",
@@ -266,6 +302,8 @@ DB_SCHEMA = {
     },
     "employment": {
         "label": "💼 Employment Information",
+        "icon": "💼",
+        "description": "Job and employment details",
         "fields": [
             "jobTitle",
             "socCode",
@@ -282,6 +320,8 @@ DB_SCHEMA = {
     },
     "attorney": {
         "label": "⚖️ Attorney/Representative",
+        "icon": "⚖️",
+        "description": "Legal representative information",
         "fields": [
             "lastName",
             "firstName",
@@ -299,6 +339,8 @@ DB_SCHEMA = {
     },
     "custom": {
         "label": "✏️ Custom Fields",
+        "icon": "✏️",
+        "description": "User-defined custom fields",
         "fields": []
     }
 }
@@ -377,8 +419,12 @@ class FormExtractor:
                 # Extract fields with enhanced subfield detection
                 fields = self._extract_fields_enhanced(part_text, part.number)
                 
-                # Sort fields properly
+                # CRITICAL FIX: Sort fields properly using the enhanced sort key
                 fields.sort(key=lambda f: f.get_sort_key())
+                
+                # Verify sorting for debugging
+                st.sidebar.info(f"Part {part.number}: {len(fields)} fields extracted")
+                
                 part.fields = fields
                 result["parts"].append(part)
             
@@ -940,25 +986,45 @@ def render_field(field: FormField, key_prefix: str):
             render_mapping_dialog(field, unique_key)
 
 def render_mapping_dialog(field: FormField, unique_key: str):
-    """Render mapping configuration dialog"""
+    """Render mapping configuration dialog with improved DB object display"""
     st.markdown('<div class="mapping-dialog">', unsafe_allow_html=True)
     st.markdown("**🔗 Map Field to Database**")
     
-    col1, col2 = st.columns(2)
+    # Show available database objects clearly
+    st.markdown("##### Select Database Object:")
     
-    with col1:
-        # Database object selection
-        db_objects = list(DB_SCHEMA.keys())
-        db_object = st.selectbox(
-            "Select Database Object",
-            [""] + db_objects,
-            key=f"{unique_key}_map_object",
-            help="Choose the database object this field belongs to"
-        )
+    # Display DB objects as cards
+    selected_object = st.session_state.get(f"{unique_key}_selected_object", "")
     
-    with col2:
-        # Field path selection
-        if db_object and db_object in DB_SCHEMA:
+    # Create columns for DB objects
+    cols = st.columns(3)
+    
+    for idx, (key, schema) in enumerate(DB_SCHEMA.items()):
+        col_idx = idx % 3
+        with cols[col_idx]:
+            # Create clickable card for each DB object
+            if st.button(
+                f"{schema['icon']} {schema['label']}",
+                key=f"{unique_key}_obj_{key}",
+                use_container_width=True,
+                type="primary" if selected_object == key else "secondary"
+            ):
+                st.session_state[f"{unique_key}_selected_object"] = key
+                st.rerun()
+    
+    # Field path selection
+    if st.session_state.get(f"{unique_key}_selected_object"):
+        db_object = st.session_state[f"{unique_key}_selected_object"]
+        
+        st.markdown(f"##### Select Field in {DB_SCHEMA[db_object]['label']}:")
+        
+        if db_object == "custom":
+            db_path = st.text_input(
+                "Custom Field Path",
+                key=f"{unique_key}_map_custom",
+                placeholder="e.g., customField.subField"
+            )
+        else:
             available_fields = DB_SCHEMA[db_object]["fields"]
             
             # Smart suggestions based on field label
@@ -977,14 +1043,9 @@ def render_mapping_dialog(field: FormField, unique_key: str):
                 key=f"{unique_key}_map_path",
                 help="Choose the specific field to map to"
             )
-        elif db_object == "custom":
-            db_path = st.text_input(
-                "Custom Field Path",
-                key=f"{unique_key}_map_custom",
-                placeholder="e.g., customField.subField"
-            )
-        else:
-            db_path = ""
+    else:
+        db_path = ""
+        db_object = ""
     
     # Action buttons
     col1, col2, col3 = st.columns(3)
@@ -995,7 +1056,11 @@ def render_mapping_dialog(field: FormField, unique_key: str):
                 field.is_mapped = True
                 field.db_object = db_object
                 field.db_path = db_path
-                del st.session_state[f"mapping_{unique_key}"]
+                # Clean up session state
+                if f"mapping_{unique_key}" in st.session_state:
+                    del st.session_state[f"mapping_{unique_key}"]
+                if f"{unique_key}_selected_object" in st.session_state:
+                    del st.session_state[f"{unique_key}_selected_object"]
                 st.success(f"Mapped to {db_object}.{db_path}")
                 st.rerun()
             else:
@@ -1003,7 +1068,10 @@ def render_mapping_dialog(field: FormField, unique_key: str):
     
     with col2:
         if st.button("❌ Cancel", key=f"{unique_key}_cancel"):
-            del st.session_state[f"mapping_{unique_key}"]
+            if f"mapping_{unique_key}" in st.session_state:
+                del st.session_state[f"mapping_{unique_key}"]
+            if f"{unique_key}_selected_object" in st.session_state:
+                del st.session_state[f"{unique_key}_selected_object"]
             st.rerun()
     
     with col3:
@@ -1011,7 +1079,10 @@ def render_mapping_dialog(field: FormField, unique_key: str):
             field.is_mapped = False
             field.db_object = ""
             field.db_path = ""
-            del st.session_state[f"mapping_{unique_key}"]
+            if f"mapping_{unique_key}" in st.session_state:
+                del st.session_state[f"mapping_{unique_key}"]
+            if f"{unique_key}_selected_object" in st.session_state:
+                del st.session_state[f"{unique_key}_selected_object"]
             st.rerun()
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1057,6 +1128,14 @@ def main():
                     st.write(f"Total: {part_stats['total_fields']}")
                     st.write(f"Mapped: {part_stats['mapped_fields']}")
                     st.write(f"In Quest: {part_stats['questionnaire_fields']}")
+            
+            # Field order verification
+            st.markdown("### Field Order Check")
+            if st.checkbox("Show Field Order"):
+                for part in data["parts"]:
+                    st.write(f"**Part {part.number}:**")
+                    for i, field in enumerate(part.fields[:15]):  # Show first 15
+                        st.text(f"  {i+1}. Field {field.number}: {field.label[:30]}...")
         
         st.markdown("---")
         if st.button("🔄 Reset All", use_container_width=True):
@@ -1137,14 +1216,18 @@ def render_upload_tab():
                                     # Show hierarchy
                                     hierarchy = part.get_field_hierarchy()
                                     
-                                    for parent_num in sorted(hierarchy.keys()):
+                                    # Sort parent numbers properly
+                                    sorted_parents = sorted(hierarchy.keys(), 
+                                                          key=lambda x: int(x) if x.isdigit() else 999)
+                                    
+                                    for parent_num in sorted_parents:
                                         parent_data = hierarchy[parent_num]
                                         parent_field = parent_data['field']
                                         children = parent_data['children']
                                         
                                         st.write(f"  📁 {parent_field.number}. {parent_field.label}")
                                         
-                                        for child in sorted(children, key=lambda f: f.number):
+                                        for child in children:
                                             st.write(f"    └─ {child.number}. {child.label}")
                         else:
                             st.error("Extraction failed. Please try again.")
@@ -1206,8 +1289,12 @@ def render_mapping_tab():
         # Display fields with hierarchy
         hierarchy = part.get_field_hierarchy()
         
+        # Sort parent numbers properly for display
+        sorted_parents = sorted(hierarchy.keys(), 
+                              key=lambda x: int(x) if x.isdigit() else 999)
+        
         # Display parent fields and their children
-        for parent_num in sorted(hierarchy.keys()):
+        for parent_num in sorted_parents:
             parent_data = hierarchy[parent_num]
             parent_field = parent_data['field']
             children = parent_data['children']
@@ -1222,7 +1309,7 @@ def render_mapping_tab():
             render_field(parent_field, f"map_p{part.number}")
             
             # Render children
-            for child in sorted(children, key=lambda f: f.number):
+            for child in children:
                 if show_mapped_only and not child.is_mapped:
                     continue
                 if show_unmapped_only and child.is_mapped:
@@ -1235,7 +1322,7 @@ def render_mapping_tab():
         
         if orphan_fields:
             st.markdown("#### Other Fields")
-            for field in orphan_fields:
+            for field in sorted(orphan_fields, key=lambda f: f.get_sort_key()):
                 if show_mapped_only and not field.is_mapped:
                     continue
                 if show_unmapped_only and field.is_mapped:
@@ -1263,6 +1350,9 @@ def render_questionnaire_tab():
     if not quest_fields:
         st.info("No fields in questionnaire. Use the Map Fields tab to add fields to the questionnaire.")
         return
+    
+    # Sort questionnaire fields properly
+    quest_fields.sort(key=lambda x: (x[0].number, x[1].get_sort_key()))
     
     # Group by part
     st.write(f"**Total Questions:** {len(quest_fields)}")
@@ -1423,7 +1513,11 @@ def export_part_data(part: FormPart, key: str):
     # Organize fields by hierarchy
     hierarchy = part.get_field_hierarchy()
     
-    for parent_num in sorted(hierarchy.keys()):
+    # Sort parent numbers properly
+    sorted_parents = sorted(hierarchy.keys(), 
+                          key=lambda x: int(x) if x.isdigit() else 999)
+    
+    for parent_num in sorted_parents:
         parent_data = hierarchy[parent_num]
         parent_field = parent_data['field']
         children = parent_data['children']
@@ -1432,12 +1526,12 @@ def export_part_data(part: FormPart, key: str):
         data["fields"].append(parent_field.to_dict())
         
         # Add children
-        for child in sorted(children, key=lambda f: f.number):
+        for child in children:
             data["fields"].append(child.to_dict())
     
     # Add orphan fields
     orphan_fields = [f for f in part.fields if f.number not in hierarchy and not f.parent_number]
-    for field in orphan_fields:
+    for field in sorted(orphan_fields, key=lambda f: f.get_sort_key()):
         data["fields"].append(field.to_dict())
     
     json_str = json.dumps(data, indent=2, default=str)
@@ -1505,6 +1599,9 @@ def export_questionnaire(data: Dict):
                 "questions": []
             }
             
+            # Sort fields properly before export
+            quest_fields.sort(key=lambda f: f.get_sort_key())
+            
             for field in quest_fields:
                 question_data = field.to_dict()
                 
@@ -1546,19 +1643,23 @@ def export_all_data(data: Dict):
         # Export with hierarchy
         hierarchy = part.get_field_hierarchy()
         
-        for parent_num in sorted(hierarchy.keys()):
+        # Sort parent numbers properly
+        sorted_parents = sorted(hierarchy.keys(), 
+                              key=lambda x: int(x) if x.isdigit() else 999)
+        
+        for parent_num in sorted_parents:
             parent_data = hierarchy[parent_num]
             parent_field = parent_data['field']
             children = parent_data['children']
             
             # Add parent with children
             parent_export = parent_field.to_dict()
-            parent_export["children"] = [child.to_dict() for child in sorted(children, key=lambda f: f.number)]
+            parent_export["children"] = [child.to_dict() for child in children]
             part_data["fields"].append(parent_export)
         
         # Add orphan fields
         orphan_fields = [f for f in part.fields if f.number not in hierarchy and not f.parent_number]
-        for field in orphan_fields:
+        for field in sorted(orphan_fields, key=lambda f: f.get_sort_key()):
             part_data["fields"].append(field.to_dict())
         
         export["parts"].append(part_data)
