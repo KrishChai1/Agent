@@ -519,16 +519,17 @@ class FormExtractor:
         return text[start:end]
     
     def _extract_fields_enhanced(self, text: str, part_num: int) -> List[FormField]:
-        """Extract fields with enhanced subfield detection"""
+        """Extract fields EXACTLY as they appear - no intelligent merging"""
         # Try AI extraction if available
         if self.client:
             ai_fields = self._extract_fields_ai(text, part_num)
             if ai_fields:
-                return self._enhance_fields(ai_fields, text)
+                # Return AI fields WITHOUT enhancement - exactly as extracted
+                return ai_fields
         
-        # Pattern extraction with enhancement
+        # Pattern extraction WITHOUT enhancement - exact extraction
         pattern_fields = self._extract_fields_pattern(text, part_num)
-        return self._enhance_fields(pattern_fields, text)
+        return pattern_fields  # Return exactly what was found, no enhancement
     
     def _extract_fields_pattern(self, text: str, part_num: int) -> List[FormField]:
         """Pattern-based extraction with better subfield handling"""
@@ -1016,7 +1017,7 @@ def render_mapping_dialog(field: FormField, unique_key: str):
     if st.session_state.get(f"{unique_key}_selected_object"):
         db_object = st.session_state[f"{unique_key}_selected_object"]
         
-        st.markdown(f"##### Select Field in {DB_SCHEMA[db_object]['label']}:")
+        st.markdown(f"##### Select or Enter Field Path in {DB_SCHEMA[db_object]['label']}:")
         
         if db_object == "custom":
             db_path = st.text_input(
@@ -1027,22 +1028,37 @@ def render_mapping_dialog(field: FormField, unique_key: str):
         else:
             available_fields = DB_SCHEMA[db_object]["fields"]
             
-            # Smart suggestions based on field label
-            suggested = None
-            field_label_lower = field.label.lower()
+            # Option to select from dropdown OR enter manually
+            col1, col2 = st.columns([1, 1])
             
-            for db_field in available_fields:
-                if any(word in db_field.lower() for word in field_label_lower.split()):
-                    suggested = db_field
-                    break
+            with col1:
+                # Smart suggestions based on field label
+                suggested = None
+                field_label_lower = field.label.lower()
+                
+                for db_field in available_fields:
+                    if any(word in db_field.lower() for word in field_label_lower.split()):
+                        suggested = db_field
+                        break
+                
+                selected_path = st.selectbox(
+                    "Select from existing fields",
+                    [""] + available_fields,
+                    index=available_fields.index(suggested) + 1 if suggested and suggested in available_fields else 0,
+                    key=f"{unique_key}_map_path",
+                    help="Choose from predefined fields"
+                )
             
-            db_path = st.selectbox(
-                "Select Field Path",
-                [""] + available_fields,
-                index=available_fields.index(suggested) + 1 if suggested and suggested in available_fields else 0,
-                key=f"{unique_key}_map_path",
-                help="Choose the specific field to map to"
-            )
+            with col2:
+                manual_path = st.text_input(
+                    "OR enter custom path",
+                    key=f"{unique_key}_manual_path",
+                    placeholder="e.g., address.apartmentNumber",
+                    help="Enter a custom field path if not in the list"
+                )
+            
+            # Use manual path if provided, otherwise use selected
+            db_path = manual_path if manual_path else selected_path
     else:
         db_path = ""
         db_object = ""
