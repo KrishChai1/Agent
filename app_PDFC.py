@@ -553,20 +553,41 @@ Return JSON:
 def extract_pdf_text(pdf_file) -> Tuple[str, int]:
     """Extract text from uploaded PDF"""
     try:
-        import PyPDF2
-        
-        pdf_file.seek(0)
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        
-        full_text = ""
-        for page_num, page in enumerate(pdf_reader.pages):
-            text = page.extract_text()
-            full_text += f"\n\n=== PAGE {page_num + 1} ===\n{text}"
-        
-        return full_text, len(pdf_reader.pages)
-        
+        # Try PyMuPDF first (better extraction)
+        try:
+            import fitz  # PyMuPDF
+            
+            pdf_file.seek(0)
+            pdf_bytes = pdf_file.read()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            
+            full_text = ""
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                full_text += f"\n\n=== PAGE {page_num + 1} ===\n{text}"
+            
+            total_pages = len(doc)
+            doc.close()
+            
+            return full_text, total_pages
+            
+        except ImportError:
+            # Fallback to PyPDF2
+            import PyPDF2
+            
+            pdf_file.seek(0)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            full_text = ""
+            for page_num, page in enumerate(pdf_reader.pages):
+                text = page.extract_text()
+                full_text += f"\n\n=== PAGE {page_num + 1} ===\n{text}"
+            
+            return full_text, len(pdf_reader.pages)
+            
     except ImportError:
-        st.error("PyPDF2 not installed. Run: pip install PyPDF2")
+        st.error("PDF library not installed. Add PyPDF2 or pymupdf to requirements.txt")
         return "", 0
     except Exception as e:
         st.error(f"Error reading PDF: {str(e)}")
