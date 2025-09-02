@@ -22,3 +22,4 @@ pyyaml
 tabulate
 openpyxl
 xlsxwriter
+anthropic
