@@ -16,14 +16,13 @@ FORCE_INCLUDE_FILES = [
     "g28.json", "h-2b-form.json", "G28.ts", "H2B.ts"
 ]
 
-# Extensions and ignore patterns
 ALLOWED_EXTS = (".json", ".txt", ".ts", ".tsx")
 IGNORE_FILE_RX = re.compile(
     r'^(requirements(\.txt)?|pyproject\.toml|poetry\.lock|package(-lock)?\.json|yarn\.lock|Pipfile(\.lock)?)$',
     re.I
 )
 
-# ==================== TEXT/TS HELPERS ====================
+# ==================== TEXT / TS HELPERS ====================
 def normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
@@ -38,10 +37,8 @@ def to_bytes(buf) -> bytes:
 def _decode_best(b: bytes) -> str:
     b = to_bytes(b)
     for enc in ("utf-8", "utf-16", "utf-8-sig", "latin-1"):
-        try:
-            return b.decode(enc)
-        except Exception:
-            continue
+        try: return b.decode(enc)
+        except Exception: continue
     return b.decode("utf-8", errors="ignore")
 
 def try_load_json_bytes(b: bytes) -> Tuple[dict, str]:
@@ -65,8 +62,7 @@ def flatten_keys(obj, prefix="") -> List[str]:
         for i, v in enumerate(obj[:1]):
             keys.extend(flatten_keys(v, f"{prefix}[{i}]"))
     else:
-        if prefix:
-            keys.append(prefix)
+        if prefix: keys.append(prefix)
     return keys
 
 LINE_PATH_RX = re.compile(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+(?:\[\*\])?')
@@ -76,11 +72,9 @@ def extract_field_names_from_text_lines(text: str) -> List[str]:
     out = []
     for raw in text.splitlines():
         line = raw.strip()
-        if not line:
-            continue
+        if not line: continue
         if len(line) <= 200:
-            # whole line might be a usable key in your TXT objects
-            out.append(line)
+            out.append(line)  # let simple 1-per-line TXT act as fields list
         for m in LINE_PATH_RX.finditer(line):
             out.append(m.group(0))
         for m in KEY_COLON_RX.finditer(line):
@@ -91,7 +85,7 @@ def extract_field_names_from_text_lines(text: str) -> List[str]:
             seen.add(k); res.append(k)
     return res
 
-# TS parsing
+# TS parsing (interface / type = { } / const = { })
 TS_INTERFACE_RX = re.compile(r'export\s+interface\s+\w+\s*{([^}]*)}', re.DOTALL)
 TS_TYPE_OBJ_RX = re.compile(r'export\s+type\s+\w+\s*=\s*{([^}]*)}', re.DOTALL)
 TS_CONST_OBJ_RX = re.compile(r'export\s+const\s+\w+\s*=\s*{(.*?)}\s*(?:as\s+const)?', re.DOTALL)
@@ -140,10 +134,11 @@ FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:[\.\)]\s*([a-z])?)?\s*(.*)$', re.I)
 
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Parse a USCIS PDF into parts/fields using blocks mode across ALL pages.
+    Parse a USCIS PDF into parts/fields using blocks.
     - Keeps order (top->down, left->right)
     - Merges continuation lines
     - Splits Yes/No options under base number
+    - If no 'Part N.' found, assigns an auto part for that page; later collapsed.
     """
     parts = defaultdict(list)
     doc = safe_open_pdf(pdf_bytes)
@@ -151,8 +146,13 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
     last_fid = None
 
     for pno in range(len(doc)):
+        # ensure a default part if no "Part" header on this page
+        default_part = f"Part (Auto) p.{pno+1}"
+        page_part_used = False
+
         blocks = doc[pno].get_text("blocks")
         blocks = sorted(blocks, key=lambda b: (round(b[1],1), round(b[0],1)))
+
         for b in blocks:
             line = (b[4] or "").strip()
             if not line:
@@ -163,10 +163,11 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
                 idx, title = m_part.groups()
                 current_part = f"Part {idx}: {normalize(title)}"
                 last_fid = None
+                page_part_used = True
                 continue
 
             if not current_part:
-                continue
+                current_part = default_part  # anchor to page if no header found
 
             m_field = FIELD_HEAD_RX.match(line)
             if m_field:
@@ -177,23 +178,27 @@ def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any
                 last_fid = fid
             else:
                 # Split simple Yes/No options found on a lonely line
-                # Attach as  a/b under last base number
                 if last_fid and re.search(r'\b(Yes|No)\b', line):
                     base = last_fid.split(".")[0]
                     opts = re.findall(r'\b(Yes|No)\b', line)
                     for i, opt in enumerate(opts, start=1):
-                        opt_id = f"{base}.{chr(96+i)}"  # 'a','b',...
+                        opt_id = f"{base}.{chr(96+i)}"  # 'a','b', ...
                         parts[current_part].append({"id": opt_id, "label": opt, "page": pno+1})
                 elif parts[current_part]:
                     parts[current_part][-1]["label"] = normalize(parts[current_part][-1]["label"] + " " + line)
 
-    # Sort inside each part strictly by (number, suffix)
+    # Collapse auto parts into a single Part 1 if no real parts were found at all
+    if parts and not any(k.lower().startswith("part ") and re.search(r'\d+', k) for k in parts.keys()):
+        collected = []
+        for rows in parts.values():
+            collected.extend(rows)
+        parts = {"Part 1 (Auto)": collected}
+
+    # Sort inside each part by (number, suffix)
     for pk, rows in parts.items():
         def sort_key(r):
             m = re.match(r"(\d+)(?:\.([a-z]))?$", r["id"])
-            if not m:
-                # Could be .opt or other—they go last but stable
-                return (99999, r["id"])
+            if not m: return (99999, r["id"])
             num, sub = m.groups()
             return (int(num), sub or "")
         parts[pk] = sorted(rows, key=sort_key)
@@ -216,7 +221,6 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
                     byid[fid]["page"] = it["page"]
                 if len(it.get("label","")) > len(byid[fid].get("label","")):
                     byid[fid]["label"] = it["label"]
-        # reorder
         def sort_key_id(fid):
             m = re.match(r"(\d+)(?:\.([a-z]))?$", fid)
             if not m: return (99999, fid)
@@ -248,8 +252,8 @@ def auto_split_fields(merged_parts, patterns=DEFAULT_PATTERNS):
                 new_parts[part].append(f)
     return new_parts
 
-# ==================== LLM ENHANCEMENT (optional) ========
-def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
+# ==================== LLM ENHANCEMENT ====================
+def oai_chat(messages, model="gpt-4o", temperature=0.0, max_tokens=2000):
     if not OPENAI_API_KEY: return None
     try:
         from openai import OpenAI
@@ -260,17 +264,17 @@ def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
     except Exception:
         return None
 
-def llm_enhance_parts(pdf_bytes_list, merged_parts):
+def llm_enhance_parts(pdf_bytes_list, merged_parts, model_name: str):
     if not OPENAI_API_KEY or not pdf_bytes_list:
         return merged_parts
     try:
         doc = safe_open_pdf(pdf_bytes_list[0])
-        raw_text = "\n".join([doc[p].get_text("text") for p in range(len(doc))])[:20000]
+        raw_text = "\n".join([doc[p].get_text("text") for p in range(len(doc))])[:24000]
     except Exception:
         return merged_parts
     system = "You are a USCIS form extractor. Return clean JSON only."
     user = f"""
-Extract parts with fields:
+Extract parts with fields (ids like "1" or "1.a") and short labels:
 {{
   "parts": [
     {{"name":"Part N: Title","fields":[{{"id":"1","label":"..."}}]}}
@@ -279,7 +283,8 @@ Extract parts with fields:
 TEXT:
 {raw_text}
 """
-    content = oai_chat([{"role":"system","content":system},{"role":"user","content":user}], max_tokens=4000)
+    content = oai_chat([{"role":"system","content":system},{"role":"user","content":user}],
+                       model=model_name, max_tokens=4000)
     if not content: return merged_parts
     try:
         start = content.find("{"); end = content.rfind("}")
@@ -310,6 +315,10 @@ schema_files = st.sidebar.file_uploader("Extra DB Objects/Schemas", type=["json"
 zip_db = st.sidebar.file_uploader("Upload ZIP of DB objects (json/txt/ts inside)", type=["zip"])
 st.sidebar.header("DB Catalog (Optional)")
 manual_db_text = st.sidebar.text_area("Paste DB fields (one per line)", height=150, placeholder="Attorney.name.first\nBeneficiary.address.city\n...")
+
+st.sidebar.header("AI Enhancer")
+use_llm = st.sidebar.checkbox("Use ChatGPT (auto-enhance on upload)", value=True)
+model_name = st.sidebar.text_input("Model", value="gpt-4o", help="e.g., gpt-4o, gpt-4.1, o4-mini")
 
 # Build DB targets from scan + force includes + uploaded + manual
 scan_dir = "/mnt/data" if os.path.exists("/mnt/data") else os.getcwd()
@@ -397,13 +406,15 @@ if pdf_files:
     if part_maps:
         merged = merge_parts(part_maps)
         merged = auto_split_fields(merged)
+        # Auto LLM enhancement on upload if toggled
+        if use_llm:
+            merged = llm_enhance_parts(pdf_bytes_list, merged, model_name=model_name)
 
-# ==================== STATE ============================
+# ==================== STATE + KEYS ======================
 if "mappings" not in st.session_state:
     st.session_state["mappings"] = {}  # {part: {fid: {db, questionnaire, label}}}
 
 def make_key(prefix: str, part: str, fid: str, idx: int) -> str:
-    # Unique, stable keys for widgets
     safe_part = re.sub(r'[^a-zA-Z0-9_]', '_', part)
     safe_fid = re.sub(r'[^a-zA-Z0-9_]', '_', fid)
     return f"{prefix}_{safe_part}_{safe_fid}_{idx}"
@@ -418,7 +429,7 @@ with tabs[0]:
     if not merged:
         st.info("Upload at least one USCIS PDF to begin.")
     else:
-        st.subheader("Extracted Attributes by Part (sequenced)")
+        st.subheader("Extracted Attributes by Part (sequenced across all pages)")
         for part, rows in merged.items():
             st.markdown(f"### {part} ({len(rows)} fields)")
             for r in rows:
@@ -429,13 +440,14 @@ with tabs[1]:
     if not merged:
         st.info("Upload at least one USCIS PDF to begin.")
     else:
-        for part_idx, part_name in enumerate(sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).group()))):
-            with st.expander(part_name, expanded=False):
+        if len(db_targets) == 1:
+            st.warning("No DB objects found. Add them in the sidebar (force-included files, uploads, or manual paste).")
+        for part_idx, part_name in enumerate(sorted(merged.keys(), key=lambda x: int(re.search(r'\d+', x).group()) if re.search(r'\d+', x) else 99999)):
+            with st.expander(part_name, expanded=(part_idx == 0)):
                 if part_name not in st.session_state["mappings"]:
                     st.session_state["mappings"][part_name] = {}
                 for row_idx, row in enumerate(merged[part_name]):
                     fid, label, page = row["id"], row.get("label",""), row.get("page")
-                    key_suffix = make_key("row", part_name, fid, row_idx)
                     c1, c2, c3, c4, c5 = st.columns([1,4,3,3,1])
                     with c1:
                         st.write(f"**{fid}**")
@@ -449,7 +461,7 @@ with tabs[1]:
                     with c5:
                         send_q = st.checkbox("Q?", key=make_key("q", part_name, fid, row_idx))
                     st.session_state["mappings"][part_name][fid] = {
-                        "db": manual or (choice if choice != "— (unmapped) —" else None),
+                        "db": (manual or (choice if choice != "— (unmapped) —" else None)),
                         "questionnaire": send_q,
                         "label": label
                     }
@@ -464,7 +476,6 @@ with tabs[2]:
             st.write(f"- **{src}** · {name} → {cnt} fields")
     if db_targets and len(db_targets) > 1:
         st.success(f"Total unique DB fields loaded: {len(db_targets)-1}")
-        # show sample fields
         sample = sorted(set(all_fields))[:50]
         if sample:
             st.caption("Sample fields:")
@@ -486,7 +497,7 @@ with tabs[3]:
 
         # Questionnaire JSON (unmapped or flagged)
         qjson = json.dumps({"questions": [
-            {"part": p, "id": fid, "label": m["label"], "question_key": f"{p.split(':')[0]}_{fid}".replace('.','')}
+            {"part": p, "id": fid, "label": m["label"], "question_key": f\"{p.split(':')[0]}_{fid}\".replace('.','')}
             for p, items in st.session_state["mappings"].items()
             for fid, m in items.items() if not m["db"] or m["questionnaire"]
         ]}, indent=2)
@@ -496,12 +507,12 @@ with tabs[3]:
         fullmap = json.dumps(st.session_state["mappings"], indent=2)
         st.download_button("⬇️ Download Full Mappings JSON", fullmap, "field_mappings.json", "application/json")
 
-        # LLM Enhancement button
-        if st.button("✨ Run LLM Enhancement (optional)"):
+        # Manual “Enhance now” button (in case you disabled auto)
+        if st.button("✨ Run LLM Enhancement now"):
             if pdf_bytes_list:
-                new_merged = llm_enhance_parts(pdf_bytes_list, merged)
-                if new_merged != merged:
-                    merged = new_merged
+                merged2 = llm_enhance_parts(pdf_bytes_list, merged, model_name=model_name)
+                if merged2 != merged:
+                    merged = merged2
                     st.success("LLM enhancement applied. Reopen Preview/Mapping to see updates.")
                 else:
                     st.info("No additional fields found by LLM.")
