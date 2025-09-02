@@ -1,4 +1,4 @@
-import io, os, re, json
+import os, re, json
 import fitz  # PyMuPDF
 import streamlit as st
 from collections import defaultdict
@@ -60,44 +60,61 @@ PART_RX = re.compile(r'^\s*Part\s+(\d+)\.\s*(.*)$', re.I)
 FIELD_HEAD_RX = re.compile(r'^\s*(\d+)(?:[\.\)]\s*([a-z])?)?\s*(.*)$', re.I)
 
 def parse_pdf_parts_and_fields(pdf_bytes: bytes) -> Dict[str, List[Dict[str, Any]]]:
-    """Parse a USCIS PDF using blocks mode (better for structured forms)."""
+    """Parse a USCIS PDF into parts/fields using blocks mode."""
     parts = defaultdict(list)
     doc = safe_open_pdf(pdf_bytes)
     current_part = None
+    last_fid = None
 
     for pno in range(len(doc)):
         blocks = doc[pno].get_text("blocks")
-        blocks = sorted(blocks, key=lambda b: (round(b[1],1), round(b[0],1)))  # sort by y, then x
+        blocks = sorted(blocks, key=lambda b: (round(b[1],1), round(b[0],1)))
         for b in blocks:
             line = (b[4] or "").strip()
-            if not line: 
+            if not line:
                 continue
 
-            # detect "Part 1. Information ..."
+            # detect "Part 1. ..."
             m_part = PART_RX.match(line)
             if m_part:
                 idx, title = m_part.groups()
                 current_part = f"Part {idx}: {title.strip()}"
+                last_fid = None
                 continue
 
             if not current_part:
                 continue
 
-            # detect numbered field "1.", "1.a", etc.
+            # detect numbered field
             m_field = FIELD_HEAD_RX.match(line)
             if m_field:
                 num, sub, rest = m_field.groups()
                 fid = f"{num}.{sub}" if sub else num
                 label = normalize(rest) or line
                 parts[current_part].append({"id": fid, "label": label, "page": pno+1})
+                last_fid = fid
             else:
-                # If line has Yes/No or options, attach separately
-                if any(opt in line for opt in ["Yes", "No", "☐", "□"]):
-                    fid = f"{len(parts[current_part])+1}.opt"
-                    parts[current_part].append({"id": fid, "label": line, "page": pno+1})
+                # detect Yes/No or options
+                if any(opt in line for opt in ["Yes", "No"]):
+                    if last_fid:
+                        base = last_fid.split(".")[0]
+                        opt_lines = [opt for opt in re.findall(r"(Yes|No)", line)]
+                        for i, opt in enumerate(opt_lines, start=1):
+                            opt_id = f"{base}.{chr(96+i)}"  # 97='a'
+                            parts[current_part].append({"id": opt_id, "label": opt, "page": pno+1})
                 elif parts[current_part]:
-                    # continuation of previous label
+                    # continuation text
                     parts[current_part][-1]["label"] += " " + line
+
+    # sort within each part
+    for pk, rows in parts.items():
+        def sort_key(r):
+            m = re.match(r"(\d+)(?:\.([a-z]))?", r["id"])
+            if not m:
+                return (9999, r["id"])
+            num, sub = m.groups()
+            return (int(num), sub or "")
+        parts[pk] = sorted(rows, key=sort_key)
 
     return parts
 
@@ -107,20 +124,26 @@ def merge_parts(maps: List[Dict[str, List[Dict[str, Any]]]]) -> Dict[str, List[D
         for k, v in mp.items():
             out[k].extend(v)
     for k, v in out.items():
-        byid = {}
+        seen = {}
         for it in v:
             fid = it["id"]
-            if fid not in byid:
-                byid[fid] = it
+            if fid not in seen:
+                seen[fid] = it
             else:
-                if it.get("page") and (not byid[fid].get("page") or it["page"] < byid[fid]["page"]):
-                    byid[fid]["page"] = it["page"]
-                if len(it.get("label","")) > len(byid[fid].get("label","")):
-                    byid[fid]["label"] = it["label"]
-        out[k] = [byid[fid] for fid in sorted(byid, key=lambda x: (int(re.match(r"\d+", x).group()) if re.match(r"\d+", x) else 0, x))]
+                if it.get("page") and (not seen[fid].get("page") or it["page"] < seen[fid]["page"]):
+                    seen[fid]["page"] = it["page"]
+                if len(it.get("label","")) > len(seen[fid].get("label","")):
+                    seen[fid]["label"] = it["label"]
+        def sort_key(r):
+            m = re.match(r"(\d+)(?:\.([a-z]))?", r["id"])
+            if not m:
+                return (9999, r["id"])
+            num, sub = m.groups()
+            return (int(num), sub or "")
+        out[k] = sorted(seen.values(), key=sort_key)
     return out
 
-# Split grouped fields like Name / Address / DOB
+# Auto-split grouped fields
 DEFAULT_PATTERNS = [
     {"match": ["Family Name", "Given Name", "Middle Name"], "subs": ["a","b","c"]},
     {"match": ["Street Number and Name", "Apt. Ste. Flr.", "City or Town", "State", "ZIP Code"], "subs": ["a","b","c","d","e"]},
@@ -142,41 +165,6 @@ def auto_split_fields(merged_parts, patterns=DEFAULT_PATTERNS):
             if not matched:
                 new_parts[part].append(f)
     return new_parts
-
-# ==================== LLM ENHANCEMENT =====================
-def oai_chat(messages, model="gpt-4o-mini", temperature=0.0, max_tokens=2000):
-    if not OPENAI_API_KEY: return None
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
-        return resp.choices[0].message.content
-    except Exception:
-        return None
-
-def llm_enhance_parts(pdf_bytes_list, merged_parts):
-    if not OPENAI_API_KEY or not pdf_bytes_list:
-        return merged_parts
-    try:
-        doc = safe_open_pdf(pdf_bytes_list[0])
-        raw_text = "\n".join([doc[p].get_text("text") for p in range(len(doc))])[:20000]
-    except Exception:
-        return merged_parts
-    system = "You are a USCIS form extractor. Return clean JSON only."
-    user = f"Extract parts/fields and options from this USCIS form:\n{raw_text}"
-    content = oai_chat([{"role":"system","content":system},{"role":"user","content":user}], max_tokens=4000)
-    if not content: return merged_parts
-    try:
-        data = json.loads(content[content.find("{"):content.rfind("}")+1])
-        for part in data.get("parts", []):
-            pname = part["name"]; fields = part.get("fields", [])
-            exist_ids = set(r["id"] for r in merged_parts.get(pname, []))
-            for f in fields:
-                fid, lbl = f.get("id"), normalize(f.get("label",""))
-                if fid and fid not in exist_ids:
-                    merged_parts.setdefault(pname, []).append({"id": fid, "label": lbl, "page": None})
-    except: pass
-    return merged_parts
 
 # ==================== UI =====================
 st.sidebar.header("Upload Inputs")
@@ -280,7 +268,3 @@ with tabs[2]:
     st.download_button("⬇️ Download Full Mappings JSON",
                        json.dumps(st.session_state["mappings"], indent=2),
                        "field_mappings.json", "application/json")
-
-    if st.button("✨ Run LLM Enhancement (optional)"):
-        merged = llm_enhance_parts(pdf_bytes_list, merged)
-        st.success("LLM enhancement applied. Reopen tabs to see updates.")
