@@ -774,5 +774,5 @@ def show_sprint_planning():
             height=150
         )
 
-if __n__ == "__main__":
+if __name__ == "__main__":
     main()
