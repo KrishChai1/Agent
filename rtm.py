@@ -10,7 +10,7 @@ import numpy as np
 # Page configuration
 st.set_page_config(
     page_title="SPLUS RTM Modernization Dashboard",
-    page_icon="🚀",
+    page_icon="K",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -1580,3 +1580,4 @@ def generate_epic_report():
 
 if __name__ == "__main__":
     main()
+
