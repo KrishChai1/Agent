@@ -879,7 +879,7 @@ def show_epics_user_stories():
     """EPICs and User Stories management"""
     st.header("EPICs & User Stories Management")
     
-    # Configuration controls
+    # Configuration controls - Single source of truth for contingency
     col1, col2, col3 = st.columns(3)
     with col1:
         st.session_state.config['cost_per_point'] = st.number_input(
@@ -891,18 +891,24 @@ def show_epics_user_stories():
             help="Adjust the cost per story point to see impact on total cost"
         )
     with col2:
+        # Single contingency slider that updates session state directly
         st.session_state.config['contingency_percent'] = st.slider(
             "Contingency %",
             min_value=10,
             max_value=30,
             value=st.session_state.config['contingency_percent'],
-            step=5
+            step=5,
+            help="Adjust contingency percentage"
         )
     with col3:
         epic_metrics = calculate_epic_metrics()
         total_points = sum(m['points'] for m in epic_metrics.values())
         st.metric("Total Story Points", f"{total_points:,}")
         st.metric("Estimated Dev Cost", f"${total_points * st.session_state.config['cost_per_point']:,.0f}")
+    
+    # Show updated total with contingency
+    costs = calculate_total_cost()
+    st.info(f"**Total Investment with {st.session_state.config['contingency_percent']}% Contingency: ${costs['total']:,.0f}**")
     
     # Tabs for different views
     tab1, tab2, tab3 = st.tabs(["EPIC List & Complexity", "EPICs, Capabilities & User Stories", "Edit User Stories"])
@@ -1102,24 +1108,23 @@ def show_cost_analysis():
     costs = calculate_total_cost()
     epic_metrics = calculate_epic_metrics()
     
-    # Cost controls
+    # Cost controls - Use session state values directly
     col1, col2 = st.columns(2)
     
     with col1:
-        new_contingency = st.slider(
+        # Contingency adjustment that updates session state
+        st.session_state.config['contingency_percent'] = st.slider(
             "Adjust Contingency %",
             min_value=10,
             max_value=30,
             value=st.session_state.config['contingency_percent'],
             step=5,
-            key="cost_contingency"
+            key="cost_contingency",
+            help="Changes here will affect total cost immediately"
         )
-        if new_contingency != st.session_state.config['contingency_percent']:
-            st.session_state.config['contingency_percent'] = new_contingency
-            st.rerun()
     
     with col2:
-        new_cost_per_point = st.number_input(
+        st.session_state.config['cost_per_point'] = st.number_input(
             "Cost per Story Point ($)",
             min_value=500,
             max_value=3000,
@@ -1127,9 +1132,12 @@ def show_cost_analysis():
             step=100,
             key="cost_per_point_slider"
         )
-        if new_cost_per_point != st.session_state.config['cost_per_point']:
-            st.session_state.config['cost_per_point'] = new_cost_per_point
-            st.rerun()
+    
+    # Recalculate costs after any changes
+    costs = calculate_total_cost()
+    
+    # Display updated total
+    st.success(f"**Updated Total Investment: ${costs['total']:,.0f}** (with {st.session_state.config['contingency_percent']}% contingency)")
     
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["Phase-wise Cost", "EPIC-wise Cost", "Story Point Analysis", "TCO"])
@@ -1268,6 +1276,9 @@ def show_cost_analysis():
     with tab4:
         st.subheader("Total Cost of Ownership")
         
+        # Refresh costs to ensure latest values
+        costs = calculate_total_cost()
+        
         # TCO breakdown
         col1, col2 = st.columns(2)
         
@@ -1276,7 +1287,8 @@ def show_cost_analysis():
             st.metric("Development", f"${costs['development']:,.0f}")
             st.metric("Infrastructure", f"${costs['infrastructure']:,.0f}")
             st.metric("Additional", f"${costs['additional']:,.0f}")
-            st.metric("Contingency", f"${costs['contingency']:,.0f}")
+            st.metric(f"Contingency ({st.session_state.config['contingency_percent']}%)", 
+                     f"${costs['contingency']:,.0f}")
             st.markdown("---")
             st.metric("**TOTAL**", f"${costs['total']:,.0f}")
         
@@ -1580,4 +1592,3 @@ def generate_epic_report():
 
 if __name__ == "__main__":
     main()
-
