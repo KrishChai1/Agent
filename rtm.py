@@ -7,7 +7,7 @@ import json
 from io import BytesIO
 import numpy as np
 
-# Page configuration with custom theme
+# Page configuration
 st.set_page_config(
     page_title="SPLUS RTM Modernization Dashboard",
     page_icon="🚀",
@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better UI
+# Custom CSS
 st.markdown("""
     <style>
     .main {
@@ -28,722 +28,739 @@ st.markdown("""
         height: 50px;
         padding-left: 20px;
         padding-right: 20px;
-        background-color: #f0f2f6;
-        border-radius: 5px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #1f77b4;
-        color: white;
     }
     div[data-testid="metric-container"] {
         background-color: #f0f2f6;
         border: 1px solid #cccccc;
         padding: 5px 15px;
         border-radius: 5px;
-        margin-bottom: 10px;
-    }
-    .stExpander {
-        background-color: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 5px;
-        margin-bottom: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state for configuration
-if 'config' not in st.session_state:
-    st.session_state.config = {
-        'program_duration': 24,  # Extended to 24 months for realistic timeline
-        'contingency_percent': 20,  # Increased contingency
-        'hourly_rates': {
-            'onsite': {
-                'Head of Technology': 140,
-                'Senior Technical Architect': 113,
-                'Technical Architect': 103,
-                'Project Manager': 103,
-                'Senior Developer': 87,
-                'Team Lead': 89,
-                'DevOps Engineer': 87,
-                'Business Analyst': 82,
-                'Integration Specialist': 89,
-                'Solution Architect': 120,
-                'Scrum Master': 95
-            },
-            'offshore': {
-                'Senior Developer': 23,
-                'Developer': 21,
-                'Junior Developer': 19,
-                'Integration Developer': 23,
-                'Tester': 20,
-                'Automation Tester': 22,
-                'Performance Tester': 22,
-                'DevOps Engineer': 25,
-                'Business Analyst': 18,
-                'Technical Lead': 28
-            }
-        },
-        'hours_per_month': 160,
-        'buffer_percent': 10  # Additional buffer for risk
-    }
-
-# Enhanced Phase configuration with realistic timeline
-PHASES = {
-    0: {
-        'name': 'Discovery & Foundation',
-        'duration': 3,  # Extended for proper setup
-        'description': 'Architecture design, infrastructure setup, team onboarding',
-        'deliverables': ['Cloud infrastructure', 'Development environment', 'CI/CD pipeline', 'Architecture blueprint'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Senior Technical Architect': 2,
-                'Solution Architect': 1,
-                'DevOps Engineer': 1
-            },
-            'offshore': {
-                'Senior Developer': 2,
-                'DevOps Engineer': 2,
-                'Technical Lead': 1
-            }
-        }
-    },
-    1: {
-        'name': 'Core Platform & Customer Management',
-        'duration': 4,  # Extended for complexity
-        'description': 'Customer account management, user administration, core services',
-        'deliverables': ['Customer Service', 'User Management', 'RBAC', 'API Gateway', 'CFW Portal'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Senior Technical Architect': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'Business Analyst': 1
-            },
-            'offshore': {
-                'Technical Lead': 2,
-                'Senior Developer': 3,
-                'Developer': 6,
-                'Tester': 3,
-                'DevOps Engineer': 1
-            }
-        }
-    },
-    2: {
-        'name': 'Order & Inventory Management',
-        'duration': 4,
-        'description': 'Order processing, inventory management, B2B integration',
-        'deliverables': ['Order Service', 'Inventory Service', 'Activity Board', 'Review Board', 'B2B Platform'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Senior Technical Architect': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'Integration Specialist': 1,
-                'Business Analyst': 1
-            },
-            'offshore': {
-                'Technical Lead': 2,
-                'Senior Developer': 4,
-                'Developer': 8,
-                'Integration Developer': 2,
-                'Tester': 4,
-                'Automation Tester': 2
-            }
-        }
-    },
-    3: {
-        'name': 'Routing & Transportation',
-        'duration': 4,
-        'description': 'MORO integration, routing optimization, carrier integration',
-        'deliverables': ['Routing Engine', 'MORO Integration', 'Carrier Services', 'Multi-modal Support'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Senior Technical Architect': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'Integration Specialist': 2
-            },
-            'offshore': {
-                'Technical Lead': 2,
-                'Senior Developer': 4,
-                'Developer': 6,
-                'Integration Developer': 3,
-                'Tester': 3,
-                'Automation Tester': 2
-            }
-        }
-    },
-    4: {
-        'name': 'Vendor & Driver Management',
-        'duration': 3,
-        'description': 'Vendor lifecycle, driver mobile app, job assignment',
-        'deliverables': ['Vendor Service', 'Driver Mobile App', 'Job Assignment', 'POD Management'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'Business Analyst': 1
-            },
-            'offshore': {
-                'Technical Lead': 2,
-                'Senior Developer': 3,
-                'Developer': 6,
-                'Tester': 3,
-                'Automation Tester': 1
-            }
-        }
-    },
-    5: {
-        'name': 'Billing & Financial Systems',
-        'duration': 3,
-        'description': 'Billing engine, rate management, financial integrations',
-        'deliverables': ['Billing Service', 'Rate Management', 'Storage Billing', 'E2K Integration'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'Integration Specialist': 1
-            },
-            'offshore': {
-                'Technical Lead': 1,
-                'Senior Developer': 3,
-                'Developer': 5,
-                'Integration Developer': 2,
-                'Tester': 3
-            }
-        }
-    },
-    6: {
-        'name': 'Integration & Notifications',
-        'duration': 2,
-        'description': 'System integrations, notification platform',
-        'deliverables': ['GIC/A2A Integration', 'EDI Management', 'WMS Integration', 'Notification Service'],
-        'resources': {
-            'onsite': {
-                'Technical Architect': 1,
-                'Integration Specialist': 2
-            },
-            'offshore': {
-                'Technical Lead': 1,
-                'Senior Developer': 2,
-                'Integration Developer': 3,
-                'Developer': 3,
-                'Tester': 2
-            }
-        }
-    },
-    7: {
-        'name': 'Advanced Features & Analytics',
-        'duration': 2,
-        'description': 'Analytics, reporting, service configuration',
-        'deliverables': ['Analytics Dashboard', 'Reporting Engine', 'Service Configuration', 'Geographic Services'],
-        'resources': {
-            'onsite': {
-                'Technical Architect': 1,
-                'Business Analyst': 1
-            },
-            'offshore': {
-                'Technical Lead': 1,
-                'Senior Developer': 2,
-                'Developer': 4,
-                'Tester': 2
-            }
-        }
-    },
-    8: {
-        'name': 'Testing, Migration & Deployment',
-        'duration': 3,
-        'description': 'End-to-end testing, data migration, production deployment',
-        'deliverables': ['Performance Testing', 'Data Migration', 'Production Deployment', 'Training'],
-        'resources': {
-            'onsite': {
-                'Head of Technology': 1,
-                'Technical Architect': 1,
-                'Project Manager': 1,
-                'DevOps Engineer': 1
-            },
-            'offshore': {
-                'Technical Lead': 2,
-                'Senior Developer': 2,
-                'Developer': 3,
-                'Performance Tester': 3,
-                'Automation Tester': 3,
-                'DevOps Engineer': 2
-            }
-        }
-    }
-}
-
-# Enhanced EPIC data with realistic complexity
-def initialize_epic_data():
+# Initialize comprehensive user stories data structure
+def initialize_user_stories_data():
     return {
         'EPIC-001': {
             'name': 'Customer Account Management',
             'priority': 'P0',
             'phase': 1,
             'complexity': 'High',
-            'risk': 'Medium',
-            'dependencies': [],
-            'estimated_months': 4,
-            'story_points': 183
+            'capabilities': {
+                'C1.1': {
+                    'name': 'Account Lifecycle Management',
+                    'stories': [
+                        {'id': 'US-001.1.1', 'title': 'Create customer accounts with all attributes', 'points': 13},
+                        {'id': 'US-001.1.2', 'title': 'Configure integrated/non-integrated warehouse settings', 'points': 8},
+                        {'id': 'US-001.1.3', 'title': 'Search accounts by number, company, location', 'points': 5},
+                        {'id': 'US-001.1.4', 'title': 'Manage billing details and payment methods', 'points': 8},
+                        {'id': 'US-001.1.5', 'title': 'View account dashboard with order metrics', 'points': 13}
+                    ]
+                },
+                'C1.2': {
+                    'name': 'User & Role Administration',
+                    'stories': [
+                        {'id': 'US-001.2.1', 'title': 'Create/edit/delete users with email validation', 'points': 13},
+                        {'id': 'US-001.2.2', 'title': 'Assign roles (Order Entry, Inventory, Account Editor)', 'points': 8},
+                        {'id': 'US-001.2.3', 'title': 'Configure account-level permissions matrix', 'points': 13},
+                        {'id': 'US-001.2.4', 'title': 'Bulk import/export users via CSV', 'points': 8},
+                        {'id': 'US-001.2.5', 'title': 'Enforce password policies and MFA', 'points': 5},
+                        {'id': 'US-001.2.6', 'title': 'Track login/logout events and permission changes', 'points': 8}
+                    ]
+                },
+                'C1.3': {
+                    'name': 'Affiliate & Branch Management',
+                    'stories': [
+                        {'id': 'US-001.3.1', 'title': 'Manage UPS affiliate agreements', 'points': 8},
+                        {'id': 'US-001.3.2', 'title': 'Create and manage affiliate regions', 'points': 5},
+                        {'id': 'US-001.3.3', 'title': 'Configure revenue branches', 'points': 8},
+                        {'id': 'US-001.3.4', 'title': 'Search affiliated partners by service', 'points': 13},
+                        {'id': 'US-001.3.5', 'title': 'Manage branch enable/disable status', 'points': 5}
+                    ]
+                },
+                'C1.4': {
+                    'name': 'Account Configuration',
+                    'stories': [
+                        {'id': 'US-001.4.1', 'title': 'Configure backorder preferences', 'points': 8},
+                        {'id': 'US-001.4.2', 'title': 'Set account-specific routing profiles', 'points': 13},
+                        {'id': 'US-001.4.3', 'title': 'Configure pick/pack profiles', 'points': 8},
+                        {'id': 'US-001.4.4', 'title': 'Set shipping restrictions', 'points': 5},
+                        {'id': 'US-001.4.5', 'title': 'Manage notification preferences', 'points': 5}
+                    ]
+                },
+                'C1.5': {
+                    'name': 'Customer Portal (CFW)',
+                    'stories': [
+                        {'id': 'US-001.5.1', 'title': 'Access CFW portal with SSO', 'points': 13},
+                        {'id': 'US-001.5.2', 'title': 'Update company contact information', 'points': 5},
+                        {'id': 'US-001.5.3', 'title': 'View contract terms and agreements', 'points': 8},
+                        {'id': 'US-001.5.4', 'title': 'Download account documents', 'points': 5}
+                    ]
+                }
+            }
         },
         'EPIC-002': {
             'name': 'Order Management & Processing',
             'priority': 'P0',
             'phase': 2,
             'complexity': 'Very High',
-            'risk': 'High',
-            'dependencies': ['EPIC-001'],
-            'estimated_months': 4,
-            'story_points': 267
+            'capabilities': {
+                'C2.1': {
+                    'name': 'Order Creation & Validation',
+                    'stories': [
+                        {'id': 'US-002.1.1', 'title': 'Create Inventory Orders for PS', 'points': 21},
+                        {'id': 'US-002.1.2', 'title': 'Create Transportation Item Orders', 'points': 13},
+                        {'id': 'US-002.1.3', 'title': 'Create Pure Transportation Orders', 'points': 13},
+                        {'id': 'US-002.1.4', 'title': 'Order wizard workflow', 'points': 21},
+                        {'id': 'US-002.1.5', 'title': 'Real-time order validation', 'points': 13},
+                        {'id': 'US-002.1.6', 'title': 'Save draft orders', 'points': 8},
+                        {'id': 'US-002.1.7', 'title': 'Clone existing orders', 'points': 5}
+                    ]
+                },
+                'C2.2': {
+                    'name': 'Activity Board Management',
+                    'stories': [
+                        {'id': 'US-002.2.1', 'title': 'View orders with color-coded alarms', 'points': 13},
+                        {'id': 'US-002.2.2', 'title': 'Filter Activity Board', 'points': 8},
+                        {'id': 'US-002.2.3', 'title': 'Save filter preferences', 'points': 5},
+                        {'id': 'US-002.2.4', 'title': 'Bulk actions on orders', 'points': 8},
+                        {'id': 'US-002.2.5', 'title': 'Real-time updates via WebSocket', 'points': 13},
+                        {'id': 'US-002.2.6', 'title': 'Export to Excel', 'points': 5}
+                    ]
+                },
+                'C2.3': {
+                    'name': 'Review Board Workflow',
+                    'stories': [
+                        {'id': 'US-002.3.1', 'title': 'View orders with violations', 'points': 8},
+                        {'id': 'US-002.3.2', 'title': 'Approve/reject with comments', 'points': 8},
+                        {'id': 'US-002.3.3', 'title': 'Configure review rules', 'points': 13},
+                        {'id': 'US-002.3.4', 'title': 'Set approval hierarchies', 'points': 8},
+                        {'id': 'US-002.3.5', 'title': 'Maintain audit trail', 'points': 5},
+                        {'id': 'US-002.3.6', 'title': 'Monitor Review Board metrics', 'points': 8}
+                    ]
+                },
+                'C2.4': {
+                    'name': 'Order Search & Tracking',
+                    'stories': [
+                        {'id': 'US-002.4.1', 'title': 'Search orders by criteria', 'points': 8},
+                        {'id': 'US-002.4.2', 'title': 'Real-time order tracking', 'points': 13},
+                        {'id': 'US-002.4.3', 'title': 'View order history', 'points': 5},
+                        {'id': 'US-002.4.4', 'title': 'PS/EC visibility', 'points': 8}
+                    ]
+                },
+                'C2.5': {
+                    'name': 'Recurring Orders',
+                    'stories': [
+                        {'id': 'US-002.5.1', 'title': 'Create recurring templates', 'points': 13},
+                        {'id': 'US-002.5.2', 'title': 'Auto-generate scheduled orders', 'points': 13},
+                        {'id': 'US-002.5.3', 'title': 'Modify/cancel recurring orders', 'points': 8}
+                    ]
+                }
+            }
         },
         'EPIC-003': {
             'name': 'Inventory Management System',
             'priority': 'P0',
             'phase': 2,
             'complexity': 'Very High',
-            'risk': 'High',
-            'dependencies': ['EPIC-001', 'EPIC-007'],
-            'estimated_months': 4,
-            'story_points': 239
+            'capabilities': {
+                'C3.1': {
+                    'name': 'Real-time Inventory Tracking',
+                    'stories': [
+                        {'id': 'US-003.1.1', 'title': 'Summary search with wildcards', 'points': 8},
+                        {'id': 'US-003.1.2', 'title': 'Detail search by lot/serial', 'points': 8},
+                        {'id': 'US-003.1.3', 'title': 'Display quantities', 'points': 13},
+                        {'id': 'US-003.1.4', 'title': 'View substitute items', 'points': 8},
+                        {'id': 'US-003.1.5', 'title': 'Response time < 2 seconds', 'points': 21}
+                    ]
+                },
+                'C3.2': {
+                    'name': 'Reservation Management',
+                    'stories': [
+                        {'id': 'US-003.2.1', 'title': 'Auto-reserve on order', 'points': 13},
+                        {'id': 'US-003.2.2', 'title': 'View reservations', 'points': 8},
+                        {'id': 'US-003.2.3', 'title': 'Manage expiry timeouts', 'points': 5},
+                        {'id': 'US-003.2.4', 'title': 'Release on cancellation', 'points': 8},
+                        {'id': 'US-003.2.5', 'title': 'Transfer between warehouses', 'points': 13},
+                        {'id': 'US-003.2.6', 'title': 'Prevent overselling', 'points': 13}
+                    ]
+                },
+                'C3.3': {
+                    'name': 'IMS Integration',
+                    'stories': [
+                        {'id': 'US-003.3.1', 'title': 'Real-time IMS sync', 'points': 21},
+                        {'id': 'US-003.3.2', 'title': 'Cache in Redis', 'points': 13},
+                        {'id': 'US-003.3.3', 'title': 'Handle IMS downtime', 'points': 13},
+                        {'id': 'US-003.3.4', 'title': 'Reconciliation process', 'points': 8},
+                        {'id': 'US-003.3.5', 'title': 'Receive update events', 'points': 13}
+                    ]
+                },
+                'C3.4': {
+                    'name': 'Backorder Processing',
+                    'stories': [
+                        {'id': 'US-003.4.1', 'title': 'Check backorder config', 'points': 8},
+                        {'id': 'US-003.4.2', 'title': 'Create backorders', 'points': 13},
+                        {'id': 'US-003.4.3', 'title': 'Send notifications', 'points': 8},
+                        {'id': 'US-003.4.4', 'title': 'Auto-fulfill on availability', 'points': 13},
+                        {'id': 'US-003.4.5', 'title': 'Priority queue management', 'points': 8}
+                    ]
+                }
+            }
         },
         'EPIC-004': {
             'name': 'Routing & Transportation Engine',
             'priority': 'P0',
             'phase': 3,
             'complexity': 'Very High',
-            'risk': 'Very High',
-            'dependencies': ['EPIC-002'],
-            'estimated_months': 4,
-            'story_points': 248
+            'capabilities': {
+                'C4.1': {
+                    'name': 'MORO Integration',
+                    'stories': [
+                        {'id': 'US-004.1.1', 'title': 'Send data to MORO', 'points': 21},
+                        {'id': 'US-004.1.2', 'title': 'Receive route options', 'points': 13},
+                        {'id': 'US-004.1.3', 'title': 'Calculate using postal codes', 'points': 8},
+                        {'id': 'US-004.1.4', 'title': 'Consider package dimensions', 'points': 8},
+                        {'id': 'US-004.1.5', 'title': 'TNT WebServices fallback', 'points': 13},
+                        {'id': 'US-004.1.6', 'title': 'Manual route override', 'points': 5}
+                    ]
+                },
+                'C4.2': {
+                    'name': 'Multi-modal Transportation',
+                    'stories': [
+                        {'id': 'US-004.2.1', 'title': 'Support air/ground/ocean', 'points': 13},
+                        {'id': 'US-004.2.2', 'title': 'Mode selection rules', 'points': 8},
+                        {'id': 'US-004.2.3', 'title': 'Multi-leg routes', 'points': 21},
+                        {'id': 'US-004.2.4', 'title': 'Cost/time per mode', 'points': 5}
+                    ]
+                },
+                'C4.3': {
+                    'name': 'Next Flight Out',
+                    'stories': [
+                        {'id': 'US-004.3.1', 'title': 'Manage airline codes', 'points': 8},
+                        {'id': 'US-004.3.2', 'title': 'Configure airports', 'points': 8},
+                        {'id': 'US-004.3.3', 'title': 'SSIM integration', 'points': 13},
+                        {'id': 'US-004.3.4', 'title': 'TFS integration', 'points': 13},
+                        {'id': 'US-004.3.5', 'title': 'Invalid flight ranges', 'points': 5},
+                        {'id': 'US-004.3.6', 'title': 'Flight alerts', 'points': 8}
+                    ]
+                },
+                'C4.4': {
+                    'name': 'Carrier Integration',
+                    'stories': [
+                        {'id': 'US-004.4.1', 'title': 'UPS Quantum View', 'points': 13},
+                        {'id': 'US-004.4.2', 'title': 'FedEx via EasyPost', 'points': 13},
+                        {'id': 'US-004.4.3', 'title': 'TNT direct integration', 'points': 13},
+                        {'id': 'US-004.4.4', 'title': 'Greyhound services', 'points': 8},
+                        {'id': 'US-004.4.5', 'title': 'Rate shopping', 'points': 13}
+                    ]
+                }
+            }
         },
         'EPIC-005': {
             'name': 'Vendor & Driver Management',
             'priority': 'P1',
             'phase': 4,
             'complexity': 'High',
-            'risk': 'Medium',
-            'dependencies': ['EPIC-001'],
-            'estimated_months': 3,
-            'story_points': 197
+            'capabilities': {
+                'C5.1': {
+                    'name': 'Vendor Lifecycle',
+                    'stories': [
+                        {'id': 'US-005.1.1', 'title': 'Register vendors', 'points': 13},
+                        {'id': 'US-005.1.2', 'title': 'Update vendor info', 'points': 8},
+                        {'id': 'US-005.1.3', 'title': 'Manage contracts', 'points': 8},
+                        {'id': 'US-005.1.4', 'title': 'Track performance', 'points': 13},
+                        {'id': 'US-005.1.5', 'title': 'Search vendors', 'points': 5},
+                        {'id': 'US-005.1.6', 'title': 'Activate/deactivate', 'points': 5}
+                    ]
+                },
+                'C5.2': {
+                    'name': 'Driver Operations',
+                    'stories': [
+                        {'id': 'US-005.2.1', 'title': 'Mobile notifications', 'points': 13},
+                        {'id': 'US-005.2.2', 'title': 'Accept/reject jobs', 'points': 8},
+                        {'id': 'US-005.2.3', 'title': 'View job details', 'points': 8},
+                        {'id': 'US-005.2.4', 'title': 'Update milestones', 'points': 13},
+                        {'id': 'US-005.2.5', 'title': 'Offline capability', 'points': 21},
+                        {'id': 'US-005.2.6', 'title': 'Real-time tracking', 'points': 13}
+                    ]
+                },
+                'C5.3': {
+                    'name': 'Job Assignment',
+                    'stories': [
+                        {'id': 'US-005.3.1', 'title': 'View driver status', 'points': 8},
+                        {'id': 'US-005.3.2', 'title': 'Match skills to jobs', 'points': 13},
+                        {'id': 'US-005.3.3', 'title': 'Bulk assignments', 'points': 8},
+                        {'id': 'US-005.3.4', 'title': 'Reassign jobs', 'points': 5},
+                        {'id': 'US-005.3.5', 'title': 'Auto-assign by proximity', 'points': 21}
+                    ]
+                },
+                'C5.4': {
+                    'name': 'POD Management',
+                    'stories': [
+                        {'id': 'US-005.4.1', 'title': 'Capture signature', 'points': 8},
+                        {'id': 'US-005.4.2', 'title': 'Capture photo', 'points': 8},
+                        {'id': 'US-005.4.3', 'title': 'Validate POD', 'points': 5},
+                        {'id': 'US-005.4.4', 'title': 'Send notifications', 'points': 5},
+                        {'id': 'US-005.4.5', 'title': 'Store for compliance', 'points': 8}
+                    ]
+                }
+            }
         },
         'EPIC-006': {
             'name': 'Billing & Financial Management',
             'priority': 'P1',
             'phase': 5,
             'complexity': 'High',
-            'risk': 'Medium',
-            'dependencies': ['EPIC-002', 'EPIC-003'],
-            'estimated_months': 3,
-            'story_points': 204
+            'capabilities': {
+                'C6.1': {
+                    'name': 'Rate Management',
+                    'stories': [
+                        {'id': 'US-006.1.1', 'title': 'Create revenue rates', 'points': 13},
+                        {'id': 'US-006.1.2', 'title': 'Create cost rates', 'points': 13},
+                        {'id': 'US-006.1.3', 'title': 'Rating attributes', 'points': 8},
+                        {'id': 'US-006.1.4', 'title': 'Service associations', 'points': 8},
+                        {'id': 'US-006.1.5', 'title': 'Effective dates', 'points': 8},
+                        {'id': 'US-006.1.6', 'title': 'Rate simulation', 'points': 13}
+                    ]
+                },
+                'C6.2': {
+                    'name': 'Billing Review',
+                    'stories': [
+                        {'id': 'US-006.2.1', 'title': 'Search by status', 'points': 8},
+                        {'id': 'US-006.2.2', 'title': 'View cost details', 'points': 5},
+                        {'id': 'US-006.2.3', 'title': 'Compare quoted/actual', 'points': 8},
+                        {'id': 'US-006.2.4', 'title': 'Edit failed billing', 'points': 13},
+                        {'id': 'US-006.2.5', 'title': 'Bulk resubmission', 'points': 8},
+                        {'id': 'US-006.2.6', 'title': 'Exception reporting', 'points': 8}
+                    ]
+                },
+                'C6.3': {
+                    'name': 'Storage Billing',
+                    'stories': [
+                        {'id': 'US-006.3.1', 'title': 'Configure accounts', 'points': 8},
+                        {'id': 'US-006.3.2', 'title': 'Set frequency', 'points': 5},
+                        {'id': 'US-006.3.3', 'title': 'Calculate by UOM', 'points': 13},
+                        {'id': 'US-006.3.4', 'title': 'Generate invoices', 'points': 13},
+                        {'id': 'US-006.3.5', 'title': 'GBS integration', 'points': 13}
+                    ]
+                },
+                'C6.4': {
+                    'name': 'Accrual Processing',
+                    'stories': [
+                        {'id': 'US-006.4.1', 'title': 'Run extracts', 'points': 8},
+                        {'id': 'US-006.4.2', 'title': 'Cost accruals', 'points': 13},
+                        {'id': 'US-006.4.3', 'title': 'Revenue accruals', 'points': 13},
+                        {'id': 'US-006.4.4', 'title': 'History reports', 'points': 5},
+                        {'id': 'US-006.4.5', 'title': 'Settlement processing', 'points': 21}
+                    ]
+                }
+            }
         },
         'EPIC-007': {
             'name': 'Integration Platform',
             'priority': 'P0',
             'phase': 2,
             'complexity': 'Very High',
-            'risk': 'Very High',
-            'dependencies': [],
-            'estimated_months': 4,
-            'story_points': 276
+            'capabilities': {
+                'C7.1': {
+                    'name': 'GIC/A2A Integration',
+                    'stories': [
+                        {'id': 'US-007.1.1', 'title': 'Receive XML from GIC', 'points': 13},
+                        {'id': 'US-007.1.2', 'title': 'A2A transformation', 'points': 21},
+                        {'id': 'US-007.1.3', 'title': 'Publish events', 'points': 13},
+                        {'id': 'US-007.1.4', 'title': 'Status updates', 'points': 8},
+                        {'id': 'US-007.1.5', 'title': 'Audit trail', 'points': 8},
+                        {'id': 'US-007.1.6', 'title': 'Retry mechanisms', 'points': 13}
+                    ]
+                },
+                'C7.2': {
+                    'name': 'B2B Processing',
+                    'stories': [
+                        {'id': 'US-007.2.1', 'title': '90% B2B automation', 'points': 21},
+                        {'id': 'US-007.2.2', 'title': 'Customer XML formats', 'points': 13},
+                        {'id': 'US-007.2.3', 'title': 'Validate orders', 'points': 13},
+                        {'id': 'US-007.2.4', 'title': 'Queue processing', 'points': 8},
+                        {'id': 'US-007.2.5', 'title': 'Acknowledgments', 'points': 8}
+                    ]
+                },
+                'C7.3': {
+                    'name': 'EDI Management',
+                    'stories': [
+                        {'id': 'US-007.3.1', 'title': 'Generate EDI', 'points': 13},
+                        {'id': 'US-007.3.2', 'title': 'Route via A2A', 'points': 8},
+                        {'id': 'US-007.3.3', 'title': 'Customer formats', 'points': 13},
+                        {'id': 'US-007.3.4', 'title': 'Handle failures', 'points': 8},
+                        {'id': 'US-007.3.5', 'title': 'Audit logs', 'points': 5}
+                    ]
+                },
+                'C7.4': {
+                    'name': 'WMS Integration',
+                    'stories': [
+                        {'id': 'US-007.4.1', 'title': 'Send fulfillment requests', 'points': 13},
+                        {'id': 'US-007.4.2', 'title': 'Receive updates', 'points': 13},
+                        {'id': 'US-007.4.3', 'title': 'Track operations', 'points': 8},
+                        {'id': 'US-007.4.4', 'title': 'Handle exceptions', 'points': 8},
+                        {'id': 'US-007.4.5', 'title': 'Multiple instances', 'points': 13}
+                    ]
+                }
+            }
         },
         'EPIC-008': {
             'name': 'Notification & Communication',
             'priority': 'P1',
             'phase': 6,
             'complexity': 'Medium',
-            'risk': 'Low',
-            'dependencies': ['EPIC-007'],
-            'estimated_months': 2,
-            'story_points': 134
+            'capabilities': {
+                'C8.1': {
+                    'name': 'Event Notifications',
+                    'stories': [
+                        {'id': 'US-008.1.1', 'title': 'Backorder notifications', 'points': 8},
+                        {'id': 'US-008.1.2', 'title': 'Order confirmations', 'points': 5},
+                        {'id': 'US-008.1.3', 'title': 'Tracking notifications', 'points': 8},
+                        {'id': 'US-008.1.4', 'title': 'Delivery updates', 'points': 8},
+                        {'id': 'US-008.1.5', 'title': 'Attempted delivery', 'points': 8},
+                        {'id': 'US-008.1.6', 'title': 'Flight alerts', 'points': 8}
+                    ]
+                },
+                'C8.2': {
+                    'name': 'Multi-Channel',
+                    'stories': [
+                        {'id': 'US-008.2.1', 'title': 'SendGrid email', 'points': 8},
+                        {'id': 'US-008.2.2', 'title': 'Twilio SMS', 'points': 8},
+                        {'id': 'US-008.2.3', 'title': 'Push notifications', 'points': 13},
+                        {'id': 'US-008.2.4', 'title': 'In-app notifications', 'points': 8},
+                        {'id': 'US-008.2.5', 'title': 'Channel preferences', 'points': 5},
+                        {'id': 'US-008.2.6', 'title': 'Voice notifications', 'points': 13}
+                    ]
+                }
+            }
         },
         'EPIC-009': {
             'name': 'Service & Activity Configuration',
             'priority': 'P2',
             'phase': 7,
             'complexity': 'Medium',
-            'risk': 'Low',
-            'dependencies': ['EPIC-002'],
-            'estimated_months': 2,
-            'story_points': 112
+            'capabilities': {
+                'C9.1': {
+                    'name': 'Service Management',
+                    'stories': [
+                        {'id': 'US-009.1.1', 'title': 'Create services', 'points': 5},
+                        {'id': 'US-009.1.2', 'title': 'Define vendor types', 'points': 8},
+                        {'id': 'US-009.1.3', 'title': 'Eligibility criteria', 'points': 8},
+                        {'id': 'US-009.1.4', 'title': 'Service pricing', 'points': 13},
+                        {'id': 'US-009.1.5', 'title': 'Enable/disable', 'points': 5}
+                    ]
+                },
+                'C9.2': {
+                    'name': 'Activity Config',
+                    'stories': [
+                        {'id': 'US-009.2.1', 'title': 'Add activities', 'points': 8},
+                        {'id': 'US-009.2.2', 'title': 'Set sequence', 'points': 13},
+                        {'id': 'US-009.2.3', 'title': 'Define attributes', 'points': 8},
+                        {'id': 'US-009.2.4', 'title': 'Track completion', 'points': 8},
+                        {'id': 'US-009.2.5', 'title': 'Execution rules', 'points': 13}
+                    ]
+                },
+                'C9.3': {
+                    'name': 'Alarm Management',
+                    'stories': [
+                        {'id': 'US-009.3.1', 'title': 'Yellow alarms', 'points': 5},
+                        {'id': 'US-009.3.2', 'title': 'Red alarms', 'points': 5},
+                        {'id': 'US-009.3.3', 'title': 'Configure alerts', 'points': 8},
+                        {'id': 'US-009.3.4', 'title': 'Enable/disable', 'points': 5},
+                        {'id': 'US-009.3.5', 'title': 'Monitoring dashboard', 'points': 13}
+                    ]
+                }
+            }
         },
         'EPIC-010': {
             'name': 'Geographic & Location Services',
             'priority': 'P2',
             'phase': 7,
             'complexity': 'Low',
-            'risk': 'Low',
-            'dependencies': [],
-            'estimated_months': 1,
-            'story_points': 68
+            'capabilities': {
+                'C10.1': {
+                    'name': 'Geographic Config',
+                    'stories': [
+                        {'id': 'US-010.1.1', 'title': 'Configure countries', 'points': 8},
+                        {'id': 'US-010.1.2', 'title': 'Manage zip codes', 'points': 8},
+                        {'id': 'US-010.1.3', 'title': 'Shared zones', 'points': 8},
+                        {'id': 'US-010.1.4', 'title': 'Operating hours', 'points': 5},
+                        {'id': 'US-010.1.5', 'title': 'Hierarchies', 'points': 13}
+                    ]
+                },
+                'C10.2': {
+                    'name': 'PUDO Management',
+                    'stories': [
+                        {'id': 'US-010.2.1', 'title': 'Create locations', 'points': 8},
+                        {'id': 'US-010.2.2', 'title': 'Search PUDO', 'points': 5},
+                        {'id': 'US-010.2.3', 'title': 'Validate availability', 'points': 8},
+                        {'id': 'US-010.2.4', 'title': 'Operating hours', 'points': 5}
+                    ]
+                }
+            }
         },
         'EPIC-011': {
             'name': 'Platform Infrastructure & Security',
             'priority': 'P0',
             'phase': 0,
             'complexity': 'Very High',
-            'risk': 'Medium',
-            'dependencies': [],
-            'estimated_months': 3,
-            'story_points': 181
+            'capabilities': {
+                'C11.1': {
+                    'name': 'Cloud Infrastructure',
+                    'stories': [
+                        {'id': 'US-011.1.1', 'title': 'Azure resource groups', 'points': 13},
+                        {'id': 'US-011.1.2', 'title': 'Hub-Spoke networks', 'points': 13},
+                        {'id': 'US-011.1.3', 'title': 'Firewall and NSGs', 'points': 8},
+                        {'id': 'US-011.1.4', 'title': 'AKS cluster setup', 'points': 21},
+                        {'id': 'US-011.1.5', 'title': 'Istio service mesh', 'points': 13}
+                    ]
+                },
+                'C11.2': {
+                    'name': 'Security',
+                    'stories': [
+                        {'id': 'US-011.2.1', 'title': 'Azure AD B2C', 'points': 13},
+                        {'id': 'US-011.2.2', 'title': 'Key Vault setup', 'points': 8},
+                        {'id': 'US-011.2.3', 'title': 'RBAC policies', 'points': 13},
+                        {'id': 'US-011.2.4', 'title': 'Managed identities', 'points': 8},
+                        {'id': 'US-011.2.5', 'title': 'Secret rotation', 'points': 8}
+                    ]
+                },
+                'C11.3': {
+                    'name': 'DevOps',
+                    'stories': [
+                        {'id': 'US-011.3.1', 'title': 'CI/CD pipelines', 'points': 21},
+                        {'id': 'US-011.3.2', 'title': 'Blue-green deployment', 'points': 13},
+                        {'id': 'US-011.3.3', 'title': 'Automated testing', 'points': 13},
+                        {'id': 'US-011.3.4', 'title': 'App Insights setup', 'points': 8},
+                        {'id': 'US-011.3.5', 'title': 'Distributed tracing', 'points': 8}
+                    ]
+                }
+            }
         },
         'EPIC-012': {
             'name': 'Reporting & Analytics',
             'priority': 'P2',
             'phase': 7,
             'complexity': 'Medium',
-            'risk': 'Low',
-            'dependencies': ['EPIC-002', 'EPIC-003'],
-            'estimated_months': 2,
-            'story_points': 95
+            'capabilities': {
+                'C12.1': {
+                    'name': 'Operational Reports',
+                    'stories': [
+                        {'id': 'US-012.1.1', 'title': 'Order volume reports', 'points': 8},
+                        {'id': 'US-012.1.2', 'title': 'Performance dashboard', 'points': 13},
+                        {'id': 'US-012.1.3', 'title': 'SLA compliance', 'points': 8},
+                        {'id': 'US-012.1.4', 'title': 'Exception reports', 'points': 8},
+                        {'id': 'US-012.1.5', 'title': 'Inventory analysis', 'points': 8}
+                    ]
+                },
+                'C12.2': {
+                    'name': 'Financial Analytics',
+                    'stories': [
+                        {'id': 'US-012.2.1', 'title': 'Revenue analysis', 'points': 13},
+                        {'id': 'US-012.2.2', 'title': 'Billing reconciliation', 'points': 8},
+                        {'id': 'US-012.2.3', 'title': 'Profitability reports', 'points': 13},
+                        {'id': 'US-012.2.4', 'title': 'Variance analysis', 'points': 8},
+                        {'id': 'US-012.2.5', 'title': 'Storage analytics', 'points': 8}
+                    ]
+                }
+            }
         },
         'EPIC-NFR': {
             'name': 'Non-Functional Requirements',
             'priority': 'P0',
             'phase': 8,
             'complexity': 'Very High',
-            'risk': 'High',
-            'dependencies': ['ALL'],
-            'estimated_months': 3,
-            'story_points': 168
+            'capabilities': {
+                'CNFR.1': {
+                    'name': 'Performance',
+                    'stories': [
+                        {'id': 'US-NFR.1.1', 'title': 'API < 200ms', 'points': 21},
+                        {'id': 'US-NFR.1.2', 'title': '10K orders/hour', 'points': 21},
+                        {'id': 'US-NFR.1.3', 'title': '1000+ concurrent', 'points': 13},
+                        {'id': 'US-NFR.1.4', 'title': 'Page < 2 seconds', 'points': 13}
+                    ]
+                },
+                'CNFR.2': {
+                    'name': 'Security',
+                    'stories': [
+                        {'id': 'US-NFR.2.1', 'title': 'PCI DSS compliance', 'points': 21},
+                        {'id': 'US-NFR.2.2', 'title': 'SOC 2 Type II', 'points': 21},
+                        {'id': 'US-NFR.2.3', 'title': 'GDPR compliance', 'points': 13},
+                        {'id': 'US-NFR.2.4', 'title': 'OWASP Top 10', 'points': 13}
+                    ]
+                },
+                'CNFR.3': {
+                    'name': 'Reliability',
+                    'stories': [
+                        {'id': 'US-NFR.3.1', 'title': '99.95% uptime', 'points': 21},
+                        {'id': 'US-NFR.3.2', 'title': 'RTO/RPO targets', 'points': 21},
+                        {'id': 'US-NFR.3.3', 'title': 'Multi-region', 'points': 21},
+                        {'id': 'US-NFR.3.4', 'title': 'Auto-failover', 'points': 13}
+                    ]
+                }
+            }
         }
     }
 
+# Configuration
+PHASES = {
+    0: {'name': 'Discovery & Foundation', 'duration': 3, 'base_cost': 384000},
+    1: {'name': 'Core Platform & Customer', 'duration': 4, 'base_cost': 768000},
+    2: {'name': 'Order & Inventory', 'duration': 4, 'base_cost': 1152000},
+    3: {'name': 'Routing & Transportation', 'duration': 4, 'base_cost': 1088000},
+    4: {'name': 'Vendor & Driver', 'duration': 3, 'base_cost': 576000},
+    5: {'name': 'Billing & Financial', 'duration': 3, 'base_cost': 504000},
+    6: {'name': 'Integration & Notifications', 'duration': 2, 'base_cost': 256000},
+    7: {'name': 'Advanced Features', 'duration': 2, 'base_cost': 192000},
+    8: {'name': 'Testing & Migration', 'duration': 3, 'base_cost': 456000}
+}
+
 # Initialize session state
-if 'epic_data' not in st.session_state:
-    st.session_state.epic_data = initialize_epic_data()
+if 'user_stories_data' not in st.session_state:
+    st.session_state.user_stories_data = initialize_user_stories_data()
 
-def calculate_phase_cost(phase_id):
-    """Calculate detailed cost for a phase"""
-    phase = PHASES[phase_id]
-    resources = phase['resources']
-    duration = phase['duration']
-    hours_per_month = st.session_state.config['hours_per_month']
-    
-    onsite_cost = 0
-    offshore_cost = 0
-    
-    # Calculate onsite costs
-    for role, count in resources.get('onsite', {}).items():
-        rate = st.session_state.config['hourly_rates']['onsite'].get(role, 100)
-        onsite_cost += rate * count * hours_per_month * duration
-    
-    # Calculate offshore costs
-    for role, count in resources.get('offshore', {}).items():
-        rate = st.session_state.config['hourly_rates']['offshore'].get(role, 20)
-        offshore_cost += rate * count * hours_per_month * duration
-    
-    return {
-        'onsite': onsite_cost,
-        'offshore': offshore_cost,
-        'total': onsite_cost + offshore_cost,
-        'duration': duration,
-        'team_size': sum(resources.get('onsite', {}).values()) + sum(resources.get('offshore', {}).values())
+if 'config' not in st.session_state:
+    st.session_state.config = {
+        'contingency_percent': 20,
+        'cost_per_point': 1500,  # Base cost per story point
+        'infrastructure_monthly': 23000,
+        'program_duration': 24
     }
 
-def calculate_total_program_cost():
-    """Calculate total program cost with all components"""
-    development_cost = sum(calculate_phase_cost(i)['total'] for i in range(9))
+def calculate_epic_metrics():
+    """Calculate metrics for each EPIC"""
+    metrics = {}
+    for epic_id, epic in st.session_state.user_stories_data.items():
+        total_points = 0
+        total_stories = 0
+        capabilities_count = len(epic['capabilities'])
+        
+        for cap in epic['capabilities'].values():
+            stories = cap['stories']
+            total_stories += len(stories)
+            total_points += sum(story['points'] for story in stories)
+        
+        metrics[epic_id] = {
+            'name': epic['name'],
+            'priority': epic['priority'],
+            'phase': epic['phase'],
+            'complexity': epic['complexity'],
+            'capabilities': capabilities_count,
+            'stories': total_stories,
+            'points': total_points,
+            'estimated_cost': total_points * st.session_state.config['cost_per_point']
+        }
     
-    # Infrastructure costs (monthly)
-    infrastructure_monthly = {
-        'Azure_AKS': 8000,
-        'Azure_Storage': 2000,
-        'Azure_Networking': 3000,
-        'Monitoring': 2000,
-        'Security_Tools': 3000,
-        'Licenses': 5000
-    }
+    return metrics
+
+def calculate_total_cost():
+    """Calculate total program cost based on story points"""
+    epic_metrics = calculate_epic_metrics()
     
-    total_infra = sum(infrastructure_monthly.values()) * st.session_state.config['program_duration']
+    # Development cost from story points
+    total_points = sum(m['points'] for m in epic_metrics.values())
+    development_cost = total_points * st.session_state.config['cost_per_point']
+    
+    # Infrastructure cost
+    infrastructure_cost = st.session_state.config['infrastructure_monthly'] * st.session_state.config['program_duration']
     
     # Additional costs
-    additional_costs = {
-        'Training': 50000,
-        'Documentation': 30000,
-        'Third_Party_Integrations': 100000,
-        'Data_Migration_Tools': 75000,
-        'Testing_Tools': 40000,
-        'Consulting': 150000
-    }
+    additional_costs = 445000  # Fixed additional costs
     
-    subtotal = development_cost + total_infra + sum(additional_costs.values())
+    # Calculate contingency
+    subtotal = development_cost + infrastructure_cost + additional_costs
     contingency = subtotal * (st.session_state.config['contingency_percent'] / 100)
     
     return {
         'development': development_cost,
-        'infrastructure': total_infra,
-        'additional': sum(additional_costs.values()),
+        'infrastructure': infrastructure_cost,
+        'additional': additional_costs,
         'subtotal': subtotal,
         'contingency': contingency,
         'total': subtotal + contingency,
-        'infrastructure_breakdown': infrastructure_monthly,
-        'additional_breakdown': additional_costs
+        'total_points': total_points
     }
 
 def main():
-    # Enhanced header with logo placeholder
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col2:
-        st.title("🚀 SPLUS RTM Platform Modernization")
-        st.markdown("**Enterprise Transportation Management System Transformation**")
+    st.title("SPLUS RTM Platform Modernization Dashboard")
+    st.markdown("**Complete Program Management with User Stories**")
     
-    # Top-level navigation
-    selected_page = st.sidebar.radio(
-        "📍 Navigation",
-        ["🏠 Executive Overview", "💰 Cost Analysis", "📊 Program Planning", 
-         "📋 EPICs & Stories", "👥 Resource Management", "📈 Analytics & Reports",
-         "⚙️ Configuration"]
+    # Sidebar navigation
+    page = st.sidebar.radio(
+        "Navigation",
+        ["Executive Overview", "EPICs & User Stories", "Cost Analysis", 
+         "Timeline & Planning", "Reports"]
     )
     
-    # Info box
-    with st.sidebar:
-        st.info(f"""
-        **Program Status**
-        - Duration: {st.session_state.config['program_duration']} months
-        - Phases: 9
-        - EPICs: {len(st.session_state.epic_data)}
-        - Total Points: {sum(e['story_points'] for e in st.session_state.epic_data.values())}
-        """)
+    # Display metrics in sidebar
+    costs = calculate_total_cost()
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**Program Metrics**")
+    st.sidebar.metric("Total Investment", f"${costs['total']:,.0f}")
+    st.sidebar.metric("Total Story Points", f"{costs['total_points']:,}")
+    st.sidebar.metric("EPICs", len(st.session_state.user_stories_data))
     
-    if selected_page == "🏠 Executive Overview":
+    if page == "Executive Overview":
         show_executive_overview()
-    elif selected_page == "💰 Cost Analysis":
+    elif page == "EPICs & User Stories":
+        show_epics_user_stories()
+    elif page == "Cost Analysis":
         show_cost_analysis()
-    elif selected_page == "📊 Program Planning":
-        show_program_planning()
-    elif selected_page == "📋 EPICs & Stories":
-        show_epics_stories()
-    elif selected_page == "👥 Resource Management":
-        show_resource_management()
-    elif selected_page == "📈 Analytics & Reports":
-        show_analytics_reports()
-    elif selected_page == "⚙️ Configuration":
-        show_configuration()
+    elif page == "Timeline & Planning":
+        show_timeline_planning()
+    elif page == "Reports":
+        show_reports()
 
 def show_executive_overview():
-    """Executive dashboard with key metrics"""
-    st.header("🏠 Executive Overview")
+    """Executive dashboard"""
+    st.header("Executive Overview")
     
     # Calculate metrics
-    total_costs = calculate_total_program_cost()
+    epic_metrics = calculate_epic_metrics()
+    costs = calculate_total_cost()
     
-    # KPI Cards
-    col1, col2, col3, col4 = st.columns(4)
+    # Key metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
-        st.metric(
-            "Total Investment",
-            f"${total_costs['total']:,.0f}",
-            f"Incl. {st.session_state.config['contingency_percent']}% contingency"
-        )
-    
+        st.metric("Total Investment", f"${costs['total']:,.0f}")
     with col2:
-        st.metric(
-            "Development Cost",
-            f"${total_costs['development']:,.0f}",
-            f"{(total_costs['development']/total_costs['total']*100):.0f}% of total"
-        )
-    
+        st.metric("Development Cost", f"${costs['development']:,.0f}")
     with col3:
-        monthly_burn = total_costs['total'] / st.session_state.config['program_duration']
-        st.metric(
-            "Monthly Burn Rate",
-            f"${monthly_burn:,.0f}",
-            "Average per month"
-        )
-    
+        st.metric("Story Points", f"{costs['total_points']:,}")
     with col4:
-        roi_annual = 5500000  # $5.5M annual benefit
-        payback = total_costs['total'] / roi_annual * 12
-        st.metric(
-            "Payback Period",
-            f"{payback:.1f} months",
-            "Post go-live"
-        )
+        st.metric("Cost per Point", f"${st.session_state.config['cost_per_point']:,}")
+    with col5:
+        st.metric("Contingency", f"{st.session_state.config['contingency_percent']}%")
     
     # Tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Phase Overview", "💵 Cost Breakdown", "⏱️ Timeline", "🎯 Benefits"])
+    tab1, tab2, tab3, tab4 = st.tabs(["EPIC Overview", "Complexity Analysis", "Phase Distribution", "Cost Breakdown"])
     
     with tab1:
-        # Phase overview chart
-        phase_data = []
-        for i in range(9):
-            cost = calculate_phase_cost(i)
-            phase_data.append({
-                'Phase': f"Phase {i}",
-                'Name': PHASES[i]['name'],
-                'Cost': cost['total'],
-                'Duration': PHASES[i]['duration'],
-                'Team Size': cost['team_size']
+        st.subheader("EPIC Summary")
+        
+        # Create summary dataframe
+        summary_data = []
+        for epic_id, metrics in epic_metrics.items():
+            summary_data.append({
+                'EPIC': epic_id,
+                'Name': metrics['name'],
+                'Priority': metrics['priority'],
+                'Complexity': metrics['complexity'],
+                'Phase': metrics['phase'],
+                'Capabilities': metrics['capabilities'],
+                'User Stories': metrics['stories'],
+                'Story Points': metrics['points'],
+                'Estimated Cost': metrics['estimated_cost']
             })
         
-        df_phases = pd.DataFrame(phase_data)
+        df_summary = pd.DataFrame(summary_data)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            fig = px.bar(df_phases, x='Phase', y='Cost', 
-                        title='Cost by Phase',
-                        hover_data=['Name', 'Duration', 'Team Size'])
-            fig.update_traces(marker_color='lightblue')
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = px.pie(df_phases, values='Duration', names='Name',
-                        title='Duration Distribution (Months)')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with tab2:
-        # Cost breakdown
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Cost Components")
-            cost_breakdown = {
-                'Development': total_costs['development'],
-                'Infrastructure': total_costs['infrastructure'],
-                'Additional': total_costs['additional'],
-                'Contingency': total_costs['contingency']
-            }
-            
-            fig = go.Figure(data=[
-                go.Bar(x=list(cost_breakdown.keys()), 
-                      y=list(cost_breakdown.values()),
-                      text=[f"${v:,.0f}" for v in cost_breakdown.values()],
-                      textposition='auto',
-                      marker_color=['blue', 'green', 'orange', 'red'])
-            ])
-            fig.update_layout(title="Cost Components Breakdown")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.subheader("Monthly Infrastructure Costs")
-            infra_df = pd.DataFrame([
-                {'Component': k.replace('_', ' '), 'Monthly Cost': v}
-                for k, v in total_costs['infrastructure_breakdown'].items()
-            ])
-            infra_df['Total (24 months)'] = infra_df['Monthly Cost'] * 24
-            st.dataframe(infra_df, use_container_width=True, hide_index=True)
-    
-    with tab3:
-        # Timeline visualization
-        st.subheader("Program Timeline")
-        
-        timeline_data = []
-        start_date = datetime(2024, 1, 1)
-        
-        for i in range(9):
-            phase = PHASES[i]
-            end_date = start_date + timedelta(days=phase['duration'] * 30)
-            timeline_data.append({
-                'Phase': f"Phase {i}: {phase['name']}",
-                'Start': start_date,
-                'End': end_date,
-                'Duration': f"{phase['duration']} months"
-            })
-            start_date = end_date
-        
-        df_timeline = pd.DataFrame(timeline_data)
-        
-        fig = px.timeline(df_timeline, x_start="Start", x_end="End", y="Phase",
-                         title="24-Month Implementation Timeline",
-                         hover_data=['Duration'])
-        fig.update_yaxes(autorange="reversed")
-        fig.update_layout(height=500)
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tab4:
-        # Benefits realization
-        st.subheader("Benefits Realization")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Annual Benefits")
-            benefits = {
-                'Operational Efficiency': 2000000,
-                'Infrastructure Savings': 500000,
-                'Support Cost Reduction': 300000,
-                'Increased Revenue': 2500000,
-                'Penalty Avoidance': 200000
-            }
-            
-            for benefit, value in benefits.items():
-                st.metric(benefit, f"${value:,.0f}")
-        
-        with col2:
-            # ROI projection chart
-            years = list(range(6))
-            investment = total_costs['total']
-            annual_benefit = sum(benefits.values())
-            cumulative_benefit = [annual_benefit * i - investment for i in years]
-            
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=years, y=cumulative_benefit,
-                                    mode='lines+markers',
-                                    name='Cumulative Benefit',
-                                    line=dict(width=3)))
-            fig.add_hline(y=0, line_dash="dash", line_color="red")
-            fig.update_layout(title="ROI Projection (5 Years)",
-                            xaxis_title="Years",
-                            yaxis_title="Cumulative Benefit ($)")
-            st.plotly_chart(fig, use_container_width=True)
-
-def show_cost_analysis():
-    """Detailed cost analysis page"""
-    st.header("💰 Cost Analysis")
-    
-    # Contingency slider at the top
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        new_contingency = st.slider(
-            "Adjust Contingency Percentage",
-            min_value=10,
-            max_value=30,
-            value=st.session_state.config['contingency_percent'],
-            step=5,
-            help="Adjust contingency to see impact on total cost"
-        )
-        if new_contingency != st.session_state.config['contingency_percent']:
-            st.session_state.config['contingency_percent'] = new_contingency
-            st.rerun()
-    
-    # Tabs for different cost views
-    tab1, tab2, tab3, tab4 = st.tabs(["Phase Costs", "Resource Costs", "Infrastructure", "TCO Analysis"])
-    
-    with tab1:
-        st.subheader("Phase-by-Phase Cost Breakdown")
-        
-        phase_costs = []
-        for i in range(9):
-            cost = calculate_phase_cost(i)
-            phase = PHASES[i]
-            phase_costs.append({
-                'Phase': i,
-                'Name': phase['name'],
-                'Duration (months)': phase['duration'],
-                'Onsite Cost': cost['onsite'],
-                'Offshore Cost': cost['offshore'],
-                'Total Cost': cost['total'],
-                'Team Size': cost['team_size'],
-                'Cost/Month': cost['total'] / phase['duration'] if phase['duration'] > 0 else 0
-            })
-        
-        df_phase_costs = pd.DataFrame(phase_costs)
-        
-        # Display editable dataframe
+        # Display summary table
         st.dataframe(
-            df_phase_costs.style.format({
-                'Onsite Cost': '${:,.0f}',
-                'Offshore Cost': '${:,.0f}',
-                'Total Cost': '${:,.0f}',
-                'Cost/Month': '${:,.0f}'
+            df_summary.style.format({
+                'Estimated Cost': '${:,.0f}'
             }),
             use_container_width=True,
             hide_index=True
@@ -753,966 +770,813 @@ def show_cost_analysis():
         col1, col2 = st.columns(2)
         
         with col1:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name='Onsite', x=df_phase_costs['Phase'], 
-                               y=df_phase_costs['Onsite Cost']))
-            fig.add_trace(go.Bar(name='Offshore', x=df_phase_costs['Phase'], 
-                               y=df_phase_costs['Offshore Cost']))
-            fig.update_layout(barmode='stack', title='Onsite vs Offshore Cost Distribution',
-                            xaxis_title='Phase', yaxis_title='Cost ($)')
+            # Story points by EPIC
+            fig = px.bar(df_summary, x='EPIC', y='Story Points', 
+                        title='Story Points by EPIC',
+                        hover_data=['Name', 'Complexity'])
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # Cost efficiency metrics
-            total_onsite = df_phase_costs['Onsite Cost'].sum()
-            total_offshore = df_phase_costs['Offshore Cost'].sum()
-            offshore_ratio = total_offshore / (total_onsite + total_offshore) * 100
-            
-            st.info(f"""
-            **Cost Efficiency Metrics**
-            - Total Onsite: ${total_onsite:,.0f}
-            - Total Offshore: ${total_offshore:,.0f}
-            - Offshore Ratio: {offshore_ratio:.1f}%
-            - Blended Rate: ${(total_onsite + total_offshore) / (24 * 160 * 20):.0f}/hr
-            """)
-            
-            # Phase cost trend
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_phase_costs['Phase'], 
-                                    y=df_phase_costs['Cost/Month'],
-                                    mode='lines+markers',
-                                    name='Monthly Burn Rate'))
-            fig.update_layout(title='Monthly Burn Rate by Phase',
-                            xaxis_title='Phase', yaxis_title='Cost/Month ($)')
+            # User stories by EPIC
+            fig = px.bar(df_summary, x='EPIC', y='User Stories',
+                        title='User Stories Count by EPIC',
+                        hover_data=['Name', 'Capabilities'])
+            fig.update_traces(marker_color='lightgreen')
             st.plotly_chart(fig, use_container_width=True)
-    
-    with tab2:
-        st.subheader("Resource Cost Analysis")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Onsite Resource Rates")
-            onsite_df = pd.DataFrame([
-                {'Role': role, 'Hourly Rate': rate, 'Monthly Cost (160 hrs)': rate * 160}
-                for role, rate in st.session_state.config['hourly_rates']['onsite'].items()
-            ])
-            st.dataframe(onsite_df, use_container_width=True, hide_index=True)
-        
-        with col2:
-            st.markdown("### Offshore Resource Rates")
-            offshore_df = pd.DataFrame([
-                {'Role': role, 'Hourly Rate': rate, 'Monthly Cost (160 hrs)': rate * 160}
-                for role, rate in st.session_state.config['hourly_rates']['offshore'].items()
-            ])
-            st.dataframe(offshore_df, use_container_width=True, hide_index=True)
-        
-        # Resource utilization chart
-        st.subheader("Resource Utilization Across Phases")
-        
-        resource_data = []
-        for i in range(9):
-            phase = PHASES[i]
-            onsite_count = sum(phase['resources'].get('onsite', {}).values())
-            offshore_count = sum(phase['resources'].get('offshore', {}).values())
-            resource_data.append({
-                'Phase': f"Phase {i}",
-                'Onsite': onsite_count,
-                'Offshore': offshore_count
-            })
-        
-        df_resources = pd.DataFrame(resource_data)
-        
-        fig = go.Figure()
-        fig.add_trace(go.Bar(name='Onsite', x=df_resources['Phase'], y=df_resources['Onsite']))
-        fig.add_trace(go.Bar(name='Offshore', x=df_resources['Phase'], y=df_resources['Offshore']))
-        fig.update_layout(title='Team Size by Phase', barmode='group',
-                         xaxis_title='Phase', yaxis_title='Number of Resources')
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        st.subheader("Infrastructure & Additional Costs")
-        
-        total_costs = calculate_total_program_cost()
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Monthly Infrastructure Costs")
-            for component, cost in total_costs['infrastructure_breakdown'].items():
-                st.metric(component.replace('_', ' '), f"${cost:,.0f}/month")
-            
-            st.info(f"""
-            **Infrastructure Summary**
-            - Monthly Total: ${sum(total_costs['infrastructure_breakdown'].values()):,.0f}
-            - 24-Month Total: ${total_costs['infrastructure']:,.0f}
-            """)
-        
-        with col2:
-            st.markdown("### One-Time Additional Costs")
-            for component, cost in total_costs['additional_breakdown'].items():
-                st.metric(component.replace('_', ' '), f"${cost:,.0f}")
-            
-            st.info(f"""
-            **Additional Costs Total**
-            - One-time Total: ${total_costs['additional']:,.0f}
-            """)
-    
-    with tab4:
-        st.subheader("Total Cost of Ownership (TCO)")
-        
-        total_costs = calculate_total_program_cost()
-        
-        # TCO breakdown
-        st.markdown("### 24-Month TCO Breakdown")
-        
-        tco_data = {
-            'Component': ['Development', 'Infrastructure', 'Additional', 'Contingency', 'TOTAL'],
-            'Cost': [
-                total_costs['development'],
-                total_costs['infrastructure'],
-                total_costs['additional'],
-                total_costs['contingency'],
-                total_costs['total']
-            ],
-            'Percentage': [
-                total_costs['development'] / total_costs['total'] * 100,
-                total_costs['infrastructure'] / total_costs['total'] * 100,
-                total_costs['additional'] / total_costs['total'] * 100,
-                total_costs['contingency'] / total_costs['total'] * 100,
-                100
-            ]
-        }
-        
-        df_tco = pd.DataFrame(tco_data)
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.dataframe(
-                df_tco.style.format({
-                    'Cost': '${:,.0f}',
-                    'Percentage': '{:.1f}%'
-                }),
-                use_container_width=True,
-                hide_index=True
-            )
-        
-        with col2:
-            st.metric("Total Investment", f"${total_costs['total']:,.0f}")
-            st.metric("Per Month Average", f"${total_costs['total']/24:,.0f}")
-            st.metric("Contingency Buffer", f"{st.session_state.config['contingency_percent']}%")
-        
-        # Cost comparison scenarios
-        st.markdown("### Cost Scenarios Analysis")
-        
-        scenarios = []
-        for contingency in [10, 15, 20, 25, 30]:
-            scenario_cost = total_costs['subtotal'] * (1 + contingency/100)
-            scenarios.append({
-                'Contingency %': contingency,
-                'Total Cost': scenario_cost,
-                'Difference': scenario_cost - total_costs['total']
-            })
-        
-        df_scenarios = pd.DataFrame(scenarios)
-        
-        fig = px.line(df_scenarios, x='Contingency %', y='Total Cost',
-                     title='Total Cost vs Contingency Percentage',
-                     markers=True)
-        fig.update_traces(line=dict(width=3))
-        st.plotly_chart(fig, use_container_width=True)
-
-def show_program_planning():
-    """Program planning and timeline management"""
-    st.header("📊 Program Planning")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["Roadmap", "Dependencies", "Milestones", "Risk Matrix"])
-    
-    with tab1:
-        st.subheader("Implementation Roadmap")
-        
-        # Create detailed roadmap
-        roadmap_data = []
-        start_date = datetime(2024, 1, 1)
-        
-        for i in range(9):
-            phase = PHASES[i]
-            end_date = start_date + timedelta(days=phase['duration'] * 30)
-            
-            # Get EPICs in this phase
-            phase_epics = [epic_id for epic_id, epic in st.session_state.epic_data.items() 
-                          if epic['phase'] == i]
-            
-            roadmap_data.append({
-                'Phase': f"Phase {i}",
-                'Name': phase['name'],
-                'Start': start_date.strftime('%Y-%m-%d'),
-                'End': end_date.strftime('%Y-%m-%d'),
-                'Duration': f"{phase['duration']} months",
-                'EPICs': ', '.join(phase_epics[:3]) + ('...' if len(phase_epics) > 3 else ''),
-                'Deliverables': ', '.join(phase['deliverables'][:3])
-            })
-            start_date = end_date
-        
-        df_roadmap = pd.DataFrame(roadmap_data)
-        st.dataframe(df_roadmap, use_container_width=True, hide_index=True)
-        
-        # Gantt chart
-        fig = go.Figure()
-        
-        for idx, row in df_roadmap.iterrows():
-            fig.add_trace(go.Scatter(
-                x=[pd.to_datetime(row['Start']), pd.to_datetime(row['End'])],
-                y=[row['Phase'], row['Phase']],
-                mode='lines',
-                line=dict(width=20),
-                name=row['Name'],
-                hovertext=f"{row['Name']}<br>Duration: {row['Duration']}<br>EPICs: {row['EPICs']}"
-            ))
-        
-        fig.update_layout(
-            title="Program Gantt Chart",
-            xaxis_title="Timeline",
-            yaxis_title="Phase",
-            height=500,
-            showlegend=False
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tab2:
-        st.subheader("EPIC Dependencies")
-        
-        # Dependency matrix
-        dependency_data = []
-        for epic_id, epic in st.session_state.epic_data.items():
-            deps = epic['dependencies'] if epic['dependencies'] else ['None']
-            dependency_data.append({
-                'EPIC': epic_id,
-                'Name': epic['name'],
-                'Phase': epic['phase'],
-                'Dependencies': ', '.join(deps),
-                'Complexity': epic['complexity'],
-                'Risk': epic['risk']
-            })
-        
-        df_deps = pd.DataFrame(dependency_data)
-        st.dataframe(df_deps, use_container_width=True, hide_index=True)
-        
-        # Dependency visualization
-        st.subheader("Dependency Graph")
-        st.info("Complex dependencies between EPICs require careful sequencing and parallel execution where possible")
-    
-    with tab3:
-        st.subheader("Key Milestones")
-        
-        milestones = [
-            {'Month': 3, 'Milestone': 'Foundation Complete', 'Deliverable': 'Cloud infrastructure ready'},
-            {'Month': 6, 'Milestone': 'Customer Portal Live', 'Deliverable': 'CFW modernized and deployed'},
-            {'Month': 9, 'Milestone': 'Order System Live', 'Deliverable': 'Order processing operational'},
-            {'Month': 12, 'Milestone': 'Inventory Integration', 'Deliverable': 'IMS fully integrated'},
-            {'Month': 15, 'Milestone': 'Routing Engine Live', 'Deliverable': 'MORO integrated'},
-            {'Month': 18, 'Milestone': 'Vendor Platform Ready', 'Deliverable': 'Vendor/Driver management live'},
-            {'Month': 21, 'Milestone': 'Billing System Live', 'Deliverable': 'Complete billing automation'},
-            {'Month': 24, 'Milestone': 'Full Production', 'Deliverable': 'Complete system cutover'}
-        ]
-        
-        df_milestones = pd.DataFrame(milestones)
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            fig = px.scatter(df_milestones, x='Month', y='Milestone', 
-                           size=[100]*len(milestones),
-                           hover_data=['Deliverable'],
-                           title='Major Milestones')
-            fig.update_traces(marker=dict(color='red'))
-            fig.update_layout(height=400)
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            st.dataframe(df_milestones[['Month', 'Milestone']], 
-                        use_container_width=True, hide_index=True)
-    
-    with tab4:
-        st.subheader("Risk Assessment Matrix")
-        
-        risks = [
-            {'Risk': 'IMS Integration Complexity', 'Impact': 'High', 'Probability': 'High', 'Score': 9,
-             'Mitigation': 'Dedicated integration team, phased approach'},
-            {'Risk': 'MORO Integration Delays', 'Impact': 'High', 'Probability': 'Medium', 'Score': 6,
-             'Mitigation': 'TNT WebServices as fallback, early vendor engagement'},
-            {'Risk': 'Data Migration Issues', 'Impact': 'High', 'Probability': 'Low', 'Score': 3,
-             'Mitigation': 'Multiple dry runs, automated tools, parallel run'},
-            {'Risk': 'User Adoption Resistance', 'Impact': 'Medium', 'Probability': 'High', 'Score': 6,
-             'Mitigation': 'Comprehensive training, change management program'},
-            {'Risk': 'Performance Degradation', 'Impact': 'High', 'Probability': 'Low', 'Score': 3,
-             'Mitigation': 'Load testing, auto-scaling, performance optimization'},
-            {'Risk': 'Security Vulnerabilities', 'Impact': 'High', 'Probability': 'Low', 'Score': 3,
-             'Mitigation': 'Security scanning, penetration testing, code reviews'},
-            {'Risk': 'B2B Volume Spike', 'Impact': 'Medium', 'Probability': 'Medium', 'Score': 4,
-             'Mitigation': 'Elastic scaling, queue management, circuit breakers'}
-        ]
-        
-        df_risks = pd.DataFrame(risks)
-        
-        # Risk matrix visualization
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            st.dataframe(df_risks[['Risk', 'Score']], 
-                        use_container_width=True, hide_index=True)
-        
-        with col2:
-            # Create risk heatmap
-            impact_map = {'Low': 1, 'Medium': 2, 'High': 3}
-            prob_map = {'Low': 1, 'Medium': 2, 'High': 3}
-            
-            df_risks['Impact_Score'] = df_risks['Impact'].map(impact_map)
-            df_risks['Prob_Score'] = df_risks['Probability'].map(prob_map)
-            
-            fig = go.Figure(data=go.Scatter(
-                x=df_risks['Prob_Score'],
-                y=df_risks['Impact_Score'],
-                mode='markers+text',
-                marker=dict(
-                    size=df_risks['Score'] * 10,
-                    color=df_risks['Score'],
-                    colorscale='RdYlGn_r',
-                    showscale=True,
-                    colorbar=dict(title="Risk Score")
-                ),
-                text=df_risks.index + 1,
-                textposition="middle center",
-                hovertext=df_risks['Risk']
-            ))
-            
-            fig.update_layout(
-                title="Risk Matrix",
-                xaxis=dict(
-                    title="Probability",
-                    tickvals=[1, 2, 3],
-                    ticktext=["Low", "Medium", "High"]
-                ),
-                yaxis=dict(
-                    title="Impact",
-                    tickvals=[1, 2, 3],
-                    ticktext=["Low", "Medium", "High"]
-                ),
-                height=400
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Risk details
-        st.subheader("Risk Mitigation Strategies")
-        for idx, risk in df_risks.iterrows():
-            with st.expander(f"{idx+1}. {risk['Risk']} (Score: {risk['Score']})"):
-                st.write(f"**Impact:** {risk['Impact']}")
-                st.write(f"**Probability:** {risk['Probability']}")
-                st.write(f"**Mitigation:** {risk['Mitigation']}")
-
-def show_epics_stories():
-    """EPIC and user story management"""
-    st.header("📋 EPICs & User Stories")
-    
-    # Summary metrics
-    total_points = sum(epic['story_points'] for epic in st.session_state.epic_data.values())
-    total_months = sum(epic['estimated_months'] for epic in st.session_state.epic_data.values())
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total EPICs", len(st.session_state.epic_data))
-    with col2:
-        st.metric("Total Story Points", total_points)
-    with col3:
-        st.metric("Total Effort", f"{total_months} months")
-    with col4:
-        st.metric("Average Velocity", f"{total_points/24:.0f} pts/month")
-    
-    # EPIC management tabs
-    tab1, tab2, tab3 = st.tabs(["EPIC Overview", "Complexity Analysis", "Story Distribution"])
-    
-    with tab1:
-        st.subheader("EPIC Details")
-        
-        # Create EPIC dataframe
-        epic_df = pd.DataFrame.from_dict(st.session_state.epic_data, orient='index')
-        epic_df = epic_df.reset_index().rename(columns={'index': 'EPIC ID'})
-        
-        # Display editable dataframe
-        edited_df = st.data_editor(
-            epic_df,
-            column_config={
-                "priority": st.column_config.SelectboxColumn(
-                    "Priority",
-                    options=["P0", "P1", "P2"]
-                ),
-                "complexity": st.column_config.SelectboxColumn(
-                    "Complexity",
-                    options=["Low", "Medium", "High", "Very High"]
-                ),
-                "risk": st.column_config.SelectboxColumn(
-                    "Risk",
-                    options=["Low", "Medium", "High", "Very High"]
-                ),
-                "phase": st.column_config.NumberColumn(
-                    "Phase",
-                    min_value=0,
-                    max_value=8
-                )
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-        
-        # Update data if edited
-        if st.button("Save EPIC Changes"):
-            for idx, row in edited_df.iterrows():
-                epic_id = row['EPIC ID']
-                if epic_id in st.session_state.epic_data:
-                    st.session_state.epic_data[epic_id].update(row.to_dict())
-            st.success("Changes saved successfully!")
     
     with tab2:
         st.subheader("Complexity Analysis")
         
         # Complexity distribution
-        complexity_counts = {}
-        complexity_points = {}
-        
-        for epic in st.session_state.epic_data.values():
-            comp = epic['complexity']
-            complexity_counts[comp] = complexity_counts.get(comp, 0) + 1
-            complexity_points[comp] = complexity_points.get(comp, 0) + epic['story_points']
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = px.pie(values=list(complexity_counts.values()),
-                        names=list(complexity_counts.keys()),
-                        title="EPICs by Complexity")
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            fig = px.bar(x=list(complexity_points.keys()),
-                        y=list(complexity_points.values()),
-                        title="Story Points by Complexity",
-                        labels={'x': 'Complexity', 'y': 'Story Points'})
-            st.plotly_chart(fig, use_container_width=True)
-        
-        # Risk vs Complexity matrix
-        st.subheader("Risk-Complexity Matrix")
-        
-        risk_complexity_data = []
-        risk_map = {'Low': 1, 'Medium': 2, 'High': 3, 'Very High': 4}
-        comp_map = {'Low': 1, 'Medium': 2, 'High': 3, 'Very High': 4}
-        
-        for epic_id, epic in st.session_state.epic_data.items():
-            risk_complexity_data.append({
-                'EPIC': epic_id,
-                'Name': epic['name'],
-                'Risk_Score': risk_map.get(epic['risk'], 2),
-                'Complexity_Score': comp_map.get(epic['complexity'], 2),
-                'Points': epic['story_points']
-            })
-        
-        df_risk_comp = pd.DataFrame(risk_complexity_data)
-        
-        fig = go.Figure(data=go.Scatter(
-            x=df_risk_comp['Complexity_Score'],
-            y=df_risk_comp['Risk_Score'],
-            mode='markers+text',
-            marker=dict(
-                size=df_risk_comp['Points'] / 10,
-                color=df_risk_comp['Points'],
-                colorscale='Viridis',
-                showscale=True,
-                colorbar=dict(title="Story Points")
-            ),
-            text=df_risk_comp['EPIC'],
-            hovertext=df_risk_comp['Name']
-        ))
-        
-        fig.update_layout(
-            title="EPIC Risk vs Complexity",
-            xaxis=dict(
-                title="Complexity",
-                tickvals=[1, 2, 3, 4],
-                ticktext=["Low", "Medium", "High", "Very High"]
-            ),
-            yaxis=dict(
-                title="Risk",
-                tickvals=[1, 2, 3, 4],
-                ticktext=["Low", "Medium", "High", "Very High"]
-            ),
-            height=500
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:
-        st.subheader("Story Point Distribution")
-        
-        # Phase-wise story distribution
-        phase_stories = {}
-        for epic in st.session_state.epic_data.values():
-            phase = epic['phase']
-            phase_stories[phase] = phase_stories.get(phase, 0) + epic['story_points']
-        
-        # Create distribution chart
-        phases = list(range(9))
-        points = [phase_stories.get(i, 0) for i in phases]
-        
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=[f"Phase {i}" for i in phases],
-            y=points,
-            text=points,
-            textposition='auto',
-            marker_color='lightcoral'
-        ))
-        
-        fig.update_layout(
-            title="Story Points Distribution by Phase",
-            xaxis_title="Phase",
-            yaxis_title="Story Points",
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Velocity calculation
-        st.subheader("Velocity Planning")
-        
-        team_size = st.slider("Average Team Size", 10, 30, 20)
-        points_per_dev = st.slider("Points per Developer per Sprint (2 weeks)", 5, 15, 10)
-        
-        velocity_per_sprint = team_size * points_per_dev
-        velocity_per_month = velocity_per_sprint * 2
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Sprint Velocity", f"{velocity_per_sprint} points")
-        with col2:
-            st.metric("Monthly Velocity", f"{velocity_per_month} points")
-        with col3:
-            sprints_needed = int(np.ceil(total_points / velocity_per_sprint))
-            st.metric("Sprints Needed", sprints_needed)
-
-def show_resource_management():
-    """Resource planning and management"""
-    st.header("👥 Resource Management")
-    
-    tab1, tab2, tab3 = st.tabs(["Team Composition", "Resource Planning", "Skill Matrix"])
-    
-    with tab1:
-        st.subheader("Phase-wise Team Composition")
-        
-        selected_phase = st.selectbox(
-            "Select Phase",
-            [f"Phase {i}: {PHASES[i]['name']}" for i in range(9)]
-        )
-        phase_id = int(selected_phase.split(":")[0].split()[1])
-        
-        phase = PHASES[phase_id]
+        complexity_dist = df_summary.groupby('Complexity').agg({
+            'EPIC': 'count',
+            'Story Points': 'sum',
+            'User Stories': 'sum'
+        }).reset_index()
+        complexity_dist.columns = ['Complexity', 'EPICs', 'Story Points', 'User Stories']
         
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### Onsite Team")
-            onsite_resources = phase['resources'].get('onsite', {})
-            for role, count in onsite_resources.items():
-                rate = st.session_state.config['hourly_rates']['onsite'].get(role, 100)
-                monthly_cost = rate * count * 160
-                st.write(f"**{role}**: {count} resource(s)")
-                st.caption(f"Cost: ${monthly_cost:,.0f}/month @ ${rate}/hr")
+            fig = px.pie(complexity_dist, values='Story Points', names='Complexity',
+                        title='Story Points by Complexity')
+            st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("### Offshore Team")
-            offshore_resources = phase['resources'].get('offshore', {})
-            for role, count in offshore_resources.items():
-                rate = st.session_state.config['hourly_rates']['offshore'].get(role, 20)
-                monthly_cost = rate * count * 160
-                st.write(f"**{role}**: {count} resource(s)")
-                st.caption(f"Cost: ${monthly_cost:,.0f}/month @ ${rate}/hr")
+            fig = px.bar(complexity_dist, x='Complexity', y=['EPICs', 'User Stories'],
+                        title='Distribution by Complexity', barmode='group')
+            st.plotly_chart(fig, use_container_width=True)
         
-        # Team summary
-        phase_cost = calculate_phase_cost(phase_id)
-        
-        st.info(f"""
-        **Phase {phase_id} Team Summary**
-        - Total Team Size: {phase_cost['team_size']} resources
-        - Onsite: {sum(onsite_resources.values())} resources
-        - Offshore: {sum(offshore_resources.values())} resources
-        - Monthly Cost: ${phase_cost['total']/phase['duration']:,.0f}
-        - Total Phase Cost: ${phase_cost['total']:,.0f}
-        """)
+        # Complexity table
+        st.dataframe(complexity_dist, use_container_width=True, hide_index=True)
     
-    with tab2:
-        st.subheader("Resource Ramp-up Plan")
+    with tab3:
+        st.subheader("Phase Distribution")
         
-        # Create resource timeline
-        resource_timeline = []
-        for i in range(9):
-            phase = PHASES[i]
-            onsite_count = sum(phase['resources'].get('onsite', {}).values())
-            offshore_count = sum(phase['resources'].get('offshore', {}).values())
-            
-            resource_timeline.append({
-                'Phase': i,
-                'Name': phase['name'],
-                'Duration': phase['duration'],
-                'Onsite': onsite_count,
-                'Offshore': offshore_count,
-                'Total': onsite_count + offshore_count
-            })
+        # Phase distribution
+        phase_dist = df_summary.groupby('Phase').agg({
+            'EPIC': 'count',
+            'Story Points': 'sum',
+            'Estimated Cost': 'sum'
+        }).reset_index()
         
-        df_resources = pd.DataFrame(resource_timeline)
+        phase_names = {i: PHASES[i]['name'] for i in range(9)}
+        phase_dist['Phase Name'] = phase_dist['Phase'].map(phase_names)
         
-        # Resource ramp-up chart
+        # Visualization
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_resources['Phase'], y=df_resources['Onsite'],
-                               mode='lines+markers', name='Onsite', line=dict(width=3)))
-        fig.add_trace(go.Scatter(x=df_resources['Phase'], y=df_resources['Offshore'],
-                               mode='lines+markers', name='Offshore', line=dict(width=3)))
-        fig.add_trace(go.Scatter(x=df_resources['Phase'], y=df_resources['Total'],
-                               mode='lines+markers', name='Total', line=dict(width=3, dash='dash')))
+        fig.add_trace(go.Bar(name='Story Points', x=phase_dist['Phase'], y=phase_dist['Story Points']))
+        fig.add_trace(go.Scatter(name='EPICs Count', x=phase_dist['Phase'], y=phase_dist['EPIC'],
+                                yaxis='y2', mode='lines+markers', line=dict(width=3)))
         
         fig.update_layout(
-            title="Resource Ramp-up Plan",
-            xaxis_title="Phase",
-            yaxis_title="Number of Resources",
+            title='Phase-wise Distribution',
+            xaxis_title='Phase',
+            yaxis_title='Story Points',
+            yaxis2=dict(title='Number of EPICs', overlaying='y', side='right'),
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Resource allocation table
-        st.subheader("Detailed Resource Allocation")
-        st.dataframe(df_resources, use_container_width=True, hide_index=True)
-    
-    with tab3:
-        st.subheader("Required Skills Matrix")
-        
-        skills = {
-            'Microservices': ['Critical', 'Critical', 'High', 'High', 'Medium', 'Low'],
-            'Cloud (Azure)': ['Critical', 'Critical', 'High', 'Medium', 'Medium', 'Medium'],
-            'Java/Spring Boot': ['High', 'Critical', 'Critical', 'High', 'Medium', 'Low'],
-            'Angular': ['Medium', 'High', 'Critical', 'High', 'Medium', 'Low'],
-            'Integration': ['High', 'High', 'High', 'Critical', 'Critical', 'Medium'],
-            'DevOps/CI/CD': ['Critical', 'High', 'Medium', 'Medium', 'Low', 'Critical'],
-            'Domain Knowledge': ['Critical', 'High', 'High', 'High', 'High', 'Medium'],
-            'Testing': ['Medium', 'Medium', 'High', 'High', 'Critical', 'Critical']
-        }
-        
-        roles = ['Architect', 'Sr. Developer', 'Developer', 'Integration Spec', 'Tester', 'DevOps']
-        
-        df_skills = pd.DataFrame(skills, index=roles)
-        
-        # Create heatmap
-        skill_map = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
-        numeric_skills = df_skills.applymap(lambda x: skill_map.get(x, 0))
-        
-        fig = px.imshow(numeric_skills,
-                       labels=dict(x="Skill", y="Role", color="Importance"),
-                       color_continuous_scale="RdYlGn",
-                       aspect="auto")
-        
-        fig.update_layout(title="Skills Requirements Matrix", height=400)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Skills legend
-        st.info("""
-        **Skill Levels:**
-        - **Critical**: Essential for role success
-        - **High**: Very important, significant impact
-        - **Medium**: Important, moderate impact
-        - **Low**: Nice to have, minimal impact
-        """)
-
-def show_analytics_reports():
-    """Analytics and reporting section"""
-    st.header("📈 Analytics & Reports")
-    
-    tab1, tab2, tab3, tab4 = st.tabs(["Executive Report", "Cost Report", "Progress Report", "Export Data"])
-    
-    with tab1:
-        st.subheader("Executive Summary Report")
-        
-        total_costs = calculate_total_program_cost()
-        total_points = sum(epic['story_points'] for epic in st.session_state.epic_data.values())
-        
-        report = f"""
-        # SPLUS RTM MODERNIZATION - EXECUTIVE REPORT
-        Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-        
-        ## Program Overview
-        - **Duration:** {st.session_state.config['program_duration']} months
-        - **Total Investment:** ${total_costs['total']:,.0f}
-        - **Development Cost:** ${total_costs['development']:,.0f}
-        - **Infrastructure:** ${total_costs['infrastructure']:,.0f}
-        - **Contingency:** {st.session_state.config['contingency_percent']}%
-        
-        ## Scope
-        - **EPICs:** {len(st.session_state.epic_data)}
-        - **Total Story Points:** {total_points}
-        - **Average Velocity Required:** {total_points/24:.0f} points/month
-        
-        ## Key Deliverables by Phase
-        """
-        
-        for i in range(9):
-            phase = PHASES[i]
-            cost = calculate_phase_cost(i)
-            report += f"""
-        ### Phase {i}: {phase['name']} ({phase['duration']} months)
-        - Cost: ${cost['total']:,.0f}
-        - Team Size: {cost['team_size']} resources
-        - Deliverables: {', '.join(phase['deliverables'][:3])}
-        """
-        
-        st.text_area("Report Preview", report, height=400)
-        
-        st.download_button(
-            label="Download Executive Report",
-            data=report,
-            file_name=f"RTM_Executive_Report_{datetime.now().strftime('%Y%m%d')}.txt",
-            mime="text/plain"
-        )
-    
-    with tab2:
-        st.subheader("Detailed Cost Report")
-        
-        # Create comprehensive cost report
-        cost_details = []
-        for i in range(9):
-            phase = PHASES[i]
-            cost = calculate_phase_cost(i)
-            cost_details.append({
-                'Phase': i,
-                'Name': phase['name'],
-                'Duration': phase['duration'],
-                'Onsite Cost': cost['onsite'],
-                'Offshore Cost': cost['offshore'],
-                'Total Cost': cost['total'],
-                'Cost per Month': cost['total'] / phase['duration'] if phase['duration'] > 0 else 0
-            })
-        
-        df_cost_report = pd.DataFrame(cost_details)
-        
-        # Add totals row
-        totals = {
-            'Phase': 'TOTAL',
-            'Name': 'All Phases',
-            'Duration': sum(p['duration'] for p in PHASES.values()),
-            'Onsite Cost': df_cost_report['Onsite Cost'].sum(),
-            'Offshore Cost': df_cost_report['Offshore Cost'].sum(),
-            'Total Cost': df_cost_report['Total Cost'].sum(),
-            'Cost per Month': df_cost_report['Total Cost'].sum() / 24
-        }
-        
-        df_with_total = pd.concat([df_cost_report, pd.DataFrame([totals])], ignore_index=True)
-        
+        # Phase table
         st.dataframe(
-            df_with_total.style.format({
-                'Onsite Cost': '${:,.0f}',
-                'Offshore Cost': '${:,.0f}',
-                'Total Cost': '${:,.0f}',
-                'Cost per Month': '${:,.0f}'
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Download cost report
-        csv = df_with_total.to_csv(index=False)
-        st.download_button(
-            label="Download Cost Report (CSV)",
-            data=csv,
-            file_name=f"RTM_Cost_Report_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
-    
-    with tab3:
-        st.subheader("Progress Tracking Report")
-        
-        # Simulated progress data
-        current_month = st.slider("Current Month", 0, 24, 6)
-        
-        progress_data = []
-        for i in range(9):
-            phase = PHASES[i]
-            # Calculate phase timeline
-            phase_start = sum(PHASES[j]['duration'] for j in range(i))
-            phase_end = phase_start + phase['duration']
-            
-            if current_month >= phase_end:
-                progress = 100
-                status = "Completed"
-            elif current_month > phase_start:
-                progress = ((current_month - phase_start) / phase['duration']) * 100
-                status = "In Progress"
-            else:
-                progress = 0
-                status = "Not Started"
-            
-            progress_data.append({
-                'Phase': f"Phase {i}",
-                'Name': phase['name'],
-                'Status': status,
-                'Progress %': progress,
-                'Start Month': phase_start,
-                'End Month': phase_end
-            })
-        
-        df_progress = pd.DataFrame(progress_data)
-        
-        # Progress visualization
-        fig = go.Figure()
-        
-        colors = {'Completed': 'green', 'In Progress': 'yellow', 'Not Started': 'gray'}
-        
-        for idx, row in df_progress.iterrows():
-            fig.add_trace(go.Bar(
-                x=[row['Progress %']],
-                y=[row['Phase']],
-                orientation='h',
-                name=row['Name'],
-                marker_color=colors[row['Status']],
-                showlegend=False,
-                hovertext=f"{row['Name']}: {row['Status']} ({row['Progress %']:.0f}%)"
-            ))
-        
-        fig.update_layout(
-            title=f"Program Progress - Month {current_month}",
-            xaxis_title="Progress %",
-            yaxis_title="Phase",
-            xaxis=dict(range=[0, 100]),
-            height=400
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Progress table
-        st.dataframe(
-            df_progress.style.format({'Progress %': '{:.1f}%'}),
+            phase_dist[['Phase', 'Phase Name', 'EPIC', 'Story Points', 'Estimated Cost']].rename(
+                columns={'EPIC': 'EPICs Count'}
+            ).style.format({'Estimated Cost': '${:,.0f}'}),
             use_container_width=True,
             hide_index=True
         )
     
     with tab4:
-        st.subheader("Export Program Data")
+        st.subheader("Cost Breakdown")
         
-        st.info("Export complete program data for external analysis")
+        # Cost components
+        col1, col2 = st.columns(2)
         
-        # Prepare export data
-        export_data = {
-            'program_config': st.session_state.config,
-            'phases': PHASES,
-            'epics': st.session_state.epic_data,
-            'costs': calculate_total_program_cost()
-        }
+        with col1:
+            cost_breakdown = {
+                'Development': costs['development'],
+                'Infrastructure': costs['infrastructure'],
+                'Additional': costs['additional'],
+                'Contingency': costs['contingency']
+            }
+            
+            fig = px.pie(values=list(cost_breakdown.values()), 
+                        names=list(cost_breakdown.keys()),
+                        title='Cost Components')
+            st.plotly_chart(fig, use_container_width=True)
         
-        # JSON export
-        json_str = json.dumps(export_data, indent=2, default=str)
-        
-        st.download_button(
-            label="Download Complete Data (JSON)",
-            data=json_str,
-            file_name=f"RTM_Program_Data_{datetime.now().strftime('%Y%m%d')}.json",
-            mime="application/json"
-        )
-        
-        st.success("Data ready for export. Click the button above to download.")
+        with col2:
+            st.markdown("**Cost Summary**")
+            st.metric("Development", f"${costs['development']:,.0f}")
+            st.metric("Infrastructure", f"${costs['infrastructure']:,.0f}")
+            st.metric("Additional", f"${costs['additional']:,.0f}")
+            st.metric("Contingency", f"${costs['contingency']:,.0f}")
+            st.markdown("---")
+            st.metric("**TOTAL**", f"${costs['total']:,.0f}")
 
-def show_configuration():
-    """Configuration settings"""
-    st.header("⚙️ Configuration")
+def show_epics_user_stories():
+    """EPICs and User Stories management"""
+    st.header("EPICs & User Stories Management")
     
-    tab1, tab2, tab3 = st.tabs(["Program Settings", "Resource Rates", "Risk Parameters"])
+    # Configuration controls
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.session_state.config['cost_per_point'] = st.number_input(
+            "Cost per Story Point ($)",
+            min_value=500,
+            max_value=3000,
+            value=st.session_state.config['cost_per_point'],
+            step=100,
+            help="Adjust the cost per story point to see impact on total cost"
+        )
+    with col2:
+        st.session_state.config['contingency_percent'] = st.slider(
+            "Contingency %",
+            min_value=10,
+            max_value=30,
+            value=st.session_state.config['contingency_percent'],
+            step=5
+        )
+    with col3:
+        epic_metrics = calculate_epic_metrics()
+        total_points = sum(m['points'] for m in epic_metrics.values())
+        st.metric("Total Story Points", f"{total_points:,}")
+        st.metric("Estimated Dev Cost", f"${total_points * st.session_state.config['cost_per_point']:,.0f}")
+    
+    # Tabs for different views
+    tab1, tab2, tab3 = st.tabs(["EPIC List & Complexity", "EPICs, Capabilities & User Stories", "Edit User Stories"])
     
     with tab1:
-        st.subheader("Program Configuration")
+        st.subheader("EPIC List with Overall Complexity")
         
-        col1, col2 = st.columns(2)
+        # EPIC overview table
+        epic_overview = []
+        for epic_id, epic in st.session_state.user_stories_data.items():
+            metrics = epic_metrics[epic_id]
+            epic_overview.append({
+                'EPIC ID': epic_id,
+                'EPIC Name': epic['name'],
+                'Priority': epic['priority'],
+                'Complexity': epic['complexity'],
+                'Phase': epic['phase'],
+                'Capabilities': metrics['capabilities'],
+                'User Stories': metrics['stories'],
+                'Story Points': metrics['points'],
+                'Estimated Cost': metrics['estimated_cost']
+            })
+        
+        df_epic_overview = pd.DataFrame(epic_overview)
+        
+        # Editable dataframe for complexity and priority
+        edited_df = st.data_editor(
+            df_epic_overview,
+            column_config={
+                "Priority": st.column_config.SelectboxColumn(
+                    options=["P0", "P1", "P2"]
+                ),
+                "Complexity": st.column_config.SelectboxColumn(
+                    options=["Low", "Medium", "High", "Very High"]
+                ),
+                "Phase": st.column_config.NumberColumn(
+                    min_value=0,
+                    max_value=8
+                ),
+                "Estimated Cost": st.column_config.NumberColumn(
+                    format="$%d",
+                    disabled=True
+                )
+            },
+            disabled=["EPIC ID", "EPIC Name", "Capabilities", "User Stories", "Story Points"],
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Update data if changed
+        for idx, row in edited_df.iterrows():
+            epic_id = row['EPIC ID']
+            if epic_id in st.session_state.user_stories_data:
+                st.session_state.user_stories_data[epic_id]['priority'] = row['Priority']
+                st.session_state.user_stories_data[epic_id]['complexity'] = row['Complexity']
+                st.session_state.user_stories_data[epic_id]['phase'] = row['Phase']
+        
+        # Complexity summary
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
+        
+        complexity_summary = df_epic_overview.groupby('Complexity')['Story Points'].sum()
+        priority_summary = df_epic_overview.groupby('Priority')['Story Points'].sum()
         
         with col1:
-            st.session_state.config['program_duration'] = st.number_input(
-                "Program Duration (months)",
-                min_value=18,
-                max_value=36,
-                value=st.session_state.config['program_duration']
-            )
-            
-            st.session_state.config['contingency_percent'] = st.number_input(
-                "Contingency Percentage",
-                min_value=10,
-                max_value=30,
-                value=st.session_state.config['contingency_percent']
-            )
+            st.markdown("**Complexity Distribution**")
+            for comp, points in complexity_summary.items():
+                st.write(f"{comp}: {points:,} points")
         
         with col2:
-            st.session_state.config['hours_per_month'] = st.number_input(
-                "Working Hours per Month",
-                min_value=140,
-                max_value=180,
-                value=st.session_state.config['hours_per_month']
-            )
-            
-            st.session_state.config['buffer_percent'] = st.number_input(
-                "Risk Buffer Percentage",
-                min_value=5,
-                max_value=20,
-                value=st.session_state.config['buffer_percent']
-            )
+            st.markdown("**Priority Distribution**")
+            for pri, points in priority_summary.items():
+                st.write(f"{pri}: {points:,} points")
         
-        if st.button("Save Configuration"):
-            st.success("Configuration saved successfully!")
-            st.rerun()
+        with col3:
+            st.markdown("**Phase Summary**")
+            phase_summary = df_epic_overview.groupby('Phase')['Story Points'].sum()
+            for phase, points in phase_summary.items():
+                st.write(f"Phase {phase}: {points:,} points")
     
     with tab2:
-        st.subheader("Resource Rate Configuration")
+        st.subheader("EPICs, Capabilities and User Stories")
         
+        # Select EPIC to view
+        epic_id = st.selectbox(
+            "Select EPIC",
+            options=list(st.session_state.user_stories_data.keys()),
+            format_func=lambda x: f"{x}: {st.session_state.user_stories_data[x]['name']}"
+        )
+        
+        if epic_id:
+            epic = st.session_state.user_stories_data[epic_id]
+            
+            # EPIC info
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Priority", epic['priority'])
+            with col2:
+                st.metric("Complexity", epic['complexity'])
+            with col3:
+                st.metric("Phase", epic['phase'])
+            with col4:
+                epic_total_points = sum(
+                    sum(story['points'] for story in cap['stories'])
+                    for cap in epic['capabilities'].values()
+                )
+                st.metric("Total Points", epic_total_points)
+            
+            # Display capabilities and stories
+            for cap_id, capability in epic['capabilities'].items():
+                with st.expander(f"{cap_id}: {capability['name']} ({len(capability['stories'])} stories)"):
+                    # Create dataframe for stories
+                    stories_data = []
+                    for story in capability['stories']:
+                        stories_data.append({
+                            'Story ID': story['id'],
+                            'Title': story['title'],
+                            'Points': story['points']
+                        })
+                    
+                    df_stories = pd.DataFrame(stories_data)
+                    
+                    # Display stories
+                    st.dataframe(df_stories, use_container_width=True, hide_index=True)
+                    
+                    # Capability summary
+                    cap_total_points = df_stories['Points'].sum()
+                    st.info(f"**Capability Total:** {len(stories_data)} stories, {cap_total_points} points")
+    
+    with tab3:
+        st.subheader("Edit User Stories")
+        
+        # Select EPIC and Capability
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### Onsite Rates ($/hr)")
-            for role in st.session_state.config['hourly_rates']['onsite']:
-                st.session_state.config['hourly_rates']['onsite'][role] = st.number_input(
-                    role,
-                    min_value=50,
-                    max_value=200,
-                    value=st.session_state.config['hourly_rates']['onsite'][role],
-                    key=f"onsite_{role}_config"
-                )
+            edit_epic_id = st.selectbox(
+                "Select EPIC to Edit",
+                options=list(st.session_state.user_stories_data.keys()),
+                format_func=lambda x: f"{x}: {st.session_state.user_stories_data[x]['name']}",
+                key="edit_epic"
+            )
         
         with col2:
-            st.markdown("### Offshore Rates ($/hr)")
-            for role in st.session_state.config['hourly_rates']['offshore']:
-                st.session_state.config['hourly_rates']['offshore'][role] = st.number_input(
-                    role,
-                    min_value=10,
-                    max_value=50,
-                    value=st.session_state.config['hourly_rates']['offshore'][role],
-                    key=f"offshore_{role}_config"
+            if edit_epic_id:
+                capabilities = list(st.session_state.user_stories_data[edit_epic_id]['capabilities'].keys())
+                edit_cap_id = st.selectbox(
+                    "Select Capability",
+                    options=capabilities,
+                    format_func=lambda x: f"{x}: {st.session_state.user_stories_data[edit_epic_id]['capabilities'][x]['name']}",
+                    key="edit_cap"
                 )
         
-        if st.button("Update Rates"):
-            st.success("Rates updated successfully!")
+        if edit_epic_id and edit_cap_id:
+            # Get current stories
+            current_stories = st.session_state.user_stories_data[edit_epic_id]['capabilities'][edit_cap_id]['stories']
+            
+            # Create editable dataframe
+            df_edit_stories = pd.DataFrame(current_stories)
+            
+            edited_stories = st.data_editor(
+                df_edit_stories,
+                column_config={
+                    "points": st.column_config.NumberColumn(
+                        "Story Points",
+                        min_value=1,
+                        max_value=40,
+                        step=1
+                    )
+                },
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Update stories
+            if st.button("Save Changes"):
+                st.session_state.user_stories_data[edit_epic_id]['capabilities'][edit_cap_id]['stories'] = edited_stories.to_dict('records')
+                st.success("User stories updated successfully!")
+                st.rerun()
+            
+            # Show impact
+            original_points = sum(story['points'] for story in current_stories)
+            new_points = edited_stories['points'].sum() if not edited_stories.empty else 0
+            difference = new_points - original_points
+            
+            if difference != 0:
+                st.warning(f"Point difference: {difference:+d} (Original: {original_points}, New: {new_points})")
+                cost_impact = difference * st.session_state.config['cost_per_point']
+                st.info(f"Cost impact: ${cost_impact:+,.0f}")
+
+def show_cost_analysis():
+    """Cost Analysis page"""
+    st.header("Cost Analysis")
+    
+    # Calculate costs
+    costs = calculate_total_cost()
+    epic_metrics = calculate_epic_metrics()
+    
+    # Cost controls
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        new_contingency = st.slider(
+            "Adjust Contingency %",
+            min_value=10,
+            max_value=30,
+            value=st.session_state.config['contingency_percent'],
+            step=5,
+            key="cost_contingency"
+        )
+        if new_contingency != st.session_state.config['contingency_percent']:
+            st.session_state.config['contingency_percent'] = new_contingency
             st.rerun()
     
+    with col2:
+        new_cost_per_point = st.number_input(
+            "Cost per Story Point ($)",
+            min_value=500,
+            max_value=3000,
+            value=st.session_state.config['cost_per_point'],
+            step=100,
+            key="cost_per_point_slider"
+        )
+        if new_cost_per_point != st.session_state.config['cost_per_point']:
+            st.session_state.config['cost_per_point'] = new_cost_per_point
+            st.rerun()
+    
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["Phase-wise Cost", "EPIC-wise Cost", "Story Point Analysis", "TCO"])
+    
+    with tab1:
+        st.subheader("Phase-wise Cost Distribution")
+        
+        # Calculate phase costs
+        phase_costs = []
+        for phase_id, phase_info in PHASES.items():
+            phase_epics = [eid for eid, e in st.session_state.user_stories_data.items() if e['phase'] == phase_id]
+            phase_points = sum(epic_metrics[eid]['points'] for eid in phase_epics if eid in epic_metrics)
+            phase_cost = phase_points * st.session_state.config['cost_per_point']
+            
+            phase_costs.append({
+                'Phase': phase_id,
+                'Name': phase_info['name'],
+                'Duration': phase_info['duration'],
+                'EPICs': len(phase_epics),
+                'Story Points': phase_points,
+                'Development Cost': phase_cost,
+                'Base Cost': phase_info['base_cost'],
+                'Total Cost': max(phase_cost, phase_info['base_cost'])
+            })
+        
+        df_phase_costs = pd.DataFrame(phase_costs)
+        
+        # Display table
+        st.dataframe(
+            df_phase_costs.style.format({
+                'Development Cost': '${:,.0f}',
+                'Base Cost': '${:,.0f}',
+                'Total Cost': '${:,.0f}'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Visualization
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name='Story Point Cost', x=df_phase_costs['Phase'], 
+                            y=df_phase_costs['Development Cost']))
+        fig.add_trace(go.Bar(name='Base Cost', x=df_phase_costs['Phase'], 
+                            y=df_phase_costs['Base Cost']))
+        fig.update_layout(
+            title='Phase Cost Comparison',
+            xaxis_title='Phase',
+            yaxis_title='Cost ($)',
+            barmode='group'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with tab2:
+        st.subheader("EPIC-wise Cost Analysis")
+        
+        # EPIC cost table
+        epic_cost_data = []
+        for epic_id, metrics in epic_metrics.items():
+            epic_cost_data.append({
+                'EPIC': epic_id,
+                'Name': metrics['name'],
+                'Priority': metrics['priority'],
+                'Complexity': metrics['complexity'],
+                'Story Points': metrics['points'],
+                'Cost': metrics['estimated_cost'],
+                'Percentage': (metrics['estimated_cost'] / costs['development'] * 100) if costs['development'] > 0 else 0
+            })
+        
+        df_epic_costs = pd.DataFrame(epic_cost_data)
+        df_epic_costs = df_epic_costs.sort_values('Cost', ascending=False)
+        
+        # Display table
+        st.dataframe(
+            df_epic_costs.style.format({
+                'Cost': '${:,.0f}',
+                'Percentage': '{:.1f}%'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Visualization
+        fig = px.treemap(
+            df_epic_costs,
+            path=['Priority', 'EPIC'],
+            values='Cost',
+            title='EPIC Cost Distribution by Priority'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
     with tab3:
-        st.subheader("Risk Parameters")
+        st.subheader("Story Point Analysis")
         
-        st.info("Configure risk thresholds and mitigation strategies")
-        
-        risk_params = {
-            'High Risk Threshold': st.slider("High Risk Score Threshold", 6, 10, 8),
-            'Medium Risk Threshold': st.slider("Medium Risk Score Threshold", 3, 6, 5),
-            'Mitigation Budget %': st.slider("Risk Mitigation Budget (%)", 5, 15, 10),
-            'Review Frequency': st.selectbox("Risk Review Frequency", 
-                                           ["Weekly", "Bi-weekly", "Monthly"])
+        # Point distribution
+        point_ranges = {
+            '1-5': 0, '8': 0, '13': 0, '21': 0
         }
         
-        st.write("### Current Risk Parameters:")
-        for param, value in risk_params.items():
-            st.write(f"- **{param}:** {value}")
+        for epic in st.session_state.user_stories_data.values():
+            for cap in epic['capabilities'].values():
+                for story in cap['stories']:
+                    points = story['points']
+                    if points <= 5:
+                        point_ranges['1-5'] += 1
+                    elif points == 8:
+                        point_ranges['8'] += 1
+                    elif points == 13:
+                        point_ranges['13'] += 1
+                    elif points == 21:
+                        point_ranges['21'] += 1
+        
+        # Visualization
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig = px.pie(values=list(point_ranges.values()), 
+                        names=list(point_ranges.keys()),
+                        title='Story Distribution by Points')
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Cost by point size
+            point_costs = {}
+            for key, count in point_ranges.items():
+                if key == '1-5':
+                    avg_points = 3
+                else:
+                    avg_points = int(key)
+                point_costs[key] = count * avg_points * st.session_state.config['cost_per_point']
+            
+            fig = px.bar(x=list(point_costs.keys()), y=list(point_costs.values()),
+                        title='Cost by Story Point Size',
+                        labels={'x': 'Point Range', 'y': 'Total Cost ($)'})
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with tab4:
+        st.subheader("Total Cost of Ownership")
+        
+        # TCO breakdown
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Cost Components**")
+            st.metric("Development", f"${costs['development']:,.0f}")
+            st.metric("Infrastructure", f"${costs['infrastructure']:,.0f}")
+            st.metric("Additional", f"${costs['additional']:,.0f}")
+            st.metric("Contingency", f"${costs['contingency']:,.0f}")
+            st.markdown("---")
+            st.metric("**TOTAL**", f"${costs['total']:,.0f}")
+        
+        with col2:
+            # Percentage breakdown
+            percentages = {
+                'Development': costs['development'] / costs['total'] * 100,
+                'Infrastructure': costs['infrastructure'] / costs['total'] * 100,
+                'Additional': costs['additional'] / costs['total'] * 100,
+                'Contingency': costs['contingency'] / costs['total'] * 100
+            }
+            
+            fig = go.Figure(data=[
+                go.Bar(x=list(percentages.keys()), 
+                      y=list(percentages.values()),
+                      text=[f"{v:.1f}%" for v in percentages.values()],
+                      textposition='auto')
+            ])
+            fig.update_layout(
+                title="Cost Component Percentages",
+                yaxis_title="Percentage (%)"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+def show_timeline_planning():
+    """Timeline and Planning page"""
+    st.header("Timeline & Planning")
+    
+    # Create Gantt data
+    gantt_data = []
+    start_date = datetime(2024, 1, 1)
+    
+    for phase_id, phase_info in PHASES.items():
+        end_date = start_date + timedelta(days=phase_info['duration'] * 30)
+        
+        # Get EPICs in this phase
+        phase_epics = [eid for eid, e in st.session_state.user_stories_data.items() 
+                      if e['phase'] == phase_id]
+        
+        gantt_data.append({
+            'Phase': f"Phase {phase_id}",
+            'Name': phase_info['name'],
+            'Start': start_date,
+            'End': end_date,
+            'Duration': f"{phase_info['duration']} months",
+            'EPICs': len(phase_epics)
+        })
+        start_date = end_date
+    
+    df_gantt = pd.DataFrame(gantt_data)
+    
+    # Gantt chart
+    fig = px.timeline(
+        df_gantt,
+        x_start="Start",
+        x_end="End",
+        y="Phase",
+        title="24-Month Implementation Timeline",
+        hover_data=['Name', 'Duration', 'EPICs']
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(height=500)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Phase details
+    st.subheader("Phase Details")
+    
+    for phase_id, phase_info in PHASES.items():
+        phase_epics = [eid for eid, e in st.session_state.user_stories_data.items() 
+                      if e['phase'] == phase_id]
+        
+        with st.expander(f"Phase {phase_id}: {phase_info['name']} ({len(phase_epics)} EPICs)"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Duration", f"{phase_info['duration']} months")
+            
+            with col2:
+                st.metric("Base Cost", f"${phase_info['base_cost']:,.0f}")
+            
+            with col3:
+                epic_metrics = calculate_epic_metrics()
+                phase_points = sum(epic_metrics[eid]['points'] for eid in phase_epics 
+                                  if eid in epic_metrics)
+                st.metric("Story Points", phase_points)
+            
+            if phase_epics:
+                st.markdown("**EPICs in this Phase:**")
+                for epic_id in phase_epics:
+                    epic = st.session_state.user_stories_data[epic_id]
+                    st.write(f"- {epic_id}: {epic['name']} ({epic['priority']}, {epic['complexity']})")
+
+def show_reports():
+    """Reports generation"""
+    st.header("Reports")
+    
+    # Report type selection
+    report_type = st.selectbox(
+        "Select Report Type",
+        ["Executive Summary", "User Stories Report", "Cost Analysis Report", "EPIC Details Report"]
+    )
+    
+    if report_type == "Executive Summary":
+        generate_executive_summary()
+    elif report_type == "User Stories Report":
+        generate_stories_report()
+    elif report_type == "Cost Analysis Report":
+        generate_cost_report()
+    elif report_type == "EPIC Details Report":
+        generate_epic_report()
+
+def generate_executive_summary():
+    """Generate executive summary"""
+    st.subheader("Executive Summary Report")
+    
+    costs = calculate_total_cost()
+    epic_metrics = calculate_epic_metrics()
+    
+    report = f"""
+    SPLUS RTM MODERNIZATION - EXECUTIVE SUMMARY
+    Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+    
+    PROGRAM OVERVIEW
+    - Duration: 24 months
+    - Total Investment: ${costs['total']:,.0f}
+    - Total Story Points: {costs['total_points']:,}
+    - Total EPICs: {len(epic_metrics)}
+    - Cost per Point: ${st.session_state.config['cost_per_point']:,}
+    
+    COST BREAKDOWN
+    - Development: ${costs['development']:,.0f}
+    - Infrastructure: ${costs['infrastructure']:,.0f}
+    - Additional: ${costs['additional']:,.0f}
+    - Contingency ({st.session_state.config['contingency_percent']}%): ${costs['contingency']:,.0f}
+    
+    EPIC SUMMARY
+    """
+    
+    for epic_id, metrics in epic_metrics.items():
+        report += f"""
+    {epic_id}: {metrics['name']}
+    - Priority: {metrics['priority']}
+    - Complexity: {metrics['complexity']}
+    - Story Points: {metrics['points']}
+    - Estimated Cost: ${metrics['estimated_cost']:,.0f}
+    """
+    
+    st.text_area("Report Preview", report, height=400)
+    
+    st.download_button(
+        label="Download Executive Summary",
+        data=report,
+        file_name=f"RTM_Executive_Summary_{datetime.now().strftime('%Y%m%d')}.txt",
+        mime="text/plain"
+    )
+
+def generate_stories_report():
+    """Generate user stories report"""
+    st.subheader("User Stories Report")
+    
+    stories_data = []
+    for epic_id, epic in st.session_state.user_stories_data.items():
+        for cap_id, capability in epic['capabilities'].items():
+            for story in capability['stories']:
+                stories_data.append({
+                    'EPIC ID': epic_id,
+                    'EPIC Name': epic['name'],
+                    'Capability ID': cap_id,
+                    'Capability': capability['name'],
+                    'Story ID': story['id'],
+                    'Story Title': story['title'],
+                    'Story Points': story['points'],
+                    'Estimated Cost': story['points'] * st.session_state.config['cost_per_point']
+                })
+    
+    df_stories = pd.DataFrame(stories_data)
+    
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Stories", len(df_stories))
+    with col2:
+        st.metric("Total Points", df_stories['Story Points'].sum())
+    with col3:
+        st.metric("Total Cost", f"${df_stories['Estimated Cost'].sum():,.0f}")
+    
+    # Display sample
+    st.dataframe(df_stories.head(20), use_container_width=True, hide_index=True)
+    
+    # Download
+    csv = df_stories.to_csv(index=False)
+    st.download_button(
+        label="Download Complete User Stories Report (CSV)",
+        data=csv,
+        file_name=f"RTM_User_Stories_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+
+def generate_cost_report():
+    """Generate cost analysis report"""
+    st.subheader("Cost Analysis Report")
+    
+    epic_metrics = calculate_epic_metrics()
+    
+    # Create cost report data
+    cost_data = []
+    for epic_id, metrics in epic_metrics.items():
+        epic = st.session_state.user_stories_data[epic_id]
+        cost_data.append({
+            'EPIC': epic_id,
+            'Name': metrics['name'],
+            'Priority': metrics['priority'],
+            'Complexity': metrics['complexity'],
+            'Phase': metrics['phase'],
+            'Capabilities': metrics['capabilities'],
+            'Stories': metrics['stories'],
+            'Points': metrics['points'],
+            'Cost': metrics['estimated_cost']
+        })
+    
+    df_cost = pd.DataFrame(cost_data)
+    
+    # Display
+    st.dataframe(
+        df_cost.style.format({'Cost': '${:,.0f}'}),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Download
+    csv = df_cost.to_csv(index=False)
+    st.download_button(
+        label="Download Cost Report (CSV)",
+        data=csv,
+        file_name=f"RTM_Cost_Report_{datetime.now().strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+
+def generate_epic_report():
+    """Generate detailed EPIC report"""
+    st.subheader("EPIC Details Report")
+    
+    # Select EPIC
+    epic_id = st.selectbox(
+        "Select EPIC for detailed report",
+        options=list(st.session_state.user_stories_data.keys()),
+        format_func=lambda x: f"{x}: {st.session_state.user_stories_data[x]['name']}"
+    )
+    
+    if epic_id:
+        epic = st.session_state.user_stories_data[epic_id]
+        
+        report = f"""
+        EPIC DETAILS REPORT
+        Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+        
+        EPIC: {epic_id}
+        Name: {epic['name']}
+        Priority: {epic['priority']}
+        Complexity: {epic['complexity']}
+        Phase: {epic['phase']}
+        
+        CAPABILITIES AND USER STORIES
+        """
+        
+        total_points = 0
+        for cap_id, capability in epic['capabilities'].items():
+            cap_points = sum(story['points'] for story in capability['stories'])
+            total_points += cap_points
+            
+            report += f"""
+        
+        {cap_id}: {capability['name']}
+        Total Stories: {len(capability['stories'])}
+        Total Points: {cap_points}
+        
+        User Stories:
+        """
+            for story in capability['stories']:
+                report += f"""
+        - {story['id']}: {story['title']} ({story['points']} points)
+        """
+        
+        report += f"""
+        
+        SUMMARY
+        Total Capabilities: {len(epic['capabilities'])}
+        Total User Stories: {sum(len(cap['stories']) for cap in epic['capabilities'].values())}
+        Total Story Points: {total_points}
+        Estimated Cost: ${total_points * st.session_state.config['cost_per_point']:,.0f}
+        """
+        
+        st.text_area("Report Preview", report, height=400)
+        
+        st.download_button(
+            label=f"Download {epic_id} Report",
+            data=report,
+            file_name=f"RTM_{epic_id}_Report_{datetime.now().strftime('%Y%m%d')}.txt",
+            mime="text/plain"
+        )
 
 if __name__ == "__main__":
     main()
