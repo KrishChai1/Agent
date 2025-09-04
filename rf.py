@@ -654,7 +654,7 @@ def show_team_management():
         x=sprint_numbers,
         y=[velocity] * len(sprint_numbers),
         mode='lines',
-        n='Target Velocity',
+        name='Target Velocity',
         line=dict(color='red', dash='dash')
     ))
     
