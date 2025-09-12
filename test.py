@@ -199,7 +199,7 @@ class UPSMCPExploits:
         
         "batch_processing": """
         # Exploit: Send multiple tracking numbers in single request
-        tracking_numbers = [f"1Z{i:015d}" for i in range(1000)]
+        tracking_numbers = [f"1Z{i:015d}" for i in range(100)]
         
         # Current implementation has no batch size limit
         response = track_packages_bulk(tracking_numbers)
@@ -345,19 +345,19 @@ class UPSMCPExploits:
         print("Attempting 1000 rapid API calls...")
         
         start_time = time.time()
-        for i in range(1000):
+        for i in range(100):
             # Simulated API call
             tracking = f"1Z999AA1012345{i:04d}"
             # In real UPS MCP: track_package(tracking)
             
         elapsed = time.time() - start_time
         
-        print(f"✅ 1000 API calls completed in {elapsed:.2f} seconds")
+        print(f"✅ 100 API calls completed in {elapsed:.2f} seconds")
         print("❌ NO RATE LIMITING DETECTED")
         print(f"💰 Estimated cost: ${1000 * 0.05:.2f}")
         
         return {
-            "calls_made": 1000,
+            "calls_made": 100,
             "blocked": 0,
             "rate_limit_present": False,
             "potential_cost": "$50.00"
