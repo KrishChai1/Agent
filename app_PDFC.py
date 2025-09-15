@@ -523,48 +523,911 @@ Part text to analyze:
         return fields
     
     def _fallback_extraction(self, text: str, part_number: int) -> List[USCISField]:
-        """Fallback pattern-based extraction for any USCIS form"""
+        """Enhanced fallback pattern-based extraction for any USCIS form"""
         fields = []
+        seen_numbers = set()
         
-        # Universal USCIS patterns
+        # Universal USCIS patterns - more comprehensive
         patterns = [
-            r'(\d+)\.\s+([^\n]{3,300})',  # Standard: 1. Field Label
-            r'Item\s+Number\s+(\d+)[.\s]*([^\n]{3,300})',  # Item Number format
-            r'Question\s+(\d+)[.\s]*([^\n]{3,300})',  # Question format
-            r'(\d+)([a-z])\.\s+([^\n]{3,200})',  # Subfield: 1a. Label
-            r'([A-Z])\.\s+([^\n]{3,200})',  # Letter: A. Label
+            # Main numbered fields - most common
+            (r'(\d+)\.\s+([^\n]{3,400})', 'main'),  # 1. Field Label
+            
+            # Subfields with letters
+            (r'(\d+)\.([a-z])\.\s+([^\n]{3,300})', 'subfield'),  # 1.a. Subfield
+            (r'(\d+)([a-z])\.\s+([^\n]{3,300})', 'subfield_compact'),  # 1a. Subfield
+            
+            # Item Number format
+            (r'Item\s+Number\s+(\d+)[.\s]*([^\n]{3,400})', 'item'),  # Item Number format
+            
+            # Question format
+            (r'Question\s+(\d+)[.\s]*([^\n]{3,400})', 'question'),  # Question format
+            
+            # Letter-only fields
+            (r'^([A-Z])\.\s+([^\n]{3,300})', 'letter'),  # A. Field
+            
+            # Orphan subfields
+            (r'^\s*([a-z])\.\s+([^\n]{3,200})', 'orphan_sub'),  # a. Field (without parent)
         ]
         
-        for pattern in patterns:
-            matches = re.finditer(pattern, text[:15000], re.IGNORECASE)
+        for pattern, pattern_type in patterns:
+            flags = re.IGNORECASE | re.MULTILINE
+            matches = re.finditer(pattern, text[:20000], flags)
             
             for match in matches:
-                if len(match.groups()) == 3:  # Subfield pattern
-                    number = f"{match.group(1)}.{match.group(2)}"
-                    label = match.group(3).strip()
-                    is_subfield = True
-                    parent_number = match.group(1)
-                else:
-                    number = match.group(1)
-                    label = match.group(2).strip() if len(match.groups()) > 1 else f"Field {number}"
-                    is_subfield = False
-                    parent_number = ""
+                try:
+                    if pattern_type == 'subfield':
+                        parent_num = match.group(1)
+                        letter = match.group(2)
+                        label = match.group(3).strip()
+                        number = f"{parent_num}.{letter}"
+                        is_subfield = True
+                        parent_number = parent_num
+                    elif pattern_type == 'subfield_compact':
+                        parent_num = match.group(1)
+                        letter = match.group(2)
+                        label = match.group(3).strip()
+                        number = f"{parent_num}.{letter}"
+                        is_subfield = True
+                        parent_number = parent_num
+                    elif pattern_type == 'orphan_sub':
+                        letter = match.group(1)
+                        label = match.group(2).strip()
+                        # Try to find parent in previous text
+                        text_before = text[:match.start()]
+                        parent_match = re.search(r'(\d+)\.\s+[^\n]+', text_before[::-1])
+                        if parent_match:
+                            parent_num = parent_match.group(1)[::-1]
+                            number = f"{parent_num}.{letter.lower()}"
+                            is_subfield = True
+                            parent_number = parent_num
+                        else:
+                            continue  # Skip if no parent found
+                    else:
+                        number = match.group(1)
+                        label = match.group(2).strip() if len(match.groups()) > 1 else f"Field {number}"
+                        is_subfield = False
+                        parent_number = ""
+                    
+                    # Skip duplicates
+                    if number in seen_numbers:
+                        continue
+                    seen_numbers.add(number)
+                    
+                    # Clean label
+                    label = re.sub(r'\s+', ' ', label).strip()
+                    label = re.sub(r'^[.\-–\s]+', '', label)
+                    label = re.sub(r'[.\s]+
+    
+    def _detect_field_type(self, label: str) -> str:
+        """Universal field type detection"""
+        label_lower = label.lower()
+        
+        # Date fields
+        if any(word in label_lower for word in ["date", "birth", "expir", "arrival", "departure"]):
+            return "date"
+        
+        # Contact fields
+        elif "email" in label_lower:
+            return "email"
+        elif any(word in label_lower for word in ["phone", "telephone", "fax"]):
+            return "phone"
+        
+        # ID fields
+        elif any(phrase in label_lower for phrase in ["ssn", "social security"]):
+            return "ssn"
+        elif any(phrase in label_lower for phrase in ["alien number", "a-number", "a number"]):
+            return "alien_number"
+        elif any(phrase in label_lower for phrase in ["uscis", "receipt number"]):
+            return "text"
+        
+        # Question fields
+        elif any(word in label_lower for word in ["yes", "no", "check", "select", "mark"]):
+            return "checkbox"
+        elif "?" in label:
+            return "question"
+        
+        return "text"
+    
+    def _get_sort_key(self, number: str) -> Tuple:
+        """Universal sort key for any field numbering"""
+        try:
+            parts = number.replace('-', '.').split('.')
+            main = int(parts[0]) if parts[0].isdigit() else 999
+            
+            sub = 0
+            if len(parts) > 1 and parts[1]:
+                if parts[1][0].isalpha():
+                    sub = ord(parts[1][0].lower()) - ord('a') + 1
+                elif parts[1].isdigit():
+                    sub = int(parts[1]) + 100
+            
+            return (main, sub)
+        except:
+            return (999, 0)
+
+# ===== FORM PROCESSOR =====
+
+class UniversalFormProcessor:
+    """Universal processor for any USCIS form"""
+    
+    def __init__(self):
+        self.agent = UniversalUSCISAgent()
+    
+    def process_pdf(self, pdf_file) -> Optional[USCISForm]:
+        """Process any USCIS PDF with universal AI analysis"""
+        if not PYMUPDF_AVAILABLE:
+            st.error("PyMuPDF not available")
+            return None
+        
+        start_time = datetime.now()
+        
+        # Extract text
+        try:
+            pdf_file.seek(0)
+            doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+            
+            full_text = ""
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                full_text += f"\n\n=== PAGE {page_num + 1} ===\n{text}"
+            
+            total_pages = len(doc)
+            doc.close()
+            
+        except Exception as e:
+            st.error(f"PDF extraction error: {e}")
+            return None
+        
+        # Universal AI Analysis
+        with st.spinner("🤖 Universal AI Agent analyzing form..."):
+            # Identify form type
+            form_info = self.agent.identify_form(full_text[:3000])
+            
+            # Create universal form object
+            form = USCISForm(
+                form_number=form_info["form_number"],
+                title=form_info["title"],
+                edition_date=form_info["edition_date"],
+                form_category=form_info.get("form_category", ""),
+                total_pages=total_pages
+            )
+            
+            # Extract parts universally
+            parts_data = self.agent.extract_parts(full_text)
+            
+            # Process each part with universal logic
+            for part_info in parts_data:
+                part_text = self._extract_part_text(full_text, part_info["number"])
                 
-                # Detect field type
-                field_type = self._detect_field_type(label)
+                with st.spinner(f"🔍 Analyzing Part {part_info['number']}: {part_info['title']}"):
+                    fields = self.agent.analyze_part_fields(
+                        part_text, 
+                        part_info["number"], 
+                        part_info["title"]
+                    )
                 
-                field = USCISField(
-                    number=number,
-                    label=label,
-                    field_type=field_type,
-                    part_number=part_number,
-                    is_subfield=is_subfield,
-                    parent_number=parent_number,
-                    extraction_method="fallback_pattern"
+                # Analyze field patterns
+                patterns = {}
+                for field in fields:
+                    if field.field_pattern:
+                        patterns[field.field_pattern] = patterns.get(field.field_pattern, 0) + 1
+                
+                part = FormPart(
+                    number=part_info["number"],
+                    title=part_info["title"],
+                    fields=fields,
+                    field_patterns=patterns,
+                    processed=True
                 )
-                fields.append(field)
+                
+                form.parts[part.number] = part
+        
+        # Calculate processing time
+        form.processing_time = (datetime.now() - start_time).total_seconds()
+        
+        # Generate form insights
+        form.ai_summary = self._generate_form_insights(form)
+        
+        return form
+    
+    def _extract_part_text(self, full_text: str, part_number: int) -> str:
+        """Universal part text extraction"""
+        # Try multiple part patterns
+        patterns = [
+            rf"Part\s+{part_number}\b",
+            rf"PART\s+{part_number}\b", 
+            rf"Section\s+{part_number}\b",
+            rf"Chapter\s+{part_number}\b"
+        ]
+        
+        start_pos = -1
+        for pattern in patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE)
+            if match:
+                start_pos = match.start()
+                break
+        
+        if start_pos == -1:
+            return full_text[:20000]  # Fallback
+        
+        # Find next part
+        next_patterns = [
+            rf"Part\s+{part_number + 1}\b",
+            rf"PART\s+{part_number + 1}\b",
+            rf"Section\s+{part_number + 1}\b"
+        ]
+        
+        end_pos = len(full_text)
+        for pattern in next_patterns:
+            match = re.search(pattern, full_text[start_pos:], re.IGNORECASE)
+            if match:
+                end_pos = start_pos + match.start()
+                break
+        
+        return full_text[start_pos:end_pos]
+    
+    def _generate_form_insights(self, form: USCISForm) -> str:
+        """Generate insights about the processed form"""
+        insights = []
+        
+        total_fields = sum(len(p.fields) for p in form.parts.values())
+        parent_fields = sum(len([f for f in p.fields if f.is_parent]) for p in form.parts.values())
+        subfields = sum(len([f for f in p.fields if f.is_subfield]) for p in form.parts.values())
+        questions = sum(len([f for f in p.fields if f.field_type == "question"]) for p in form.parts.values())
+        
+        insights.append(f"Processed {form.form_number} with {len(form.parts)} parts")
+        insights.append(f"Extracted {total_fields} total fields")
+        insights.append(f"Created {parent_fields} parent fields with {subfields} subfields")
+        insights.append(f"Identified {questions} question fields")
+        
+        # Pattern analysis
+        all_patterns = {}
+        for part in form.parts.values():
+            for pattern, count in part.field_patterns.items():
+                all_patterns[pattern] = all_patterns.get(pattern, 0) + count
+        
+        if all_patterns:
+            insights.append(f"Field patterns: {', '.join(all_patterns.keys())}")
+        
+        return " | ".join(insights)
+
+# ===== UI FUNCTIONS =====
+
+def display_universal_field(field: USCISField, prefix: str):
+    """Display field with universal styling and controls"""
+    unique_key = f"{prefix}_{field.unique_id}"
+    
+    # Determine styling
+    if field.is_parent:
+        css_class = "field-parent"
+        icon = "📁"
+        status = "Parent"
+    elif field.is_subfield:
+        css_class = "field-subfield" 
+        icon = "↳"
+        status = f"Sub of {field.parent_number}"
+    elif field.field_type == "question":
+        css_class = "field-question"
+        icon = "❓"
+        status = "Question"
+    elif field.is_choice:
+        css_class = "field-choice"
+        icon = "☑️"
+        status = f"Choice for {field.parent_number}"
+    else:
+        css_class = "field-card"
+        icon = "📝"
+        status = field.field_type.title()
+    
+    # Add mapping/questionnaire indicators
+    if field.is_mapped:
+        css_class += " field-mapped"
+    if field.in_questionnaire:
+        css_class += " field-questionnaire"
+    
+    st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([4, 3, 2])
+    
+    with col1:
+        st.markdown(f"**{icon} {field.number}. {field.label}**")
+        
+        # Show field pattern and AI reasoning
+        if field.field_pattern or field.ai_reasoning:
+            with st.expander("🤖 AI Analysis"):
+                if field.field_pattern:
+                    st.code(f"Pattern: {field.field_pattern}")
+                if field.ai_reasoning:
+                    st.markdown(f'<div class="ai-analysis">{field.ai_reasoning}</div>', 
+                               unsafe_allow_html=True)
+    
+    with col2:
+        if not field.is_parent and field.field_type != "question":
+            if field.field_type == "date":
+                field.value = st.date_input("Value", key=f"{unique_key}_val", 
+                                          label_visibility="collapsed")
+                field.value = str(field.value) if field.value else ""
+            elif field.field_type in ["checkbox", "choice"] or field.is_choice:
+                field.value = st.checkbox("", key=f"{unique_key}_choice")
+            elif field.field_type == "email":
+                field.value = st.text_input("Value", value=field.value, 
+                                          key=f"{unique_key}_val", 
+                                          placeholder="email@example.com",
+                                          label_visibility="collapsed")
+            elif field.field_type in ["phone", "ssn", "alien_number"]:
+                field.value = st.text_input("Value", value=field.value, 
+                                          key=f"{unique_key}_val",
+                                          label_visibility="collapsed")
+            else:
+                field.value = st.text_input("Value", value=field.value, 
+                                          key=f"{unique_key}_val", 
+                                          label_visibility="collapsed")
+    
+    with col3:
+        # Status indicators
+        status_indicators = [status]
+        if field.is_mapped:
+            status_indicators.append("✅ Mapped")
+        if field.in_questionnaire:
+            status_indicators.append("📝 Quest")
+        
+        st.markdown(" | ".join(status_indicators))
+        
+        # Action buttons for non-parent fields
+        if not field.is_parent:
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Map", key=f"{unique_key}_map_btn", use_container_width=True):
+                    st.session_state[f"show_mapping_{field.unique_id}"] = True
+                    st.rerun()
+            with c2:
+                quest_label = "Remove" if field.in_questionnaire else "Quest"
+                if st.button(quest_label, key=f"{unique_key}_quest_btn", use_container_width=True):
+                    field.in_questionnaire = not field.in_questionnaire
+                    st.rerun()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Show mapping dialog
+    if st.session_state.get(f"show_mapping_{field.unique_id}"):
+        show_universal_mapping_dialog(field, unique_key)
+
+def show_universal_mapping_dialog(field: USCISField, unique_key: str):
+    """Show universal field mapping dialog"""
+    st.markdown("---")
+    st.markdown("### 🎯 Map Field to Database Schema")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        schema = st.selectbox(
+            "Database Schema",
+            list(DATABASE_SCHEMA.keys()),
+            key=f"{unique_key}_schema",
+            format_func=lambda x: DATABASE_SCHEMA[x]["label"]
+        )
+    
+    with col2:
+        if schema == "custom":
+            db_field = st.text_input("Custom Field", key=f"{unique_key}_custom")
+        else:
+            db_field = st.selectbox(
+                "Database Field",
+                DATABASE_SCHEMA[schema]["paths"],
+                key=f"{unique_key}_field"
+            )
+    
+    # Show field suggestion based on type
+    if field.field_pattern:
+        st.info(f"💡 Suggested mapping based on pattern '{field.field_pattern}'")
+    
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("✅ Apply Mapping", key=f"{unique_key}_apply"):
+            field.is_mapped = True
+            field.db_object = schema
+            field.db_field = db_field
+            del st.session_state[f"show_mapping_{field.unique_id}"]
+            st.rerun()
+    
+    with col4:
+        if st.button("❌ Cancel", key=f"{unique_key}_cancel"):
+            del st.session_state[f"show_mapping_{field.unique_id}"]
+            st.rerun()
+
+def export_universal_data(part: FormPart, export_type: str, form_info: Dict) -> str:
+    """Export data with universal structure"""
+    base_info = {
+        "form_number": form_info.get("form_number", "Unknown"),
+        "form_title": form_info.get("title", ""),
+        "part_number": part.number,
+        "part_title": part.title,
+        "timestamp": datetime.now().isoformat()
+    }
+    
+    if export_type == "mapped_fields":
+        mapped = [f for f in part.fields if f.is_mapped and not f.is_parent]
+        data = {
+            **base_info,
+            "mapped_fields": [
+                {
+                    "field_number": f.number,
+                    "field_label": f.label,
+                    "field_type": f.field_type,
+                    "field_pattern": f.field_pattern,
+                    "field_value": f.value,
+                    "db_object": f.db_object,
+                    "db_field": f.db_field,
+                    "is_subfield": f.is_subfield,
+                    "parent_number": f.parent_number
+                }
+                for f in mapped
+            ],
+            "mapping_summary": {
+                schema: len([f for f in mapped if f.db_object == schema])
+                for schema in set(f.db_object for f in mapped)
+            }
+        }
+    
+    elif export_type == "questionnaire":
+        quest_fields = [f for f in part.fields if f.in_questionnaire and not f.is_parent]
+        data = {
+            **base_info,
+            "questionnaire_fields": [
+                {
+                    "field_number": f.number,
+                    "field_label": f.label,
+                    "field_type": f.field_type,
+                    "field_pattern": f.field_pattern,
+                    "field_value": f.value,
+                    "is_subfield": f.is_subfield,
+                    "parent_number": f.parent_number
+                }
+                for f in quest_fields
+            ]
+        }
+    
+    elif export_type == "db_objects":
+        db_objects = {}
+        for field in part.fields:
+            if field.is_mapped and not field.is_parent:
+                if field.db_object not in db_objects:
+                    db_objects[field.db_object] = []
+                db_objects[field.db_object].append({
+                    "field_number": field.number,
+                    "field_label": field.label,
+                    "field_type": field.field_type,
+                    "field_pattern": field.field_pattern,
+                    "field_value": field.value,
+                    "db_field": field.db_field
+                })
+        
+        data = {
+            **base_info,
+            "database_objects": db_objects
+        }
+    
+    return json.dumps(data, indent=2, default=str)
+
+# ===== MAIN APPLICATION =====
+
+def main():
+    st.markdown("""
+    <div class="main-header">
+        <h1>🤖 Universal USCIS Reader - AI Agent</h1>
+        <p>Works with ANY USCIS form using intelligent field analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Initialize
+    if 'form' not in st.session_state:
+        st.session_state.form = None
+    if 'processor' not in st.session_state:
+        st.session_state.processor = UniversalFormProcessor()
+    
+    # Check AI availability
+    if st.session_state.processor.agent.client:
+        st.markdown("""
+        <div class="agent-status">
+            <strong>✅ Universal Claude Agent Active</strong><br>
+            Ready to process any USCIS form with intelligent field analysis.
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.error("❌ Claude API not configured. Please add ANTHROPIC_API_KEY to your Streamlit secrets.")
+        st.stop()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("## 📊 Form Analysis")
+        
+        if st.session_state.form:
+            form = st.session_state.form
+            st.success(f"📄 {form.form_number}")
+            st.info(f"📖 {form.title}")
+            if form.form_category:
+                st.info(f"🏷️ {form.form_category.title()}")
+            
+            st.metric("Parts", len(form.parts))
+            
+            total_fields = sum(len(p.fields) for p in form.parts.values())
+            mapped_fields = sum(1 for p in form.parts.values() 
+                              for f in p.fields if f.is_mapped)
+            quest_fields = sum(1 for p in form.parts.values() 
+                             for f in p.fields if f.in_questionnaire)
+            
+            st.metric("Total Fields", total_fields)
+            st.metric("Mapped Fields", mapped_fields)
+            st.metric("Questionnaire Fields", quest_fields)
+            
+            if form.processing_time:
+                st.metric("Processing Time", f"{form.processing_time:.1f}s")
+            
+            # Form insights
+            if form.ai_summary:
+                st.markdown("### 🧠 AI Insights")
+                st.info(form.ai_summary)
+        
+        if st.button("🔄 Reset", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+    
+    # Main tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Process", "🗂️ Field Mapping", "📝 Questionnaire", "💾 Export"])
+    
+    with tab1:
+        st.markdown("### 📤 Upload Any USCIS Form for Universal AI Analysis")
+        
+        uploaded_file = st.file_uploader("Choose USCIS PDF file", type=['pdf'])
+        
+        if uploaded_file:
+            if st.button("🚀 Process with Universal AI Agent", type="primary", use_container_width=True):
+                form = st.session_state.processor.process_pdf(uploaded_file)
+                
+                if form:
+                    st.session_state.form = form
+                    st.success(f"✅ Successfully processed {form.form_number}: {form.title}")
+                    
+                    # Show detailed analysis
+                    st.markdown("### 📋 Universal AI Analysis Results")
+                    
+                    for part_num, part in sorted(form.parts.items()):
+                        parent_fields = len([f for f in part.fields if f.is_parent])
+                        subfields = len([f for f in part.fields if f.is_subfield])
+                        questions = len([f for f in part.fields if f.field_type == "question"])
+                        choices = len([f for f in part.fields if f.is_choice])
+                        regular_fields = len([f for f in part.fields if not f.is_parent and not f.is_subfield and not f.is_choice])
+                        
+                        st.markdown(f"""
+                        <div class="form-insights">
+                        <strong>Part {part_num}: {part.title}</strong><br>
+                        📁 Parent fields: {parent_fields} | 
+                        ↳ Subfields: {subfields} | 
+                        ❓ Questions: {questions} | 
+                        ☑️ Choices: {choices} | 
+                        📝 Regular fields: {regular_fields}<br>
+                        <strong>Total: {len(part.fields)} fields</strong>
+                        """, unsafe_allow_html=True)
+                        
+                        if part.field_patterns:
+                            patterns = ", ".join(f"{k}({v})" for k, v in part.field_patterns.items())
+                            st.markdown(f"🔍 Patterns detected: {patterns}")
+                        
+                        st.markdown("</div>", unsafe_allow_html=True)
+                else:
+                    st.error("❌ Failed to process form")
+    
+    with tab2:
+        if st.session_state.form:
+            st.markdown("### 🗂️ Universal Field Mapping")
+            
+            form = st.session_state.form
+            
+            # Part selector
+            part_numbers = sorted(form.parts.keys())
+            selected_part = st.selectbox(
+                "Select Part to Map",
+                part_numbers,
+                format_func=lambda x: f"Part {x}: {form.parts[x].title}"
+            )
+            
+            if selected_part:
+                part = form.parts[selected_part]
+                
+                st.markdown(f"#### Part {part.number}: {part.title}")
+                
+                # Display fields in proper hierarchy
+                displayed = set()
+                for field in sorted(part.fields, key=lambda f: st.session_state.processor.agent._get_sort_key(f.number)):
+                    if field.number not in displayed:
+                        # Show parent fields and their children
+                        if field.is_parent or not field.is_subfield:
+                            display_universal_field(field, f"map_p{part.number}")
+                            displayed.add(field.number)
+                            
+                            # Show subfields and choices
+                            for child in part.fields:
+                                if child.parent_number == field.number and child.number not in displayed:
+                                    display_universal_field(child, f"map_p{part.number}")
+                                    displayed.add(child.number)
+        else:
+            st.info("👆 Upload and process any USCIS form first")
+    
+    with tab3:
+        if st.session_state.form:
+            st.markdown("### 📝 Universal Questionnaire")
+            
+            form = st.session_state.form
+            
+            for part_num, part in sorted(form.parts.items()):
+                quest_fields = [f for f in part.fields if f.in_questionnaire and not f.is_parent]
+                
+                if quest_fields:
+                    st.markdown(f"#### Part {part_num}: {part.title}")
+                    
+                    for field in sorted(quest_fields, key=lambda f: st.session_state.processor.agent._get_sort_key(f.number)):
+                        st.markdown(f"**{field.number}. {field.label}**")
+                        
+                        if field.field_pattern:
+                            st.caption(f"Pattern: {field.field_pattern}")
+                        
+                        if field.is_choice or field.field_type == "checkbox":
+                            field.value = st.checkbox(f"Select {field.label}", key=f"quest_{field.unique_id}")
+                        elif field.field_type == "date":
+                            field.value = st.date_input(f"Enter date", key=f"quest_{field.unique_id}")
+                            field.value = str(field.value) if field.value else ""
+                        elif field.field_type == "email":
+                            field.value = st.text_input(f"Enter email", key=f"quest_{field.unique_id}", placeholder="email@example.com")
+                        else:
+                            field.value = st.text_input(f"Enter value", key=f"quest_{field.unique_id}")
+                        
+                        st.markdown("---")
+            
+            if not any(f.in_questionnaire for p in form.parts.values() for f in p.fields):
+                st.info("No fields added to questionnaire yet. Go to Field Mapping tab to add fields.")
+        else:
+            st.info("👆 Upload and process any USCIS form first")
+    
+    with tab4:
+        if st.session_state.form:
+            st.markdown("### 💾 Universal Export Options")
+            
+            form = st.session_state.form
+            form_info = {
+                "form_number": form.form_number,
+                "title": form.title,
+                "form_category": form.form_category
+            }
+            
+            for part_num, part in sorted(form.parts.items()):
+                st.markdown(f'<div class="export-section">', unsafe_allow_html=True)
+                st.markdown(f"#### Part {part_num}: {part.title}")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    mapped_count = len([f for f in part.fields if f.is_mapped and not f.is_parent])
+                    if mapped_count > 0:
+                        mapped_data = export_universal_data(part, "mapped_fields", form_info)
+                        st.download_button(
+                            f"📋 Mapped Fields ({mapped_count})",
+                            mapped_data,
+                            f"{form.form_number}_part_{part_num}_mapped.json",
+                            "application/json",
+                            key=f"export_mapped_{part_num}",
+                            use_container_width=True
+                        )
+                    else:
+                        st.button(f"📋 Mapped Fields (0)", disabled=True, use_container_width=True)
+                
+                with col2:
+                    quest_count = len([f for f in part.fields if f.in_questionnaire and not f.is_parent])
+                    if quest_count > 0:
+                        quest_data = export_universal_data(part, "questionnaire", form_info)
+                        st.download_button(
+                            f"📝 Questionnaire ({quest_count})",
+                            quest_data,
+                            f"{form.form_number}_part_{part_num}_questionnaire.json",
+                            "application/json",
+                            key=f"export_quest_{part_num}",
+                            use_container_width=True
+                        )
+                    else:
+                        st.button(f"📝 Questionnaire (0)", disabled=True, use_container_width=True)
+                
+                with col3:
+                    db_objects = set(f.db_object for f in part.fields if f.is_mapped and not f.is_parent)
+                    if db_objects:
+                        db_data = export_universal_data(part, "db_objects", form_info)
+                        st.download_button(
+                            f"🗃️ DB Objects ({len(db_objects)})",
+                            db_data,
+                            f"{form.form_number}_part_{part_num}_db_objects.json",
+                            "application/json",
+                            key=f"export_db_{part_num}",
+                            use_container_width=True
+                        )
+                    else:
+                        st.button(f"🗃️ DB Objects (0)", disabled=True, use_container_width=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Complete form export
+            st.markdown("#### 📦 Complete Form Export")
+            if st.button("📥 Download Complete Form Data", type="primary", use_container_width=True):
+                full_export = {
+                    "form_info": {
+                        "form_number": form.form_number,
+                        "title": form.title,
+                        "edition_date": form.edition_date,
+                        "form_category": form.form_category,
+                        "processing_time": form.processing_time,
+                        "ai_summary": form.ai_summary
+                    },
+                    "parts": {
+                        str(part_num): {
+                            "title": part.title,
+                            "field_patterns": part.field_patterns,
+                            "fields": [asdict(field) for field in part.fields]
+                        }
+                        for part_num, part in form.parts.items()
+                    }
+                }
+                
+                st.download_button(
+                    "📥 Download Complete Analysis",
+                    json.dumps(full_export, indent=2, default=str),
+                    f"{form.form_number}_complete_analysis.json",
+                    "application/json",
+                    key="export_complete"
+                )
+        else:
+            st.info("👆 Upload and process any USCIS form first")
+
+if __name__ == "__main__":
+    main(), '', label)
+                    
+                    if len(label) < 3:  # Skip very short labels
+                        continue
+                    
+                    # Detect field type
+                    field_type = self._detect_field_type(label)
+                    
+                    # Determine if this should be a parent field (basic heuristics)
+                    should_be_parent = self._should_be_parent_field(label, text, match.start())
+                    
+                    field = USCISField(
+                        number=number,
+                        label=label,
+                        field_type="parent" if should_be_parent else field_type,
+                        part_number=part_number,
+                        is_subfield=is_subfield,
+                        is_parent=should_be_parent,
+                        parent_number=parent_number,
+                        subfield_letter=label[-1] if is_subfield else "",
+                        extraction_method="fallback_pattern",
+                        field_pattern=pattern_type
+                    )
+                    fields.append(field)
+                    
+                except Exception as e:
+                    continue  # Skip problematic matches
+        
+        # Create missing parent fields for orphan subfields
+        self._create_missing_parents(fields, part_number)
+        
+        # Apply basic intelligent subfield creation for common patterns
+        self._apply_basic_subfield_rules(fields, part_number)
         
         return fields
+    
+    def _should_be_parent_field(self, label: str, text: str, position: int) -> bool:
+        """Determine if field should be a parent based on content analysis"""
+        label_lower = label.lower()
+        
+        # Check for name patterns
+        name_indicators = ["full name", "legal name", "your name", "beneficiary name", "petitioner name"]
+        if any(indicator in label_lower for indicator in name_indicators):
+            return True
+        
+        # Check for address patterns
+        address_indicators = ["address", "mailing address", "physical address", "home address", "current address"]
+        if any(indicator in label_lower for indicator in address_indicators):
+            return True
+        
+        # Check for contact patterns
+        contact_indicators = ["contact information", "phone numbers"]
+        if any(indicator in label_lower for indicator in contact_indicators):
+            return True
+        
+        # Look ahead in text for subfields
+        text_ahead = text[position:position + 1000]
+        # Simple check for lettered items following this field
+        subfield_pattern = r'[a-z]\.\s+[A-Z]'
+        if re.search(subfield_pattern, text_ahead):
+            return True
+        
+        return False
+    
+    def _create_missing_parents(self, fields: List[USCISField], part_number: int):
+        """Create parent fields for orphan subfields"""
+        parent_numbers = set()
+        existing_numbers = set()
+        
+        for field in fields:
+            existing_numbers.add(field.number)
+            if field.is_subfield and field.parent_number:
+                parent_numbers.add(field.parent_number)
+        
+        # Create missing parents
+        for parent_num in parent_numbers:
+            if parent_num not in existing_numbers:
+                parent_field = USCISField(
+                    number=parent_num,
+                    label=f"Field {parent_num}",
+                    field_type="parent",
+                    part_number=part_number,
+                    is_parent=True,
+                    extraction_method="inferred_parent"
+                )
+                fields.append(parent_field)
+    
+    def _apply_basic_subfield_rules(self, fields: List[USCISField], part_number: int):
+        """Apply basic subfield creation rules to parent fields"""
+        new_fields = []
+        
+        for field in fields:
+            if field.is_parent:
+                label_lower = field.label.lower()
+                
+                # Name field subfields
+                if any(indicator in label_lower for indicator in ["name", "full name", "legal name"]):
+                    subfields_to_add = [
+                        ("a", "Family Name (Last Name)", "text"),
+                        ("b", "Given Name (First Name)", "text"),
+                        ("c", "Middle Name (if applicable)", "text")
+                    ]
+                    for letter, sub_label, sub_type in subfields_to_add:
+                        sub_number = f"{field.number}.{letter}"
+                        if not any(f.number == sub_number for f in fields):
+                            subfield = USCISField(
+                                number=sub_number,
+                                label=sub_label,
+                                field_type=sub_type,
+                                part_number=part_number,
+                                is_subfield=True,
+                                parent_number=field.number,
+                                subfield_letter=letter,
+                                extraction_method="basic_rule_name"
+                            )
+                            new_fields.append(subfield)
+                
+                # Address field subfields
+                elif any(indicator in label_lower for indicator in ["address", "mailing", "physical"]):
+                    subfields_to_add = [
+                        ("a", "Street Number and Name", "text"),
+                        ("b", "Apt/Ste/Flr Number", "text"),
+                        ("c", "City or Town", "text"),
+                        ("d", "State", "text"),
+                        ("e", "ZIP Code", "text")
+                    ]
+                    for letter, sub_label, sub_type in subfields_to_add:
+                        sub_number = f"{field.number}.{letter}"
+                        if not any(f.number == sub_number for f in fields):
+                            subfield = USCISField(
+                                number=sub_number,
+                                label=sub_label,
+                                field_type=sub_type,
+                                part_number=part_number,
+                                is_subfield=True,
+                                parent_number=field.number,
+                                subfield_letter=letter,
+                                extraction_method="basic_rule_address"
+                            )
+                            new_fields.append(subfield)
+        
+        fields.extend(new_fields)
     
     def _detect_field_type(self, label: str) -> str:
         """Universal field type detection"""
