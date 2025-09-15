@@ -1339,6 +1339,32 @@ def main():
             if form.processing_time:
                 st.metric("Processing Time", f"{form.processing_time:.1f}s")
             
+            # Verification Status
+            if form.extraction_verified:
+                verification_score = form.verification_report.get("overall_completeness", 0)
+                if verification_score >= 0.9:
+                    st.success(f"✅ Verified: {verification_score:.1%}")
+                elif verification_score >= 0.75:
+                    st.warning(f"⚠️ Verified: {verification_score:.1%}")
+                else:
+                    st.error(f"🔍 Verified: {verification_score:.1%}")
+                
+                # Show verification details
+                with st.expander("🔍 Verification Details"):
+                    parts_verified = form.verification_report.get("parts_verified", {})
+                    for part_num, part_data in parts_verified.items():
+                        score = part_data.get("completeness_score", 0)
+                        quality = part_data.get("extraction_quality", "unknown")
+                        st.write(f"Part {part_num}: {score:.1%} ({quality})")
+                    
+                    recommendations = form.verification_report.get("recommendations", [])
+                    if recommendations:
+                        st.markdown("**Recommendations:**")
+                        for rec in recommendations:
+                            st.caption(rec)
+            else:
+                st.info("🔄 Not verified")
+            
             if form.ai_summary:
                 st.markdown("### 🧠 AI Insights")
                 st.info(form.ai_summary)
