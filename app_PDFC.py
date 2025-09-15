@@ -123,6 +123,13 @@ class USCISField:
     db_object: str = ""
     db_field: str = ""
     
+    # Questionnaire
+    in_questionnaire: bool = False
+    questionnaire_type: str = "text"  # text, checkbox, radio, dropdown, date
+    questionnaire_options: List[str] = dataclass_field(default_factory=list)
+    questionnaire_required: bool = False
+    questionnaire_placeholder: str = ""
+    
     # Value
     value: str = ""
     
@@ -783,7 +790,7 @@ class UniversalFormProcessor:
 # ===== UI FUNCTIONS =====
 
 def display_field_with_mapping(field: USCISField, prefix: str):
-    """Display field with database mapping dropdown"""
+    """Display field with database mapping dropdown and questionnaire option"""
     unique_key = f"{prefix}_{field.unique_id}"
     
     # Style based on field type
@@ -800,14 +807,19 @@ def display_field_with_mapping(field: USCISField, prefix: str):
     if field.is_mapped:
         css_class += " field-mapped"
     
+    if field.in_questionnaire:
+        css_class += " field-questionnaire"
+    
     st.markdown(f'<div class="{css_class}">', unsafe_allow_html=True)
     
-    col1, col2, col3, col4 = st.columns([3, 2, 2, 2])
+    col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 1])
     
     with col1:
         st.markdown(f"**{icon} {field.number}. {field.label}**")
         if field.extraction_method:
             st.caption(f"Method: {field.extraction_method}")
+        if field.in_questionnaire:
+            st.caption(f"📋 In Questionnaire - Type: {field.questionnaire_type}")
     
     with col2:
         if not field.is_parent:
@@ -852,6 +864,15 @@ def display_field_with_mapping(field: USCISField, prefix: str):
                 )
                 field.db_field = selected_field
     
+    with col5:
+        if not field.is_parent:
+            # Questionnaire toggle button
+            quest_icon = "✅" if field.in_questionnaire else "❓"
+            if st.button(quest_icon, key=f"{unique_key}_quest", 
+                        help="Add to questionnaire" if not field.in_questionnaire else "Remove from questionnaire"):
+                field.in_questionnaire = not field.in_questionnaire
+                st.rerun()
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
 def display_debug_panel(debug_agent: DebugAgent):
@@ -870,14 +891,195 @@ def display_debug_panel(debug_agent: DebugAgent):
         
         st.markdown('</div>', unsafe_allow_html=True)
 
+def configure_questionnaire_field(field: USCISField, prefix: str):
+    """Configure questionnaire settings for a field"""
+    unique_key = f"{prefix}_qconfig_{field.unique_id}"
+    
+    st.markdown(f"**{field.number}. {field.label}**")
+    
+    col1, col2, col3 = st.columns([2, 2, 2])
+    
+    with col1:
+        # Field type for questionnaire
+        field.questionnaire_type = st.selectbox(
+            "Field Type",
+            ["text", "checkbox", "radio", "dropdown", "date", "email", "phone", "number", "textarea"],
+            index=["text", "checkbox", "radio", "dropdown", "date", "email", "phone", "number", "textarea"].index(field.questionnaire_type),
+            key=f"{unique_key}_type"
+        )
+    
+    with col2:
+        # Required field
+        field.questionnaire_required = st.checkbox(
+            "Required",
+            value=field.questionnaire_required,
+            key=f"{unique_key}_required"
+        )
+    
+    with col3:
+        # Placeholder text
+        field.questionnaire_placeholder = st.text_input(
+            "Placeholder",
+            value=field.questionnaire_placeholder,
+            key=f"{unique_key}_placeholder"
+        )
+    
+    # Options for radio/dropdown
+    if field.questionnaire_type in ["radio", "dropdown"]:
+        options_text = st.text_area(
+            "Options (one per line)",
+            value="\n".join(field.questionnaire_options) if field.questionnaire_options else "",
+            key=f"{unique_key}_options",
+            height=100
+        )
+        field.questionnaire_options = [opt.strip() for opt in options_text.split("\n") if opt.strip()]
+    
+    st.markdown("---")
+
+def export_questionnaire_json(form: USCISForm) -> str:
+    """Export questionnaire fields as JSON"""
+    questionnaire_data = {
+        "formType": form.form_number,
+        "formTitle": form.title,
+        "sections": []
+    }
+    
+    for part_num, part in sorted(form.parts.items()):
+        quest_fields = [f for f in part.fields if f.in_questionnaire and not f.is_parent]
+        
+        if quest_fields:
+            section = {
+                "sectionNumber": part_num,
+                "sectionTitle": part.title,
+                "fields": []
+            }
+            
+            for field in quest_fields:
+                field_data = {
+                    "fieldNumber": field.number,
+                    "label": field.label,
+                    "type": field.questionnaire_type,
+                    "required": field.questionnaire_required,
+                    "placeholder": field.questionnaire_placeholder,
+                    "dbMapping": {
+                        "object": field.db_object,
+                        "field": field.db_field
+                    } if field.is_mapped else None
+                }
+                
+                if field.questionnaire_options:
+                    field_data["options"] = field.questionnaire_options
+                
+                section["fields"].append(field_data)
+            
+            questionnaire_data["sections"].append(section)
+    
+    return json.dumps(questionnaire_data, indent=2)
+
+def generate_typescript_interfaces(form: USCISForm) -> str:
+    """Generate TypeScript interfaces for mapped database objects"""
+    ts_code = []
+    
+    # Header
+    ts_code.append("// Generated TypeScript interfaces from USCIS Form mapping")
+    ts_code.append(f"// Form: {form.form_number} - {form.title}")
+    ts_code.append(f"// Generated: {datetime.now().isoformat()}\n")
+    
+    # Collect all mapped fields by database object
+    mapped_by_object = {}
+    for part in form.parts.values():
+        for field in part.fields:
+            if field.is_mapped and not field.is_parent and field.db_object != "custom":
+                if field.db_object not in mapped_by_object:
+                    mapped_by_object[field.db_object] = []
+                mapped_by_object[field.db_object].append(field)
+    
+    # Generate interfaces
+    for obj_name, fields in mapped_by_object.items():
+        # Interface name
+        interface_name = obj_name.capitalize() + "Data"
+        ts_code.append(f"export interface {interface_name} {{")
+        
+        # Add fields
+        seen_fields = set()
+        for field in fields:
+            if field.db_field and field.db_field not in seen_fields:
+                seen_fields.add(field.db_field)
+                
+                # Determine TypeScript type
+                ts_type = "string"
+                if field.field_type == "date" or "date" in field.label.lower():
+                    ts_type = "Date | string"
+                elif field.field_type == "number" or any(word in field.label.lower() for word in ["number", "count", "amount"]):
+                    ts_type = "number"
+                elif field.field_type == "checkbox" or field.questionnaire_type == "checkbox":
+                    ts_type = "boolean"
+                
+                # Add comment with original field info
+                ts_code.append(f"  // {field.label} (Field {field.number})")
+                ts_code.append(f"  {field.db_field}?: {ts_type};")
+        
+        ts_code.append("}\n")
+    
+    # Generate form data interface
+    ts_code.append("export interface FormData {")
+    for obj_name in mapped_by_object.keys():
+        interface_name = obj_name.capitalize() + "Data"
+        ts_code.append(f"  {obj_name}?: {interface_name};")
+    ts_code.append("}\n")
+    
+    # Generate mapping function
+    ts_code.append("// Mapping function to convert form values to database objects")
+    ts_code.append("export function mapFormToDatabase(formValues: Record<string, any>): FormData {")
+    ts_code.append("  const data: FormData = {};")
+    ts_code.append("")
+    
+    for obj_name, fields in mapped_by_object.items():
+        interface_name = obj_name.capitalize() + "Data"
+        ts_code.append(f"  // Map {obj_name} fields")
+        ts_code.append(f"  const {obj_name}: {interface_name} = {{}};")
+        
+        for field in fields:
+            if field.db_field:
+                form_key = f"field_{field.number.replace('.', '_')}"
+                ts_code.append(f"  if (formValues['{form_key}'] !== undefined) {{")
+                ts_code.append(f"    {obj_name}.{field.db_field} = formValues['{form_key}'];")
+                ts_code.append("  }")
+        
+        ts_code.append(f"  if (Object.keys({obj_name}).length > 0) {{")
+        ts_code.append(f"    data.{obj_name} = {obj_name};")
+        ts_code.append("  }\n")
+    
+    ts_code.append("  return data;")
+    ts_code.append("}")
+    
+    return "\n".join(ts_code)
+
 # ===== MAIN APPLICATION =====
 
 def main():
     st.markdown("""
     <div class="main-header">
-        <h1>🔍 Universal USCIS Reader - Debugged Version</h1>
-        <p>Enhanced with debugging and improved part/field extraction</p>
+        <h1>🔍 Universal USCIS Reader - Enhanced Version</h1>
+        <p>With Questionnaire Builder & TypeScript Generation</p>
     </div>
+    """, unsafe_allow_html=True)
+    
+    # Add custom CSS for questionnaire
+    st.markdown("""
+    <style>
+        .field-questionnaire {
+            background: #f0f4ff !important;
+            border: 2px solid #4a90e2;
+        }
+        .typescript-code {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 1rem;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+    </style>
     """, unsafe_allow_html=True)
     
     # Initialize
@@ -899,11 +1101,13 @@ def main():
             parent_fields = sum(len([f for f in p.fields if f.is_parent]) for p in form.parts.values())
             subfields = sum(len([f for f in p.fields if f.is_subfield]) for p in form.parts.values())
             mapped_fields = sum(len([f for f in p.fields if f.is_mapped]) for p in form.parts.values())
+            quest_fields = sum(len([f for f in p.fields if f.in_questionnaire]) for p in form.parts.values())
             
             st.metric("Total Fields", total_fields)
             st.metric("Parent Fields", parent_fields)
             st.metric("Subfields", subfields)
             st.metric("Mapped Fields", mapped_fields)
+            st.metric("Questionnaire Fields", quest_fields)
             
             # Part breakdown
             st.markdown("### Parts Found:")
@@ -915,7 +1119,14 @@ def main():
             st.rerun()
     
     # Main tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload", "🗂️ Field Mapping", "🔍 Debug", "💾 Export"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📤 Upload", 
+        "🗂️ Field Mapping", 
+        "📋 Questionnaire", 
+        "📦 TypeScript", 
+        "🔍 Debug", 
+        "💾 Export"
+    ])
     
     with tab1:
         st.markdown("### Upload USCIS Form PDF")
@@ -923,7 +1134,7 @@ def main():
         uploaded_file = st.file_uploader("Choose PDF file", type=['pdf'])
         
         if uploaded_file:
-            if st.button("🚀 Process with Debugging", type="primary", use_container_width=True):
+            if st.button("🚀 Process with Enhanced Extraction", type="primary", use_container_width=True):
                 form = st.session_state.processor.process_pdf(uploaded_file)
                 
                 if form:
@@ -954,6 +1165,7 @@ def main():
     with tab2:
         if st.session_state.form:
             st.markdown("### Map Fields to Database")
+            st.info("💡 Click the ❓ button to add fields to questionnaire")
             
             form = st.session_state.form
             
@@ -969,7 +1181,17 @@ def main():
                 part = form.parts[selected_part]
                 
                 st.markdown(f"#### Part {part.number}: {part.title}")
-                st.info(f"Total fields in this part: {len(part.fields)}")
+                
+                # Quick stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Fields", len(part.fields))
+                with col2:
+                    mapped = len([f for f in part.fields if f.is_mapped and not f.is_parent])
+                    st.metric("Mapped", mapped)
+                with col3:
+                    in_quest = len([f for f in part.fields if f.in_questionnaire and not f.is_parent])
+                    st.metric("In Questionnaire", in_quest)
                 
                 # Display fields hierarchically
                 displayed = set()
@@ -989,7 +1211,113 @@ def main():
             st.info("Upload and process a form first")
     
     with tab3:
-        st.markdown("### Debug Information")
+        if st.session_state.form:
+            st.markdown("### 📋 Questionnaire Configuration")
+            
+            form = st.session_state.form
+            
+            # Count total questionnaire fields
+            total_quest_fields = sum(
+                len([f for f in part.fields if f.in_questionnaire and not f.is_parent]) 
+                for part in form.parts.values()
+            )
+            
+            if total_quest_fields > 0:
+                st.success(f"Total fields in questionnaire: {total_quest_fields}")
+                
+                # Configure each questionnaire field
+                for part_num, part in sorted(form.parts.items()):
+                    quest_fields = [f for f in part.fields if f.in_questionnaire and not f.is_parent]
+                    
+                    if quest_fields:
+                        with st.expander(f"Part {part_num}: {part.title} ({len(quest_fields)} fields)", expanded=True):
+                            for field in sorted(quest_fields, key=lambda f: st.session_state.processor.agent._get_sort_key(f.number)):
+                                configure_questionnaire_field(field, f"quest_p{part_num}")
+                
+                # Export questionnaire JSON
+                st.markdown("### Export Questionnaire")
+                questionnaire_json = export_questionnaire_json(form)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "📥 Download Questionnaire JSON",
+                        questionnaire_json,
+                        f"{form.form_number}_questionnaire.json",
+                        "application/json",
+                        use_container_width=True
+                    )
+                
+                with col2:
+                    if st.button("📋 Copy JSON to Clipboard", use_container_width=True):
+                        st.code(questionnaire_json, language="json")
+                
+                # Preview
+                with st.expander("Preview Questionnaire JSON"):
+                    st.json(json.loads(questionnaire_json))
+            else:
+                st.info("No fields added to questionnaire yet. Go to Field Mapping tab and click ❓ to add fields.")
+        else:
+            st.info("Upload and process a form first")
+    
+    with tab4:
+        if st.session_state.form:
+            st.markdown("### 📦 TypeScript Generation")
+            
+            form = st.session_state.form
+            
+            # Count mapped fields
+            total_mapped = sum(
+                len([f for f in part.fields if f.is_mapped and not f.is_parent]) 
+                for part in form.parts.values()
+            )
+            
+            if total_mapped > 0:
+                st.success(f"Generated TypeScript for {total_mapped} mapped fields")
+                
+                # Generate TypeScript
+                typescript_code = generate_typescript_interfaces(form)
+                
+                # Export options
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.download_button(
+                        "📥 Download TypeScript File",
+                        typescript_code,
+                        f"{form.form_number}_interfaces.ts",
+                        "text/typescript",
+                        use_container_width=True
+                    )
+                
+                with col2:
+                    if st.button("📋 Copy TypeScript to Clipboard", use_container_width=True):
+                        st.code(typescript_code, language="typescript")
+                
+                # Preview TypeScript
+                st.markdown("### Generated TypeScript Code")
+                st.code(typescript_code, language="typescript", line_numbers=True)
+                
+                # Show mapping summary
+                st.markdown("### Mapping Summary")
+                mapped_by_object = {}
+                for part in form.parts.values():
+                    for field in part.fields:
+                        if field.is_mapped and not field.is_parent and field.db_object != "custom":
+                            if field.db_object not in mapped_by_object:
+                                mapped_by_object[field.db_object] = []
+                            mapped_by_object[field.db_object].append(f"{field.number}. {field.label} → {field.db_field}")
+                
+                for obj_name, mappings in mapped_by_object.items():
+                    with st.expander(f"{DATABASE_SCHEMA[obj_name]['label']} ({len(mappings)} fields)"):
+                        for mapping in mappings:
+                            st.write(f"- {mapping}")
+            else:
+                st.info("No fields mapped yet. Go to Field Mapping tab to map fields to database objects.")
+        else:
+            st.info("Upload and process a form first")
+    
+    with tab5:
+        st.markdown("### 🔍 Debug Information")
         
         if st.session_state.processor:
             display_debug_panel(st.session_state.processor.debug_agent)
@@ -998,59 +1326,108 @@ def main():
             st.markdown("### Form Processing Log")
             st.text_area("Processing Log", "\n".join(st.session_state.form.debug_log[-50:]), height=300)
     
-    with tab4:
+    with tab6:
         if st.session_state.form:
-            st.markdown("### Export Data")
+            st.markdown("### 💾 Export Options")
             
             form = st.session_state.form
             
-            # Create export data
-            export_data = {
-                "form_info": {
-                    "total_pages": form.total_pages,
-                    "total_parts": len(form.parts)
-                },
-                "parts": {}
-            }
+            col1, col2, col3 = st.columns(3)
             
-            for part_num, part in form.parts.items():
-                export_data["parts"][part_num] = {
-                    "title": part.title,
-                    "extraction_stats": part.extraction_stats,
-                    "fields": [
-                        {
-                            "number": f.number,
-                            "label": f.label,
-                            "type": f.field_type,
-                            "value": f.value,
-                            "is_parent": f.is_parent,
-                            "is_subfield": f.is_subfield,
-                            "parent_number": f.parent_number,
-                            "db_object": f.db_object,
-                            "db_field": f.db_field,
-                            "extraction_method": f.extraction_method
-                        }
-                        for f in part.fields
-                    ]
+            with col1:
+                st.markdown("#### Complete Analysis")
+                # Create complete export data
+                export_data = {
+                    "formInfo": {
+                        "formNumber": form.form_number,
+                        "title": form.title,
+                        "totalPages": form.total_pages,
+                        "totalParts": len(form.parts)
+                    },
+                    "parts": {}
                 }
+                
+                for part_num, part in form.parts.items():
+                    export_data["parts"][str(part_num)] = {
+                        "title": part.title,
+                        "extractionStats": part.extraction_stats,
+                        "fields": [
+                            {
+                                "number": f.number,
+                                "label": f.label,
+                                "type": f.field_type,
+                                "value": f.value,
+                                "isParent": f.is_parent,
+                                "isSubfield": f.is_subfield,
+                                "parentNumber": f.parent_number,
+                                "dbObject": f.db_object,
+                                "dbField": f.db_field,
+                                "inQuestionnaire": f.in_questionnaire,
+                                "questionnaireType": f.questionnaire_type if f.in_questionnaire else None,
+                                "extractionMethod": f.extraction_method
+                            }
+                            for f in part.fields
+                        ]
+                    }
+                
+                json_str = json.dumps(export_data, indent=2)
+                st.download_button(
+                    "📥 Complete Analysis",
+                    json_str,
+                    f"{form.form_number}_complete.json",
+                    "application/json",
+                    use_container_width=True
+                )
             
-            # Export button
-            json_str = json.dumps(export_data, indent=2)
-            st.download_button(
-                "📥 Download Complete Analysis",
-                json_str,
-                "uscis_form_analysis.json",
-                "application/json"
-            )
+            with col2:
+                st.markdown("#### Questionnaire")
+                quest_count = sum(len([f for f in p.fields if f.in_questionnaire]) for p in form.parts.values())
+                if quest_count > 0:
+                    questionnaire_json = export_questionnaire_json(form)
+                    st.download_button(
+                        f"📋 Questionnaire ({quest_count})",
+                        questionnaire_json,
+                        f"{form.form_number}_questionnaire.json",
+                        "application/json",
+                        use_container_width=True
+                    )
+                else:
+                    st.button("📋 No Questionnaire", disabled=True, use_container_width=True)
             
-            # Show mapped fields summary
-            st.markdown("### Mapped Fields Summary")
-            for part_num, part in form.parts.items():
-                mapped = [f for f in part.fields if f.is_mapped and not f.is_parent]
-                if mapped:
-                    st.markdown(f"**Part {part_num}:**")
-                    for field in mapped:
-                        st.write(f"- {field.number}. {field.label} → {field.db_object}.{field.db_field}")
+            with col3:
+                st.markdown("#### TypeScript")
+                mapped_count = sum(len([f for f in p.fields if f.is_mapped]) for p in form.parts.values())
+                if mapped_count > 0:
+                    typescript_code = generate_typescript_interfaces(form)
+                    st.download_button(
+                        f"📦 TypeScript ({mapped_count})",
+                        typescript_code,
+                        f"{form.form_number}_types.ts",
+                        "text/typescript",
+                        use_container_width=True
+                    )
+                else:
+                    st.button("📦 No Mappings", disabled=True, use_container_width=True)
+            
+            # Show summary statistics
+            st.markdown("### Summary Statistics")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_fields = sum(len(p.fields) for p in form.parts.values())
+                st.metric("Total Fields", total_fields)
+            
+            with col2:
+                mapped = sum(len([f for f in p.fields if f.is_mapped and not f.is_parent]) for p in form.parts.values())
+                st.metric("Mapped Fields", mapped)
+            
+            with col3:
+                quest = sum(len([f for f in p.fields if f.in_questionnaire and not f.is_parent]) for p in form.parts.values())
+                st.metric("Questionnaire Fields", quest)
+            
+            with col4:
+                completion = int((mapped / total_fields * 100)) if total_fields > 0 else 0
+                st.metric("Mapping %", f"{completion}%")
         else:
             st.info("Process a form to export data")
 
