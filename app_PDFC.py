@@ -1158,58 +1158,157 @@ class UniversalFormProcessor:
         return form
     
     def _extract_part_text_enhanced(self, full_text: str, part_number: int) -> str:
-        """Enhanced part text extraction with better boundary detection"""
-        patterns = [
-            rf"Part\s+{part_number}\.?\s*([^\n]*)",
-            rf"PART\s+{part_number}\.?\s*([^\n]*)",
-            rf"Section\s+{part_number}\.?\s*([^\n]*)",
-            rf"Chapter\s+{part_number}\.?\s*([^\n]*)"
+        """Universal enhanced part text extraction for all USCIS forms and all parts"""
+        
+        # Universal patterns for all USCIS forms
+        part_start_patterns = [
+            rf"Part\s+{part_number}\.?\s*([A-Z][^\n]*)",  # Part X. Title
+            rf"PART\s+{part_number}\.?\s*([A-Z][^\n]*)",  # PART X. TITLE  
+            rf"Section\s+{part_number}\.?\s*([A-Z][^\n]*)",  # Section X. Title
+            rf"Chapter\s+{part_number}\.?\s*([A-Z][^\n]*)"   # Chapter X. Title
         ]
         
         start_pos = -1
-        for pattern in patterns:
+        part_title = ""
+        
+        # Find the start of this part
+        for pattern in part_start_patterns:
             match = re.search(pattern, full_text, re.IGNORECASE)
             if match:
                 start_pos = match.start()
+                part_title = match.group(1) if match.groups() else ""
                 break
         
         if start_pos == -1:
-            # Fallback: estimate position based on part number and document length
-            total_parts = 8  # Assume 8 parts for most USCIS forms
-            part_size = len(full_text) // total_parts
+            # Fallback: estimate position based on part number
+            total_estimated_parts = max(8, part_number + 2)
+            part_size = len(full_text) // total_estimated_parts
             start_pos = max(0, (part_number - 1) * part_size)
             end_pos = min(len(full_text), start_pos + part_size * 2)
             st.info(f"Part {part_number} boundary not found, using estimated position")
             return full_text[start_pos:end_pos]
         
-        # Look for next part boundary
-        next_patterns = []
-        for next_part in range(part_number + 1, part_number + 4):  # Look ahead 3 parts
-            next_patterns.extend([
-                rf"Part\s+{next_part}\b",
-                rf"PART\s+{next_part}\b",
-                rf"Section\s+{next_part}\b"
-            ])
-        
+        # Universal next part detection
         end_pos = len(full_text)
-        for pattern in next_patterns:
-            match = re.search(pattern, full_text[start_pos:], re.IGNORECASE)
-            if match:
-                end_pos = start_pos + match.start()
+        next_part_found = False
+        
+        # Look for the next part in sequence
+        for next_part_num in range(part_number + 1, part_number + 5):  # Look ahead up to 4 parts
+            next_patterns = [
+                rf"Part\s+{next_part_num}\.?\s*[A-Z]",
+                rf"PART\s+{next_part_num}\.?\s*[A-Z]", 
+                rf"Section\s+{next_part_num}\.?\s*[A-Z]"
+            ]
+            
+            for pattern in next_patterns:
+                # Skip first 50 chars to avoid false matches within current part
+                match = re.search(pattern, full_text[start_pos + 50:], re.IGNORECASE)
+                if match:
+                    end_pos = start_pos + 50 + match.start()
+                    next_part_found = True
+                    break
+            
+            if next_part_found:
                 break
         
-        # For parts 6-8, if no next part found, include more text (likely at end)
-        if part_number >= 6 and end_pos == len(full_text):
-            # Include substantial text for end parts
-            part_text = full_text[start_pos:]
-        else:
-            part_text = full_text[start_pos:end_pos]
+        # Extract initial part text
+        part_text = full_text[start_pos:end_pos]
         
-        # Ensure minimum text length for processing
-        if len(part_text) < 500 and start_pos > 0:
-            # Expand backwards if text is too short
-            expanded_start = max(0, start_pos - 2000)
-            part_text = full_text[expanded_start:end_pos]
+        # Universal handling for parts that are too short or too long
+        text_length = len(part_text)
+        
+        if text_length < 300:  # Very short part - likely incomplete
+            st.info(f"Part {part_number} text is short ({text_length} chars), applying enhanced extraction")
+            
+            # Strategy 1: Look for part-specific keywords to validate content
+            if part_number == 0 or "attorney" in part_title.lower() or "representative" in part_title.lower():
+                # Attorney section keywords
+                required_keywords = ["attorney", "representative", "bar number", "g-28"]
+            elif "information about you" in part_title.lower():
+                # Applicant info section keywords  
+                required_keywords = ["name", "address", "birth", "citizenship"]
+            elif "application type" in part_title.lower():
+                # Application type section keywords
+                required_keywords = ["extension", "change", "status", "applying"]
+            elif "processing" in part_title.lower():
+                # Processing section keywords
+                required_keywords = ["request", "extend", "based on"]
+            elif "additional information" in part_title.lower():
+                # Additional info section keywords
+                required_keywords = ["passport", "address", "arrested", "convicted"]
+            elif "contact" in part_title.lower() or "signature" in part_title.lower():
+                # Contact/signature section keywords
+                required_keywords = ["phone", "email", "signature", "certify"]
+            elif "interpreter" in part_title.lower():
+                # Interpreter section keywords
+                required_keywords = ["interpreter", "fluent", "language"]
+            elif "preparer" in part_title.lower():
+                # Preparer section keywords
+                required_keywords = ["preparer", "prepared", "business"]
+            else:
+                # Generic keywords for unknown parts
+                required_keywords = ["information", "provide", "complete"]
+            
+            # Check if current text contains expected keywords
+            has_keywords = any(keyword.lower() in part_text.lower() for keyword in required_keywords)
+            
+            if not has_keywords:
+                # Strategy 2: Expand search area to find the real part content
+                expanded_start = max(0, start_pos - 1500)
+                expanded_end = min(len(full_text), end_pos + 1500)
+                expanded_text = full_text[expanded_start:expanded_end]
+                
+                # Look for the part title again in expanded text
+                for pattern in part_start_patterns:
+                    match = re.search(pattern, expanded_text, re.IGNORECASE)
+                    if match:
+                        # Found part title in expanded area
+                        real_start = expanded_start + match.start()
+                        
+                        # Find end boundary in expanded area
+                        for next_part_num in range(part_number + 1, part_number + 4):
+                            next_patterns = [
+                                rf"Part\s+{next_part_num}\.?\s*[A-Z]",
+                                rf"PART\s+{next_part_num}\.?\s*[A-Z]"
+                            ]
+                            
+                            for next_pattern in next_patterns:
+                                next_match = re.search(next_pattern, expanded_text[match.end():], re.IGNORECASE)
+                                if next_match:
+                                    real_end = expanded_start + match.end() + next_match.start()
+                                    part_text = full_text[real_start:real_end]
+                                    st.success(f"Enhanced extraction found better boundaries for Part {part_number}")
+                                    break
+                        break
+        
+        elif text_length > 15000:  # Very long part - likely includes content from other parts
+            st.info(f"Part {part_number} text is very long ({text_length} chars), checking for content mixing")
+            
+            # Look for unexpected part headers within the text that might indicate mixing
+            part_headers = []
+            for check_part in range(0, 10):
+                if check_part != part_number:
+                    header_pattern = rf"Part\s+{check_part}\.?\s*[A-Z]"
+                    matches = list(re.finditer(header_pattern, part_text, re.IGNORECASE))
+                    if matches:
+                        part_headers.extend([(match.start(), check_part) for match in matches])
+            
+            if part_headers:
+                # Found other part headers - truncate at the first one
+                part_headers.sort()  # Sort by position
+                first_other_part_pos = part_headers[0][0]
+                part_text = part_text[:first_other_part_pos]
+                st.info(f"Truncated Part {part_number} at position {first_other_part_pos} to avoid content mixing")
+        
+        # Final validation - ensure we have reasonable content
+        if len(part_text) < 100:
+            # Last resort: use position-based estimation
+            total_estimated_parts = 8
+            part_size = len(full_text) // total_estimated_parts  
+            fallback_start = max(0, (part_number - 1) * part_size)
+            fallback_end = min(len(full_text), fallback_start + part_size * 2)
+            part_text = full_text[fallback_start:fallback_end]
+            st.warning(f"Using fallback position-based extraction for Part {part_number}")
         
         return part_text
     
